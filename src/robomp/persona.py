@@ -209,9 +209,15 @@ def _inbound_scope(issue: IssueInfo, pr_number: int | None) -> dict[str, Any]:
     `kind` field lets prompts say "PR" or "issue" without branching in the
     template engine.
     """
-    if pr_number is not None and pr_number != issue.number:
+    if pr_number is not None:
         return {"kind": "PR", "number": pr_number}
     return {"kind": "issue", "number": issue.number}
+
+
+def _origin_scope(issue: IssueInfo) -> dict[str, Any]:
+    if issue.is_pull_request:
+        return {"description": "originating issue unknown; handling this PR directly"}
+    return {"description": f"originating issue #{issue.number}"}
 
 
 def followup_comment(
@@ -232,6 +238,7 @@ def followup_comment(
             "comment": comment,
             "state": {"pr_status": pr_status},
             "inbound": _inbound_scope(issue, pr_number),
+            "origin": _origin_scope(issue),
         },
     )
 
@@ -258,6 +265,7 @@ def directive(
             "thread": _render_thread(getattr(directive, "thread", ()) or ()),
             "state": {"pr_status": pr_status},
             "inbound": _inbound_scope(issue, pr_number),
+            "origin": _origin_scope(issue),
         },
     )
 

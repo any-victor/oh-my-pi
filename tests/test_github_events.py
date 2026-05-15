@@ -167,8 +167,8 @@ def test_route_pr_conversation_uses_resolver_for_inflight_key() -> None:
     assert decision.issue_key == "octo/widget#42"
 
 
-def test_route_pr_conversation_skips_when_resolver_misses() -> None:
-    """Unknown PR comments are not actionable and must not count as submissions."""
+def test_route_pr_conversation_falls_back_to_pr_key_when_resolver_misses() -> None:
+    """Unmapped PR comments still queue so the worker can recover from the PR branch."""
 
     decision = route(
         "issue_comment",
@@ -182,10 +182,10 @@ def test_route_pr_conversation_skips_when_resolver_misses() -> None:
         bot_login=BOT,
         resolve_issue_from_pr=lambda _r, _n: None,
     )
-    assert not decision.should_queue
-    assert decision.submitter is None
-    assert decision.issue_key is None
-    assert "not mapped" in decision.reason
+    assert decision.should_queue
+    assert decision.task == "handle_pr_conversation"
+    assert decision.submitter == "alice"
+    assert decision.issue_key == "octo/widget#9"
 
 
 def test_route_review_only_for_bot_authored_pr() -> None:
@@ -219,7 +219,7 @@ def test_route_review_only_for_bot_authored_pr() -> None:
     assert not not_ours.should_queue
 
 
-def test_route_review_comment_skips_when_resolver_misses() -> None:
+def test_route_review_comment_falls_back_to_pr_key_when_resolver_misses() -> None:
     decision = route(
         "pull_request_review_comment",
         {
@@ -232,8 +232,10 @@ def test_route_review_comment_skips_when_resolver_misses() -> None:
         bot_login=BOT,
         resolve_issue_from_pr=lambda _r, _n: None,
     )
-    assert not decision.should_queue
-    assert decision.submitter is None
+    assert decision.should_queue
+    assert decision.task == "handle_review"
+    assert decision.submitter == "alice"
+    assert decision.issue_key == "octo/widget#9"
 
 
 def test_route_pr_closed_only_when_merged_by_bot() -> None:
@@ -262,7 +264,7 @@ def test_route_pr_closed_only_when_merged_by_bot() -> None:
     )
     assert fallback.should_queue
     assert fallback.task == "cleanup_workspace"
-    assert fallback.issue_key == "octo/widget#pr-9"
+    assert fallback.issue_key == "octo/widget#9"
     assert fallback.submitter is None
 
     payload["pull_request"]["merged"] = False  # type: ignore[index]

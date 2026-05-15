@@ -138,10 +138,10 @@ def route(
     """Decide whether and how to handle a webhook event.
 
     `resolve_issue_from_pr(repo, pr_number)` maps a PR number back to its
-    originating-issue key (e.g. `octo/widget#42`). User comments on PRs are
-    only actionable when that mapping exists, so they serialize on the same
-    inflight key as the issue's own events. PR lifecycle cleanup may still
-    fall back to a PR-scoped key when the origin row is gone.
+    originating-issue key (e.g. `octo/widget#42`). PR-derived events prefer
+    that key so follow-ups serialize with the original issue. If the mapping
+    is missing, the event is still actionable and falls back to the PR's own
+    issue key (`octo/widget#1080`).
     """
     repo = _repo_full_name(payload)
     if repo is None or repo.lower() not in allowlist:
@@ -154,12 +154,7 @@ def route(
             resolved = resolve_issue_from_pr(repo, pr_number)  # type: ignore[arg-type]
             if resolved:
                 return resolved
-        return f"{repo}#pr-{pr_number}"
-
-    def _resolve_origin_issue_key(pr_number: int) -> str | None:
-        if resolve_issue_from_pr is None:
-            return None
-        return resolve_issue_from_pr(repo, pr_number)  # type: ignore[arg-type]
+        return issue_key(repo, pr_number)  # type: ignore[arg-type]
 
     def _reviewer_bot_login(user: Mapping[str, Any] | None) -> str | None:
         """Return the lowercased login if this user is a configured reviewer bot."""
@@ -226,11 +221,11 @@ def route(
             return RouteDecision("skip", None, repo, None, "comment missing issue number")
         if "pull_request" in issue:
             # Conversation comment on a PR. The PR number lives at issue.number
-            # on this payload type. Only mapped bot PR follow-ups are
-            # actionable; unknown PRs must not consume per-user quota.
-            key = _resolve_origin_issue_key(number)
-            if key is None:
-                return RouteDecision("skip", None, repo, None, f"PR #{number} is not mapped to an issue")
+            # on this payload type. Prefer the originating issue key when the
+            # DB has it, but do not drop bot-authored follow-ups just because
+            # the PR mapping was lost; the worker can recover from the PR
+            # branch or handle the PR directly.
+            key = _resolve_pr_key(number)
             login, assoc = _submitter_info(comment)
             return RouteDecision(
                 "queue",
@@ -267,9 +262,7 @@ def route(
         number = pr.get("number")
         if not isinstance(number, int):
             return RouteDecision("skip", None, repo, None, "PR missing number")
-        key = _resolve_origin_issue_key(number)
-        if key is None:
-            return RouteDecision("skip", None, repo, None, f"PR #{number} is not mapped to an issue")
+        key = _resolve_pr_key(number)
         login, assoc = _submitter_info(comment)
         return RouteDecision(
             "queue",
