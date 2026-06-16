@@ -77,7 +77,12 @@ export function sanitizeSecretFriendlyName(name: string): string | undefined {
 }
 
 function normalizePlaceholderSecret(secret: string): string {
-	return secret.toLowerCase();
+	// Fold ONLY ASCII A–Z casing — that is exactly what a case hint (U/L/C) can
+	// reconstruct. `String.toLowerCase()` also folds Unicode (e.g. `Ä`→`ä`), which
+	// no hint encodes, so two Unicode-case-distinct secrets that share an ASCII
+	// hint would collapse onto one base key and let a persisted placeholder
+	// deobfuscate to the wrong secret when the secret set or its order changes.
+	return secret.replace(/[A-Z]/g, ch => ch.toLowerCase());
 }
 
 // Derive the model-visible base from a KEYED digest of the secret. xxHash is

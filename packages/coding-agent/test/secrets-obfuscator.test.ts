@@ -298,6 +298,26 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		expect(before.obfuscate("secret658")).not.toBe(persisted);
 	});
 
+	it("keeps Unicode case variants on distinct bases despite a shared ASCII hint", () => {
+		// `Äbc` and `äbc` differ only by Unicode case; the ASCII case hint (`:L`)
+		// cannot reconstruct Unicode casing, so they must NOT share a base key. A
+		// `secret.toLowerCase()` normalization folds `Ä`→`ä` and collapses them,
+		// letting a persisted token alias to whichever secret loads first.
+		const alone = new SecretObfuscator([{ type: "plain", content: "Äbc" }]);
+		const persisted = alone.obfuscate("Äbc");
+
+		// A later session loads `äbc` EARLIER than `Äbc`.
+		const reordered = new SecretObfuscator([
+			{ type: "plain", content: "äbc" },
+			{ type: "plain", content: "Äbc" },
+		]);
+
+		expect(reordered.obfuscate("Äbc")).toBe(persisted);
+		expect(reordered.obfuscate("äbc")).not.toBe(persisted);
+		expect(reordered.deobfuscate(persisted)).toBe("Äbc");
+		expect(reordered.deobfuscate(reordered.obfuscate("äbc"))).toBe("äbc");
+	});
+
 	it("derives placeholders from a keyed digest, not a public content hash", () => {
 		// A provider that sees the placeholder and knows the algorithm must not be
 		// able to dictionary low-entropy secrets: the base is keyed by a private
