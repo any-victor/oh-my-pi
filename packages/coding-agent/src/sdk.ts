@@ -1207,7 +1207,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const envEntries = collectEnvSecrets();
 		const allEntries = [...envEntries, ...fileEntries];
 		if (allEntries.length > 0) {
-			obfuscator = new SecretObfuscator(allEntries, await getSecretPlaceholderKey());
+			// The persisted placeholder key — and creating its key file under the
+			// config root — is only needed for reversible obfuscate-mode placeholders.
+			// Replace-mode entries never build a keyed base, so a replace-only secrets
+			// set must not require the key; otherwise a headless run with an unwritable
+			// config root fails startup for a feature it does not use.
+			const needsPlaceholderKey = allEntries.some(entry => (entry.mode ?? "obfuscate") === "obfuscate");
+			obfuscator = new SecretObfuscator(
+				allEntries,
+				needsPlaceholderKey ? await getSecretPlaceholderKey() : undefined,
+			);
 		}
 	}
 	const secretsEnabled = obfuscator?.hasSecrets() === true;
