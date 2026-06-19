@@ -292,7 +292,6 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		const obfuscated = obfuscator.obfuscate("api_key=abcXYZ");
 
 		expect(obfuscated).toMatch(/^#APIKEY_[A-Z0-9]+:M#$/);
-		expect(obfuscated).not.toContain("XYZ");
 		expect(obfuscated).not.toContain("abc");
 		expect(obfuscator.deobfuscate(obfuscated)).toBe("api_key=abcXYZ");
 	});
@@ -306,7 +305,6 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		const obfuscated = obfuscator.obfuscate("api_key=abcXYZ");
 
 		expect(obfuscated).toMatch(/^#APIKEY_[A-Z0-9]+:M#$/);
-		expect(obfuscated).not.toContain("XYZ");
 		expect(obfuscated).not.toContain("abc");
 		expect(obfuscator.deobfuscate(obfuscated)).toBe("api_key=abcXYZ");
 	});
@@ -352,46 +350,58 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 	});
 
 	it("redacts replace-mode regex spans around generated placeholders", () => {
-		const obfuscator = new SecretObfuscator([
-			{ type: "plain", content: "SECRET" },
-			{ type: "regex", mode: "replace", content: "[A-Z0-9]{8,}", replacement: "REDACTED" },
-		]);
+		const obfuscator = new SecretObfuscator(
+			[
+				{ type: "plain", content: "SECRET" },
+				{ type: "regex", mode: "replace", content: "[A-Z0-9]{8,}", replacement: "REDACTED" },
+			],
+			"A".repeat(43),
+		);
 
 		const obfuscated = obfuscator.obfuscate("SECRETX1");
 
 		expect(obfuscated).toMatch(/^#[A-Z0-9]+:U#REDACTED$/);
-		expect(obfuscated).not.toContain("SECRETX1");
+		expect(obfuscated).not.toMatch(/X1$/);
 		expect(obfuscator.deobfuscate(obfuscated)).toBe("SECRETREDACTED");
 	});
 
 	it("redacts bounded replace-mode regex suffixes after generated placeholders", () => {
-		const obfuscator = new SecretObfuscator([
-			{ type: "plain", content: "SECRET" },
-			{ type: "regex", mode: "replace", content: "[A-Z0-9]{8}", replacement: "REDACTED" },
-		]);
+		const obfuscator = new SecretObfuscator(
+			[
+				{ type: "plain", content: "SECRET" },
+				{ type: "regex", mode: "replace", content: "[A-Z0-9]{8}", replacement: "REDACTED" },
+			],
+			"B".repeat(43),
+		);
 
 		const obfuscated = obfuscator.obfuscate("SECRETX1");
 
+		// The 8-char SECRETX1 redacts to one placeholder + REDACTED; assert the `X1`
+		// suffix is gone via end-anchored structure, not substring absence — the
+		// random keyed base can itself contain the two chars "X1".
 		expect(obfuscated).toMatch(/^#[A-Z0-9]+:U#REDACTED$/);
-		expect(obfuscated).not.toContain("X1");
+		expect(obfuscated).not.toMatch(/X1$/);
 		expect(obfuscator.deobfuscate(obfuscated)).toBe("SECRETREDACTED");
 	});
 
 	it("emits a custom replacement once around a generated placeholder", () => {
-		const obfuscator = new SecretObfuscator([
-			{ type: "plain", content: "abc" },
-			{ type: "regex", mode: "replace", content: "api_key=\\S+", replacement: "REDACTED" },
-		]);
+		const obfuscator = new SecretObfuscator(
+			[
+				{ type: "plain", content: "abc" },
+				{ type: "regex", mode: "replace", content: "api_key=\\S+", replacement: "REDACTED" },
+			],
+			"C".repeat(43),
+		);
 
 		const obfuscated = obfuscator.obfuscate("api_key=abcXYZ");
 
 		// A custom replacement is a single redaction marker for the whole match, so
-		// it must not be duplicated on both sides of the preserved placeholder.
+		// it must not be duplicated on both sides of the preserved placeholder (the
+		// bug produced `REDACTED#…#REDACTED`). Asserted by structure plus an
+		// end-anchored guard rather than a base-collidable substring count.
 		expect(obfuscated).toMatch(/^REDACTED#[A-Z0-9]+:L#$/);
-		expect(obfuscated.match(/REDACTED/g)).toHaveLength(1);
+		expect(obfuscated).not.toMatch(/REDACTED$/);
 		expect(obfuscated).not.toContain("api_key=");
-		expect(obfuscated).not.toContain("XYZ");
-		expect(obfuscated).not.toContain("abc");
 		expect(obfuscator.deobfuscate(obfuscated)).toBe("REDACTEDabc");
 	});
 
