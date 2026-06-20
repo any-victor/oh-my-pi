@@ -24,9 +24,17 @@ import {
 } from "@oh-my-pi/pi-ai";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import type { HarmonyAuditEvent } from "@oh-my-pi/pi-ai/utils/harmony-leak";
+import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
-import { abortReasonText, agentLoop, agentLoopContinue } from "./agent-loop";
+import {
+	abortReasonText,
+	agentLoop,
+	agentLoopContinue,
+	normalizeMessagesForProvider,
+	normalizeTools,
+	resolveOwnedDialectFromEnv,
+} from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
 import type {
 	AgentContext,
@@ -197,6 +205,13 @@ export interface AgentOptions {
 	repetitionPenalty?: number;
 	serviceTier?: ServiceTier;
 	/**
+	 * Per-call effective service-tier resolver. When set, it authoritatively
+	 * supplies the request's tier (replacing the static `serviceTier` and its
+	 * telemetry) per model — used to scope a provider/model into a priority
+	 * serving path without mutating the shared session `serviceTier`.
+	 */
+	serviceTierResolver?: (model: Model) => ServiceTier | undefined;
+	/**
 	 * If true, request that the underlying provider omit reasoning/thinking summaries
 	 * from the response. The model still reasons internally; only the human-readable
 	 * summary stream is suppressed. Useful when the UI hides thinking blocks anyway.
@@ -333,6 +348,7 @@ export class Agent {
 	#presencePenalty?: number;
 	#repetitionPenalty?: number;
 	#serviceTier?: ServiceTier;
+	#serviceTierResolver?: (model: Model) => ServiceTier | undefined;
 	#hideThinkingSummary?: boolean;
 	#maxRetryDelayMs?: number;
 	#getToolContext?: (toolCall?: ToolCallContext) => AgentToolContext | undefined;
@@ -403,6 +419,7 @@ export class Agent {
 		this.#presencePenalty = opts.presencePenalty;
 		this.#repetitionPenalty = opts.repetitionPenalty;
 		this.#serviceTier = opts.serviceTier;
+		this.#serviceTierResolver = opts.serviceTierResolver;
 		this.#hideThinkingSummary = opts.hideThinkingSummary;
 		this.#maxRetryDelayMs = opts.maxRetryDelayMs;
 		this.getApiKey = opts.getApiKey;
@@ -610,6 +627,14 @@ export class Agent {
 		this.#serviceTier = value;
 	}
 
+	get serviceTierResolver(): ((model: Model) => ServiceTier | undefined) | undefined {
+		return this.#serviceTierResolver;
+	}
+
+	set serviceTierResolver(value: ((model: Model) => ServiceTier | undefined) | undefined) {
+		this.#serviceTierResolver = value;
+	}
+
 	get hideThinkingSummary(): boolean | undefined {
 		return this.#hideThinkingSummary;
 	}
@@ -643,6 +668,32 @@ export class Agent {
 
 	setAppendOnlyContext(manager?: AppendOnlyContextManager): void {
 		this.#appendOnlyContext = manager;
+	}
+
+	/**
+	 * Assemble the provider Context for a side-channel (no-loop) request, mirroring
+	 * the main loop's prefix (system + normalized tools) so it shares the prompt
+	 * cache. Never touches the append-only log or the tool-choice queue. Owned/
+	 * in-band dialect sessions stay tools-less (matching their no-native-tools wire
+	 * shape and avoiding tool-markup leakage). `llmMessages` is already converted
+	 * (and, in production, obfuscated) by the caller.
+	 */
+	buildSideRequestContext(llmMessages: Message[]): Context {
+		const model = this.#state.model;
+		if (!model) throw new Error("No active model on agent");
+		const ownedDialect = this.#dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT);
+		const messages = normalizeMessagesForProvider(llmMessages, model);
+		const tools = ownedDialect
+			? []
+			: (normalizeTools(
+					this.#state.tools,
+					this.#intentTracing,
+					preferredDialect(model.id),
+					this.#pruneToolDescriptions,
+				) ?? []);
+		let context: Context = { systemPrompt: this.#state.systemPrompt, messages, tools };
+		if (this.#transformProviderContext) context = this.#transformProviderContext(context, model);
+		return context;
 	}
 
 	subscribe(fn: (e: AgentEvent) => void): () => void {
@@ -1087,6 +1138,7 @@ export class Agent {
 			getToolChoice,
 			getReasoning: () => this.#state.thinkingLevel,
 			getDisableReasoning: () => this.#state.disableReasoning,
+			getServiceTier: this.#serviceTierResolver,
 			getSteeringMessages: async () => {
 				if (skipInitialSteeringPoll) {
 					skipInitialSteeringPoll = false;

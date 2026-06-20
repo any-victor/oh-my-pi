@@ -134,7 +134,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Developer",
 	],
 	tasks: ["Modes", "Subagents", "Isolation", "Commands & Skills"],
-	providers: ["Services", "Tiny Model", "Protocol", "Privacy"],
+	providers: ["Services", "Fireworks", "Tiny Model", "Protocol", "Privacy"],
 };
 
 /** Status line segment identifiers */
@@ -413,7 +413,7 @@ export const SETTINGS_SCHEMA = {
 	},
 	"advisor.immuneTurns": {
 		type: "number",
-		default: 1,
+		default: 3,
 		ui: {
 			tab: "model",
 			group: "Advisor",
@@ -422,9 +422,9 @@ export const SETTINGS_SCHEMA = {
 				"After an advisor concern or blocker interrupts, route further concerns/blockers non-interruptingly for this many primary turns.",
 			options: [
 				{ value: "0", label: "0 turns", description: "Allow every concern/blocker to interrupt." },
-				{ value: "1", label: "1 turn", description: "Default." },
+				{ value: "1", label: "1 turn" },
 				{ value: "2", label: "2 turns" },
-				{ value: "3", label: "3 turns" },
+				{ value: "3", label: "3 turns", description: "Default." },
 				{ value: "4", label: "4 turns" },
 				{ value: "5", label: "5 turns" },
 			],
@@ -897,6 +897,28 @@ export const SETTINGS_SCHEMA = {
 			group: "Thinking",
 			label: "Hide Thinking Blocks",
 			description: "Hide thinking blocks in assistant responses",
+		},
+	},
+	proseOnlyThinking: {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Prose Only Thinking",
+			description: "Omit code blocks from thinking summaries and replace them with an ellipsis",
+		},
+	},
+
+	omitThinking: {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Omit Thinking summaries",
+			description:
+				"Instruct upstream providers to completely omit thinking summaries from responses (where supported)",
 		},
 	},
 
@@ -1631,7 +1653,7 @@ export const SETTINGS_SCHEMA = {
 	"compaction.strategy": {
 		type: "enum",
 		values: ["context-full", "handoff", "shake", "snapcompact", "off"] as const,
-		default: "context-full",
+		default: "snapcompact",
 		ui: {
 			tab: "context",
 			group: "Compaction",
@@ -2232,6 +2254,18 @@ export const SETTINGS_SCHEMA = {
 			group: "Mnemopi",
 			label: "Mnemopi Enhanced Recall",
 			description: "Enable the tiered query result cache for repeated and similar recall queries",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.proactiveLinking": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "memory",
+			group: "Mnemopi",
+			label: "Mnemopi Proactive Linking",
+			description:
+				"Ingest new memories into the episodic graph as they are stored, linking them to related entities and memories",
 			condition: "mnemopiActive",
 		},
 	},
@@ -4017,6 +4051,26 @@ export const SETTINGS_SCHEMA = {
 				},
 				{ value: "gemini", label: "Gemini", description: "Requires GEMINI_API_KEY" },
 				{ value: "openrouter", label: "OpenRouter", description: "Requires OPENROUTER_API_KEY" },
+			],
+		},
+	},
+	"providers.fireworksTier": {
+		type: "enum",
+		values: ["standard", "priority"] as const,
+		default: "standard",
+		ui: {
+			tab: "providers",
+			group: "Fireworks",
+			label: "Fireworks Tier",
+			description:
+				'Serving path for Fireworks requests. Priority sends `service_tier: "priority"` for higher reliability during peak traffic at a higher price; Standard omits it. Fast (`-fast`) models ignore this — Fast is its own serving path.',
+			options: [
+				{ value: "standard", label: "Standard", description: "Default serving path (no service_tier)" },
+				{
+					value: "priority",
+					label: "Priority",
+					description: "Priority serving path: higher reliability, premium per-token pricing",
+				},
 			],
 		},
 	},
