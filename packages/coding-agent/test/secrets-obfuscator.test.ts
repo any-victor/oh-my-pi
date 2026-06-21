@@ -609,6 +609,15 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		expect(obf.obfuscate(out)).toBe(out);
 	});
 
+	it("redacts raw default replace values that look like generated sentinels", () => {
+		const obf = new SecretObfuscator([{ type: "plain", content: "ZZTOPSECRET", mode: "replace" }], "Q".repeat(43));
+
+		const out = obf.obfuscate("ZZTOPSECRET");
+
+		expect(out).not.toBe("ZZTOPSECRET");
+		expect(out).toHaveLength("ZZTOPSECRET".length);
+	});
+
 	it("keeps default replace regex output idempotent around prior placeholders", () => {
 		const obf = new SecretObfuscator(
 			[

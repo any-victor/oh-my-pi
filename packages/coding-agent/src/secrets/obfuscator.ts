@@ -31,7 +31,6 @@ function isGeneratedDeterministicReplacement(value: string): boolean {
 /** Generate a deterministic same-length replacement string from a secret value. */
 function generateDeterministicReplacement(secret: string): string {
 	if (secret.length === 0) return "";
-	if (isGeneratedDeterministicReplacement(secret)) return secret;
 	// Prefix generated chunks with a fixed sentinel so a restarted process can
 	// recognize already-redacted default replacements next to reversible
 	// placeholders and keep outbound history idempotent.
