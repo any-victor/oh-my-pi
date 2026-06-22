@@ -44,6 +44,23 @@ function generateDeterministicReplacement(secret: string): string {
 	return chars.join("");
 }
 
+/**
+ * Force a length-preserving deterministic replacement to differ from the secret
+ * it stands in for. `generateDeterministicReplacement` seeds its first 1–2 chars
+ * with the `Z`/`ZZ` sentinel, so a whole configured value that is exactly `Z` or
+ * `ZZ` (or an astronomically unlikely longer hash collision) would otherwise be
+ * emitted unchanged and ship the raw secret to the provider. Flip the first char
+ * to a fixed different glyph: same length, still deterministic, guaranteed != the
+ * secret. Only safe for a whole CONFIGURED value (a plain secret matches its own
+ * literal, so the perturbed output is no longer matched and stays a fixed point);
+ * per-chunk remainders must keep the sentinel to remain idempotent across restart.
+ */
+function ensureDistinctReplacement(replacement: string, secret: string): string {
+	if (replacement.length === 0 || replacement !== secret) return replacement;
+	const alt = replacement[0] === REPLACEMENT_CHARS[0] ? REPLACEMENT_CHARS[1] : REPLACEMENT_CHARS[0];
+	return alt + replacement.slice(1);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Placeholder format
 // ═══════════════════════════════════════════════════════════════════════════
@@ -242,7 +259,7 @@ export class SecretObfuscator {
 		// A prompt-injected tool read (read/bash) could otherwise surface it to the
 		// provider verbatim and undo that protection, so redact the key itself from
 		// obfuscated (provider-visible) output as a one-way secret.
-		this.#replaceMappings.set(key, this.#generateReplacement(key));
+		this.#replaceMappings.set(key, this.#generateSecretReplacement(key));
 		let index = 0;
 		let hasRealSec = false;
 		for (const entry of entries) {
@@ -266,7 +283,7 @@ export class SecretObfuscator {
 					hasRealSec = true;
 				} else {
 					// replace mode
-					const replacement = entry.replacement ?? this.#generateReplacement(entry.content);
+					const replacement = entry.replacement ?? this.#generateSecretReplacement(entry.content);
 					this.#replaceMappings.set(entry.content, replacement);
 					hasRealSec = true;
 				}
@@ -478,6 +495,19 @@ export class SecretObfuscator {
 
 	#generateReplacement(secret: string): string {
 		const replacement = generateDeterministicReplacement(secret);
+		this.#generatedReplaceChunks.add(replacement);
+		return replacement;
+	}
+
+	/**
+	 * Replacement for a whole CONFIGURED secret value (a plain replace-mode entry
+	 * or the redacted key). Unlike a per-chunk remainder redaction, the output
+	 * must differ from the input so a value equal to the `Z`/`ZZ` sentinel is not
+	 * emitted verbatim. A plain secret only matches its own literal, so the
+	 * perturbed output stays a fixed point under re-obfuscation.
+	 */
+	#generateSecretReplacement(secret: string): string {
+		const replacement = ensureDistinctReplacement(generateDeterministicReplacement(secret), secret);
 		this.#generatedReplaceChunks.add(replacement);
 		return replacement;
 	}
