@@ -19,6 +19,7 @@ import {
 	deobfuscateToolArguments,
 	obfuscateMessages,
 	obfuscateProviderContext,
+	type SecretEntry,
 	SecretObfuscator,
 	sanitizeSecretFriendlyName,
 	secretEntriesNeedPlaceholderKey,
@@ -755,6 +756,16 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 				{ type: "plain", content: "unrelated-other-secret", mode: "replace" },
 			]),
 		).toBe(true);
+		// A replace entry whose CUSTOM replacement still contains the secret does NOT
+		// shadow it: obfuscate()'s later pass re-scans the inserted replacement text and
+		// emits a reversible placeholder, which needs the persisted key.
+		const reintroEntries: SecretEntry[] = [
+			{ type: "plain", content: secret, mode: "obfuscate" },
+			{ type: "plain", content: secret, mode: "replace", replacement: `PREFIX_${secret}_SUFFIX` },
+		];
+		expect(secretEntriesNeedPlaceholderKey(reintroEntries)).toBe(true);
+		const reintroOut = new SecretObfuscator(reintroEntries, "test-placeholder-key").obfuscate(`value=${secret}`);
+		expect(reintroOut).toMatch(/#[A-Z0-9]/);
 	});
 
 	it("redacts a raw sentinel-shaped suffix bridged into a match by a prior placeholder", () => {
