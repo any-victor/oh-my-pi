@@ -26,6 +26,14 @@ export type JsonRecord = { [key: string]: JsonValue | undefined };
 
 const REPLACEMENT_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const NONMATCHING_REPLACEMENT_CHARS = `${REPLACEMENT_CHARS}!#$%&()*+,-./:;<=>?@[]^_{|}~`;
+// Last-resort redaction bytes for a default replace regex that matches every
+// non-whitespace candidate (e.g. `\S{n}`): a same-length run of a single
+// whitespace byte is still a stable nonmatching redaction, so the secret is
+// replaced rather than shipped raw. Only `space`/`tab` are used — never a line
+// terminator — so a `.`-style match-everything regex (which matches space and
+// tab but not `\n`) still exhausts to the sentinel instead of redacting to a
+// newline run.
+const WHITESPACE_REPLACEMENT_CHARS = " \t";
 
 /** Generate a deterministic same-length replacement string from a secret value. */
 function generateDeterministicReplacement(secret: string): string {
@@ -72,9 +80,12 @@ function ensureDistinctReplacement(replacement: string, secret: string): string 
  * over a stable ASCII alphabet: alphanumerics first (usually enough), then
  * punctuation fallback bytes when the regex covers every alphanumeric candidate.
  * This keeps the common case readable while still finding a nonmatching
- * same-length redaction for patterns such as `[A-Za-z0-9]{2}`. The sweep is
- * bounded so a match-everything regex (`.`/`[\s\S]`) terminates, returning
- * undefined to let the caller keep the sentinel as the only available fixed point.
+ * same-length redaction for patterns such as `[A-Za-z0-9]{2}`. When the regex
+ * covers every non-whitespace candidate (e.g. `\S{n}`), a same-length run of a
+ * single whitespace byte (space/tab) is tried as a last resort. The sweep is
+ * bounded so a match-everything regex (`.`/`[\s\S]`, which also matches space and
+ * tab) terminates, returning undefined to let the caller keep the sentinel as the
+ * only available fixed point.
  */
 function findNonMatchingReplacement(value: string, regex: RegExp): string | undefined {
 	const len = value.length;
@@ -95,7 +106,7 @@ function findNonMatchingReplacement(value: string, regex: RegExp): string | unde
 			regex.lastIndex = 0;
 			if (!regex.test(candidate)) return candidate;
 		}
-		return undefined;
+		return findWhitespaceFallbackReplacement(value, regex);
 	}
 	// Longer collisions stay bounded. First exhaust every single-position
 	// substitution against the deterministic baseline (`AAAA…`, then `!AAA…`,
@@ -115,6 +126,24 @@ function findNonMatchingReplacement(value: string, regex: RegExp): string | unde
 	// same-byte fallbacks like `!!!!!`, `_____`, etc. before giving up.
 	for (const ch of NONMATCHING_REPLACEMENT_CHARS) {
 		const candidate = ch.repeat(len);
+		if (candidate === value) continue;
+		regex.lastIndex = 0;
+		if (!regex.test(candidate)) return candidate;
+	}
+	return findWhitespaceFallbackReplacement(value, regex);
+}
+
+/**
+ * Last-resort fallback for a default replace regex that matches every
+ * non-whitespace candidate: a same-length run of one whitespace byte (space, then
+ * tab) is a stable nonmatching redaction. `space` already covers the common
+ * `\S`-style case; `tab` extends it to space-only exclusions. A match-everything
+ * regex (`.`/`[\s\S]`) also matches both, so this still returns undefined there,
+ * keeping the caller's sentinel as the sole fixed point.
+ */
+function findWhitespaceFallbackReplacement(value: string, regex: RegExp): string | undefined {
+	for (const ch of WHITESPACE_REPLACEMENT_CHARS) {
+		const candidate = ch.repeat(value.length);
 		if (candidate === value) continue;
 		regex.lastIndex = 0;
 		if (!regex.test(candidate)) return candidate;

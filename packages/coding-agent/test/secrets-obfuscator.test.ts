@@ -842,6 +842,21 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		expect(obf.obfuscate(out)).toBe(out);
 	});
 
+	it("redacts a default replace regex that matches every non-whitespace candidate", () => {
+		// `\S{5}` matches every non-whitespace value, so the alphanumeric and
+		// punctuation candidates are all exhausted. A same-length whitespace run is a
+		// stable nonmatching redaction, so the colliding sentinel value is replaced
+		// rather than shipped raw to the provider.
+		const obf = new SecretObfuscator([{ type: "regex", mode: "replace", content: "\\S{5}" }], "Q".repeat(43));
+
+		const out = obf.obfuscate("ZZLB6");
+
+		expect(out).not.toBe("ZZLB6");
+		expect(out).toHaveLength(5);
+		expect(/\S{5}/.test(out)).toBe(false);
+		expect(obf.obfuscate(out)).toBe(out);
+	});
+
 	it("keeps the sentinel only when no same-length value avoids the regex", () => {
 		// A match-everything regex has no nonmatching same-length redaction, so the
 		// search exhausts and the sentinel is kept as the sole fixed point. Such a
