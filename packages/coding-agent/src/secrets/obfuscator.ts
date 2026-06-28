@@ -255,6 +255,12 @@ function replacementCanFormContent(replacement: string, content: string): boolea
  * chains, and context-joined fragments uniformly. Default (omitted) replacements
  * are deterministic, length-preserving, and distinct, so a same-content shadow
  * with no other interacting replacement stays key-free.
+ * Replacement outputs are themselves rewritten by every later (shorter-content)
+ * replacement before the plain-obfuscate pass sees them, so a fragment that a
+ * subsequent replacement erases (`AA -> SEC` then `S -> X` turns every `SEC` into
+ * `XEC`) no longer forces the key. Surrounding bytes stay modeled as arbitrary
+ * passthrough, so testing the surviving fragment only drops false positives and
+ * never under-approximates a real key need.
  */
 export function secretEntriesNeedPlaceholderKey(entries: SecretEntry[]): boolean {
 	const replaceMap = new Map<string, string>();
@@ -266,10 +272,15 @@ export function secretEntriesNeedPlaceholderKey(entries: SecretEntry[]): boolean
 		);
 	}
 	const replacePhase = [...replaceMap].sort((a, b) => b[0].length - a[0].length);
-	const replacements = [...replaceMap.values()];
-	const applyReplacePhase = (text: string): string => {
+	// Apply the replace phase from `start` onward. The phase runs in descending
+	// content-length order, so a replacement output emitted at index i is rewritten
+	// only by the later (shorter-content) replacements at i+1…; `start` 0 models a
+	// value typed directly into the input.
+	const applyReplacePhaseFrom = (text: string, start: number): string => {
 		let result = text;
-		for (const [secret, replacement] of replacePhase) result = result.split(secret).join(replacement);
+		for (let i = start; i < replacePhase.length; i++) {
+			result = result.split(replacePhase[i][0]).join(replacePhase[i][1]);
+		}
 		return result;
 	};
 	return entries.some(entry => {
@@ -277,8 +288,11 @@ export function secretEntriesNeedPlaceholderKey(entries: SecretEntry[]): boolean
 		// Regex obfuscate entries match dynamically; conservatively require the key.
 		if (entry.type !== "plain") return true;
 		const content = entry.content;
-		return (
-			applyReplacePhase(content).includes(content) || replacements.some(r => replacementCanFormContent(r, content))
+		if (applyReplacePhaseFrom(content, 0).includes(content)) return true;
+		// Test each replacement output in the form it SURVIVES the rest of the phase,
+		// so a fragment a later replacement erases no longer forces the key.
+		return replacePhase.some(([, replacement], i) =>
+			replacementCanFormContent(applyReplacePhaseFrom(replacement, i + 1), content),
 		);
 	});
 }
