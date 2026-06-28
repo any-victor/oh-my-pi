@@ -578,6 +578,15 @@ export class SecretObfuscator {
 
 			for (const match of matches) {
 				if (entry.mode === "replace") {
+					if (match.partialPlaceholderCut) {
+						// Mirror the obfuscate-mode skip: a replace match whose boundary cuts
+						// into a generated placeholder's expanded value would redact only the
+						// bytes outside the snapped token, and that deterministic redaction is
+						// not a fixed point across re-obfuscation passes (the scrambled prefix
+						// drifts, e.g. `ZZgK#…#` → `ZZgZ#…#`). The cut secret is already
+						// obfuscated as that placeholder, so leave the match untouched.
+						continue;
+					}
 					if (match.preserveGeneratedPlaceholders) {
 						if (
 							match.preserveInputPlaceholders &&

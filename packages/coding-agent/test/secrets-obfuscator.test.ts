@@ -441,6 +441,25 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		expect(obfuscator.obfuscate(obfuscated)).toBe(obfuscated);
 	});
 
+	it("keeps replace regexes from rewriting placeholders their match cuts across", () => {
+		// Same partial-placeholder cut as above but in replace mode: `[A-Z]{8}`
+		// matches straddle the `ABCDEFGH` placeholder, and redacting only the bytes
+		// outside the snapped token was not a fixed point — the deterministic
+		// scramble of the prefix drifted across re-obfuscation passes ("ZZgK…" →
+		// "ZZgZ…"), breaking the provider-history / prompt-cache contract. The cut
+		// secret stays obfuscated as its placeholder and the surrounding bytes are
+		// left untouched, so re-obfuscation is stable and the secret never leaks.
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", content: "ABCDEFGH" },
+			{ type: "regex", content: "[A-Z]{8}", mode: "replace" },
+		]);
+
+		const obfuscated = obfuscator.obfuscate("YYBBABCDEFGHSECRETUV");
+
+		expect(obfuscated).not.toContain("ABCDEFGH");
+		expect(obfuscator.obfuscate(obfuscated)).toBe(obfuscated);
+	});
+
 	it("keeps regex placeholders stable when inner friendly names change", () => {
 		const sharedKey = "E".repeat(43);
 		const before = new SecretObfuscator(
