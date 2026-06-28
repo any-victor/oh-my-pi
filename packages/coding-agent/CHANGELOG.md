@@ -6,20 +6,27 @@
 
 - Added `friendlyName` support for hidden secrets so model-visible placeholders can carry sanitized semantic labels, content-derived hashes, and case hints while preserving exact deobfuscation ([#2465](https://github.com/can1357/oh-my-pi/issues/2465)).
 
-### Changed
-
-- Status line now collapses a linked git worktree path to the project name with a worktree icon, leaving the git segment to show the branch once instead of repeating it in the path.
-
 ### Fixed
 
 - Fixed reversible secret placeholders sharing a case-folded hash base across ASCII case variants, which let a prompt-injected model synthesize a never-provider-visible sibling secret's keyed token by swapping the case hint (`#…:L#` → `#…:U#`) in a tool-call argument. Placeholder bases are now keyed on the exact secret value, so each casing variant gets an independent base and a synthesized sibling token deobfuscates to nothing on live provider/tool-call paths ([#2465](https://github.com/can1357/oh-my-pi/issues/2465)).
 - Fixed an auto-collected environment secret that is also declared as a plain `mode: "replace"` entry with the same content still forcing creation of the persisted `secret-placeholder.key`. Replace mappings run before obfuscate mappings, so the value is one-way replaced and the obfuscate entry never emits a reversible placeholder; the key-need check now ignores such replace-shadowed obfuscate entries, so an effectively replace-only secret set no longer requires (or writes) the key file and no longer fails startup when the agent config dir is unwritable ([#2465](https://github.com/can1357/oh-my-pi/issues/2465)).
 - Fixed a default `mode: "replace"` regex that matches every non-whitespace candidate (e.g. `\S{n}`) shipping the raw secret unchanged when its deterministic replacement collided with the secret value, since every alphanumeric/punctuation candidate still matched. The redaction search now falls back to same-length whitespace markers — a full space/tab run, then a single whitespace byte among non-whitespace filler (` AAAA`) — so `\S`-class patterns and ones that also match all-space/all-tab runs (e.g. `(?:\S{n}| {n}|\t{n})`) are redacted to a stable nonmatching value instead of leaking to the provider; a regex that matches every non-line-terminator stays in the existing `.`/`[\s\S]` sentinel-keeping case ([#2465](https://github.com/can1357/oh-my-pi/issues/2465)).
 - Fixed the placeholder key-need check over-requiring the persisted `secret-placeholder.key` when a `mode: "replace"` fragment could seed an obfuscate `content` but a later (shorter-content) replacement always erases it (e.g. `AA -> SEC` followed by `S -> X`, which rewrites every `SEC` into `XEC`). Each replacement output is now tested in the form it survives the rest of the replace phase, so an effectively non-placeholding config no longer creates the key or fails startup in an unwritable agent config dir; surrounding bytes stay modeled as arbitrary passthrough, so a fragment that truly survives still requires the key ([#2465](https://github.com/can1357/oh-my-pi/issues/2465)).
+
+## [16.2.5] - 2026-06-28
+
+### Changed
+
+- Status line now collapses a linked git worktree path to the project name with a worktree icon, leaving the git segment to show the branch once instead of repeating it in the path.
+
+### Fixed
+
+- Fixed Ollama and llama.cpp discovery overestimating local context windows by using model training metadata instead of the runtime `num_ctx` / `n_ctx`, which could let compaction retry prompts that llama.cpp rejects as over context. ([#3752](https://github.com/can1357/oh-my-pi/issues/3752))
 - Fixed recoverable context-overflow compaction keeping the failed assistant error turn in visible session history after scheduling the retry. ([#3747](https://github.com/can1357/oh-my-pi/issues/3747))
 - Fixed editing a file read from outside the workspace (e.g. `~/.claude/settings.json`) failing with "File not found": the read snapshot header now carries the full out-of-workspace path so the edit resolves it directly instead of against the working directory.
 - Fixed subagents spawned with an output schema (`agent(..., schema=...)`, `task` with structured output) failing with `schema_violation: missing required fields` since the typed-yield rework: a `type: "result"` finalize carrying the full object was assembled as a section named `result`, nesting the payload one level deep. String-typed yields are now treated as terminal finalizers (their data is the complete result), only array-typed yields form accumulating sections, and a data-less finalize keeps accumulated sections instead of collapsing to the last assistant turn.
 - Fixed the per-provider concurrency cap (e.g. `providers.ollama-cloud.maxConcurrency`) bracketing the whole subagent lifecycle, which deadlocked any spawn tree wider than the cap because parents held every slot while waiting for children queued on the same cap. The semaphore now wraps each provider HTTP request, so a parent's slot frees between turns and child subagents can acquire while their parent's tool calls are running. ([#3749](https://github.com/can1357/oh-my-pi/issues/3749))
+- Fixed Ctrl+Q / Ctrl+Enter follow-up submissions sending the literal `[Paste #N]` marker instead of the expanded paste body ([#3737](https://github.com/can1357/oh-my-pi/issues/3737)).
 
 ## [16.2.4] - 2026-06-28
 
@@ -31,9 +38,6 @@
 - Fixed omp update leaving behind stale Bun install-cache directories for globally installed packages.
 - Fixed a reconnection loop issue in /collab sessions caused by oversized entries (such as large tool outputs) by truncating replicated payloads that exceed 1 MB.
 - Fixed autolearn and local memory writes mutating Anthropic prompt-cache prefixes mid-session, ensuring prompt injections remain session-stable.
-### Fixed
-
-- Fixed Ctrl+Q / Ctrl+Enter follow-up submissions sending the literal `[Paste #N]` marker instead of the expanded paste body ([#3737](https://github.com/can1357/oh-my-pi/issues/3737)).
 
 ## [16.2.3] - 2026-06-28
 
