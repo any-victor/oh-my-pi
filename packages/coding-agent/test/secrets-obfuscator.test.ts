@@ -500,6 +500,36 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		expect(repl.obfuscate(rout)).toBe(rout);
 	});
 
+	it("re-obfuscation is a fixed point when a greedy regex would spill into a trailing raw chunk around a prior-call placeholder", () => {
+		// `[A-Z0-9]{8,12}` greedily matches `SECRETUVA` (9 chars) when the SECRETUV
+		// placeholder is followed by the raw literal `A`. Previously the spillover
+		// caused that short surrounding chunk to be minted into a fresh placeholder on
+		// every subsequent obfuscate() call, drifting provider-visible history and the
+		// prompt-cache prefix. The fix: a surrounding raw chunk is only obfuscated when
+		// the placeholder's own deobfuscated value does NOT independently satisfy the
+		// regex; when it does (greedy spillover), the surrounding bytes stay verbatim.
+		const obf = new SecretObfuscator(
+			[
+				{ type: "plain", content: "ABCDEFGH" },
+				{ type: "plain", content: "SECRETUV" },
+				{ type: "regex", content: "[A-Z0-9]{8,12}" },
+			],
+			"Q".repeat(43),
+		);
+		const first = obf.obfuscate("ZZZZZZZZABCDEFGHSECRETUVA");
+
+		// Core regression: re-obfuscation must be a fixed point.
+		expect(obf.obfuscate(first)).toBe(first);
+		// Round-trip must restore every byte of the original input.
+		expect(obf.deobfuscate(first)).toBe("ZZZZZZZZABCDEFGHSECRETUVA");
+		// The trailing `A` must survive the first pass verbatim: SECRETUV alone
+		// satisfies [A-Z0-9]{8,12}, so the short tail must not be placeholdered.
+		expect(first.endsWith("A")).toBe(true);
+		// Plain secrets must not appear in provider-visible output.
+		expect(first).not.toContain("SECRETUV");
+		expect(first).not.toContain("ABCDEFGH");
+	});
+
 	it("keeps regex placeholders stable when inner friendly names change", () => {
 		const sharedKey = "E".repeat(43);
 		const before = new SecretObfuscator(

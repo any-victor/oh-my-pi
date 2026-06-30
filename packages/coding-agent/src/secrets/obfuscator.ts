@@ -711,6 +711,18 @@ export class SecretObfuscator {
 						continue;
 					}
 					if (match.preserveInputPlaceholders) {
+						// The match straddled a prior-call placeholder. When the placeholder's
+						// own value already satisfies the regex on its own, the surrounding raw
+						// bytes are greedy spillover (e.g. the trailing `A` in `SECRETUV→#…#A`):
+						// obfuscating them mints fresh placeholders on re-obfuscation and drifts
+						// the provider-visible history and prompt-cache prefix. Leave the
+						// placeholder atomic and the spillover verbatim — a fixed point. Outside
+						// bytes are still obfuscated when the placeholder value alone cannot
+						// match (they are structurally part of the secret, e.g. an `api_key=`
+						// prefix the regex requires).
+						if (match.inputPlaceholderInnerIndependentlyMatches) {
+							continue;
+						}
 						const span = result.slice(match.start, match.end);
 						const spanOrigin = origin.slice(match.start, match.end);
 						const obfuscated = this.#obfuscateOutsidePlaceholdersTracked(span, spanOrigin, entry.friendlyName);
@@ -1079,6 +1091,7 @@ export class SecretObfuscator {
 		inputPlaceholderOutsideIndependentlyMatches: boolean;
 		inputPlaceholderOutsideStart: number;
 		inputPlaceholderOutsideChunkCount: number;
+		inputPlaceholderInnerIndependentlyMatches: boolean;
 		defaultReplacement: string | undefined;
 	}> {
 		const knownPlaceholderRanges = this.#knownPlaceholderRanges(text);
@@ -1098,6 +1111,7 @@ export class SecretObfuscator {
 			inputPlaceholderOutsideIndependentlyMatches: boolean;
 			inputPlaceholderOutsideStart: number;
 			inputPlaceholderOutsideChunkCount: number;
+			inputPlaceholderInnerIndependentlyMatches: boolean;
 			defaultReplacement: string | undefined;
 		}> = [];
 		for (;;) {
@@ -1119,6 +1133,7 @@ export class SecretObfuscator {
 			let inputPlaceholderOutsideIndependentlyMatches = false;
 			let inputPlaceholderOutsideStart = -1;
 			let inputPlaceholderOutsideChunkCount = 0;
+			let inputPlaceholderInnerIndependentlyMatches = false;
 
 			let mapped = mapReplaceRegexMatch(regexScan.segments, start, end);
 			if (mapped.partialPlaceholderCut) {
@@ -1202,6 +1217,16 @@ export class SecretObfuscator {
 				const resumeIndex = regex.lastIndex;
 				regex.lastIndex = 0;
 				inputPlaceholderOutsideIndependentlyMatches = regex.test(inputPlaceholderOutside);
+				// Whether the placeholder's own (deobfuscated) value satisfies the regex
+				// with the surrounding raw bytes dropped. When it does, those raw bytes
+				// are greedy spillover the match never needed (e.g. the trailing `A` in
+				// `SECRETUV→#…#A`); obfuscating them on re-obfuscation drifts the
+				// provider-visible history and prompt-cache prefix. When it does NOT
+				// (e.g. `api_key=` literal that the placeholder value alone cannot match),
+				// the outside bytes are structurally required and must be obfuscated.
+				const innerText = placeholderInnerText(text, start, end, knownPlaceholderRanges, this.#deobfuscateMap);
+				regex.lastIndex = 0;
+				inputPlaceholderInnerIndependentlyMatches = innerText.length > 0 && regex.test(innerText);
 				regex.lastIndex = resumeIndex;
 			}
 			if (mode === "replace") {
@@ -1247,6 +1272,7 @@ export class SecretObfuscator {
 				inputPlaceholderOutsideIndependentlyMatches,
 				inputPlaceholderOutsideStart,
 				inputPlaceholderOutsideChunkCount,
+				inputPlaceholderInnerIndependentlyMatches,
 			});
 		}
 		return matches.reverse();
@@ -1683,6 +1709,30 @@ function deobfuscateGeneratedPlaceholderRanges(
 	}
 	result += text.slice(cursor, end);
 	return { text: result, recursive };
+}
+
+// Concatenate ONLY the deobfuscated placeholder ranges within [start, end),
+// dropping the bytes that lie outside them. Used to test whether a regex match
+// that straddles a prior-call placeholder would still match on the placeholder's
+// own (expanded) secret value alone — i.e. the surrounding raw bytes are greedy
+// spillover the match does not need, rather than content the match depends on.
+function placeholderInnerText(
+	text: string,
+	start: number,
+	end: number,
+	ranges: ReadonlyArray<{ start: number; end: number }>,
+	deobfuscateMap: ReadonlyMap<string, { secret: string; recursive: boolean }>,
+): string {
+	let result = "";
+	for (const range of ranges) {
+		if (range.end <= start || range.start >= end) continue;
+		const overlapStart = Math.max(range.start, start);
+		const overlapEnd = Math.min(range.end, end);
+		const placeholder = text.slice(overlapStart, overlapEnd);
+		const mapping = lookupFriendlyPlaceholderAlias(deobfuscateMap, placeholder);
+		result += mapping?.secret ?? placeholder;
+	}
+	return result;
 }
 
 // Concatenate the bytes of [start, end) that lie OUTSIDE the given (ascending,
