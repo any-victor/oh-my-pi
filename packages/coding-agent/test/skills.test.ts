@@ -258,6 +258,110 @@ describe("skills", () => {
 			}
 		});
 
+		// Regression: when the same skill name exists in both ~/.claude/skills (provider
+		// "claude", priority 80) and ~/.agents/skills (provider "agents", priority 70),
+		// and the claude provider is DISABLED, the enabled agents copy MUST win — not
+		// vanish because the disabled claude copy claimed the capability dedup slot.
+		it("loads the enabled lower-priority ~/.agents copy when the same-named ~/.claude skill is disabled (dual-render)", async () => {
+			const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "pi-dedup-home-"));
+			const tempCwd = await fs.mkdtemp(path.join(os.tmpdir(), "pi-dedup-cwd-"));
+
+			// Write the skill into ~/.claude/skills (higher priority, but will be disabled)
+			const claudeSkillDir = path.join(tempHome, ".claude", "skills", "dual-render-skill");
+			await fs.mkdir(claudeSkillDir, { recursive: true });
+			await fs.writeFile(
+				path.join(claudeSkillDir, "SKILL.md"),
+				[
+					"---",
+					"name: dual-render-skill",
+					"description: Claude copy (disabled provider)",
+					"---",
+					"",
+					"# dual-render-skill",
+				].join("\n"),
+			);
+
+			// Write the same skill into ~/.agents/skills (lower priority, but will be enabled)
+			const agentsSkillDir = path.join(tempHome, ".agents", "skills", "dual-render-skill");
+			await fs.mkdir(agentsSkillDir, { recursive: true });
+			await fs.writeFile(
+				path.join(agentsSkillDir, "SKILL.md"),
+				[
+					"---",
+					"name: dual-render-skill",
+					"description: Agents copy (enabled provider)",
+					"---",
+					"",
+					"# dual-render-skill",
+				].join("\n"),
+			);
+
+			const homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
+			try {
+				const { skills } = await loadSkills({
+					enableClaudeUser: false,
+					enableClaudeProject: false,
+					// enableAgentsUser / enableAgentsProject default true
+					cwd: tempCwd,
+				});
+				const s = skills.find(x => x.name === "dual-render-skill");
+				expect(s).toBeDefined();
+				expect(s!.source).toBe("agents:user");
+			} finally {
+				homedirSpy.mockRestore();
+				await removeWithRetries(tempHome);
+				await removeWithRetries(tempCwd);
+			}
+		});
+
+		it("keeps the higher-priority ~/.claude copy when both providers are enabled (dual-render)", async () => {
+			const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "pi-dedup-both-home-"));
+			const tempCwd = await fs.mkdtemp(path.join(os.tmpdir(), "pi-dedup-both-cwd-"));
+
+			// Write the skill into ~/.claude/skills (higher priority)
+			const claudeSkillDir = path.join(tempHome, ".claude", "skills", "dual-render-skill");
+			await fs.mkdir(claudeSkillDir, { recursive: true });
+			await fs.writeFile(
+				path.join(claudeSkillDir, "SKILL.md"),
+				[
+					"---",
+					"name: dual-render-skill",
+					"description: Claude copy (higher priority)",
+					"---",
+					"",
+					"# dual-render-skill",
+				].join("\n"),
+			);
+
+			// Write the same skill into ~/.agents/skills (lower priority)
+			const agentsSkillDir = path.join(tempHome, ".agents", "skills", "dual-render-skill");
+			await fs.mkdir(agentsSkillDir, { recursive: true });
+			await fs.writeFile(
+				path.join(agentsSkillDir, "SKILL.md"),
+				[
+					"---",
+					"name: dual-render-skill",
+					"description: Agents copy (lower priority)",
+					"---",
+					"",
+					"# dual-render-skill",
+				].join("\n"),
+			);
+
+			const homedirSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
+			try {
+				// All toggles at default (both claude and agents enabled)
+				const { skills } = await loadSkills({ cwd: tempCwd });
+				const s = skills.find(x => x.name === "dual-render-skill");
+				expect(s).toBeDefined();
+				expect(s!.source).toBe("claude:user");
+			} finally {
+				homedirSpy.mockRestore();
+				await removeWithRetries(tempHome);
+				await removeWithRetries(tempCwd);
+			}
+		});
+
 		// Regression for PR #2405 review: the fall-through gate used by
 		// unknown third-party providers (opencode/github/claude-plugins/...)
 		// MUST NOT consider the OMP-native `enableAgentsUser`/`...Project`

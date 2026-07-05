@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed authored skills vanishing when a higher-priority provider that supplies the same skill name is disabled. Skill discovery deduplicates by name across providers (priority order) inside the capability layer *before* the per-source toggles in `loadSkills` run, so a disabled higher-priority copy (e.g. `~/.claude/skills` at priority 80 with `skills.enableClaudeUser: false`) would win the dedup and then be filtered out, dropping an enabled lower-priority copy (e.g. `~/.agents/skills` at 70) entirely. This hit every shared name in dual-rendered skill trees (one canonical source materialized into both `~/.claude/skills` and `~/.agents/skills`). Authored skills are now deduplicated over the source-enabled subset, so the highest-priority *enabled* provider wins per name.
+
 ## [16.3.6] - 2026-07-04
 
 ### Changed
