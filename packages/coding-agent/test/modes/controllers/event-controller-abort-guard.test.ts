@@ -19,6 +19,7 @@ import { SETTINGS_SCHEMA } from "@oh-my-pi/pi-coding-agent/config/settings-schem
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 
 beforeAll(() => {
@@ -58,6 +59,37 @@ function makeContext(lastMessage: AssistantMessage | undefined): InteractiveMode
 		},
 		session: sessionMock,
 		viewSession: sessionMock,
+	} as unknown as InteractiveModeContext;
+}
+
+function makeAgentEndEvent(messages: AssistantMessage[]): Extract<AgentSessionEvent, { type: "agent_end" }> {
+	return { type: "agent_end", messages } as Extract<AgentSessionEvent, { type: "agent_end" }>;
+}
+
+/** Full context needed to drive `#handleAgentEnd` -> `#finishAgentEnd` end to end. */
+function makeTurnEndContext(options: { lastAssistantMessage?: AssistantMessage } = {}): InteractiveModeContext {
+	const session = {
+		isStreaming: false,
+		isCompacting: false,
+		messages: [] as AssistantMessage[],
+		getLastAssistantMessage: () => options.lastAssistantMessage,
+		getContextUsage: () => undefined,
+	};
+	return {
+		isInitialized: true,
+		loadingAnimation: undefined,
+		streamingComponent: undefined,
+		streamingMessage: undefined,
+		pendingTools: new Map<string, unknown>(),
+		flushPendingModelSwitch: async () => {},
+		ui: { requestRender: () => {} },
+		chatContainer: { removeChild: () => {} },
+		statusContainer: { clear: () => {} },
+		statusLine: { markActivityEnd: () => {} },
+		editor: { getText: () => "" },
+		sessionManager: { getSessionName: () => "test-session" },
+		session,
+		viewSession: session,
 	} as unknown as InteractiveModeContext;
 }
 
@@ -114,12 +146,36 @@ describe("EventController.sendErrorNotification", () => {
 	it("fires an error notification when stopReason === 'error'", () => {
 		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
 		settings.override("error.notify", "on");
-		const controller = new EventController(makeContext(makeAssistantMessage("error")));
-		controller.sendErrorNotification();
+		const controller = new EventController(makeContext(undefined));
+		controller.sendErrorNotification(makeAgentEndEvent([makeAssistantMessage("error")]));
 		expect(spy).toHaveBeenCalledTimes(1);
 		expect(spy).toHaveBeenCalledWith(
 			expect.objectContaining({ body: "Stopped with error", type: "error", title: "test-session" }),
 		);
+	});
+
+	it("reads the terminal turn from agent_end.messages, not the mutable active context", () => {
+		// A classifier-refusal failure is pruned from `viewSession`'s active
+		// context before `agent_end` fires (`#removeAssistantMessageFromActiveContext`
+		// in agent-session.ts), so `viewSession.getLastAssistantMessage()` here
+		// reflects a stale, non-error turn. The notification must still fire off
+		// the event's own `messages`, not that stale snapshot.
+		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		settings.override("error.notify", "on");
+		const controller = new EventController(makeContext(makeAssistantMessage("stop")));
+		controller.sendErrorNotification(makeAgentEndEvent([makeAssistantMessage("error")]));
+		expect(spy).toHaveBeenCalledTimes(1);
+		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ body: "Stopped with error", type: "error" }));
+	});
+
+	it("uses the last assistant message when agent_end carries multiple messages", () => {
+		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		settings.override("error.notify", "on");
+		const controller = new EventController(makeContext(undefined));
+		controller.sendErrorNotification(
+			makeAgentEndEvent([makeAssistantMessage("stop"), makeAssistantMessage("error")]),
+		);
+		expect(spy).toHaveBeenCalledTimes(1);
 	});
 
 	it("honors error.notify=off without changing completion notifications", () => {
@@ -127,8 +183,8 @@ describe("EventController.sendErrorNotification", () => {
 		settings.override("error.notify", "off");
 		settings.override("completion.notify", "on");
 
-		const errorController = new EventController(makeContext(makeAssistantMessage("error")));
-		errorController.sendErrorNotification();
+		const errorController = new EventController(makeContext(undefined));
+		errorController.sendErrorNotification(makeAgentEndEvent([makeAssistantMessage("error")]));
 		expect(spy).toHaveBeenCalledTimes(0);
 
 		const completionController = new EventController(makeContext(makeAssistantMessage("stop")));
@@ -140,16 +196,45 @@ describe("EventController.sendErrorNotification", () => {
 	it("skips user-aborted turns", () => {
 		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
 		settings.override("error.notify", "on");
-		const controller = new EventController(makeContext(makeAssistantMessage("aborted")));
-		controller.sendErrorNotification();
+		const controller = new EventController(makeContext(undefined));
+		controller.sendErrorNotification(makeAgentEndEvent([makeAssistantMessage("aborted")]));
 		expect(spy).toHaveBeenCalledTimes(0);
 	});
 
 	it("skips normal completion turns", () => {
 		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
 		settings.override("error.notify", "on");
-		const controller = new EventController(makeContext(makeAssistantMessage("stop")));
-		controller.sendErrorNotification();
+		const controller = new EventController(makeContext(undefined));
+		controller.sendErrorNotification(makeAgentEndEvent([makeAssistantMessage("stop")]));
 		expect(spy).toHaveBeenCalledTimes(0);
+	});
+});
+
+describe("EventController — error notification through the real turn-end path (#handleAgentEnd)", () => {
+	beforeEach(() => {
+		// Isolate the error-notification assertion from the pre-existing
+		// completion-notification side effect that also fires from
+		// `#finishAgentEnd` on every settled turn.
+		settings.override("completion.notify", "off");
+	});
+
+	it("fires when the dispatched turn settles with stopReason === 'error', even with a stale active-context snapshot", async () => {
+		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		settings.override("error.notify", "on");
+		// viewSession (active context) reports no assistant at all — the shape a
+		// classifier-refusal prune leaves behind — while the terminal agent_end
+		// event still carries the failed turn.
+		const controller = new EventController(makeTurnEndContext({ lastAssistantMessage: undefined }));
+		await controller.handleEvent(makeAgentEndEvent([makeAssistantMessage("error")]));
+		expect(spy).toHaveBeenCalledTimes(1);
+		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ body: "Stopped with error", type: "error" }));
+	});
+
+	it("skips notification when the dispatched turn settles with stopReason === 'aborted'", async () => {
+		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		settings.override("error.notify", "on");
+		const controller = new EventController(makeTurnEndContext());
+		await controller.handleEvent(makeAgentEndEvent([makeAssistantMessage("aborted")]));
+		expect(spy).not.toHaveBeenCalled();
 	});
 });
