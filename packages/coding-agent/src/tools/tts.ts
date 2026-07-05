@@ -10,7 +10,14 @@ import { type } from "arktype";
 import { settings } from "../config/settings";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import { ohMyPiXAIUserAgent, resolveXAIHttpCredentials } from "../lib/xai-http";
-import { DEFAULT_TTS_LOCAL_MODEL_KEY, DEFAULT_TTS_VOICE, isTtsLocalModelKey, KOKORO_VOICES } from "../tts/models";
+import {
+	DEFAULT_TTS_LOCAL_MODEL_KEY,
+	DEFAULT_TTS_SPEED,
+	DEFAULT_TTS_VOICE,
+	isTtsLocalModelKey,
+	KOKORO_VOICES,
+	normalizeTtsSpeed,
+} from "../tts/models";
 import { ttsClient } from "../tts/tts-client";
 import { encodeWav } from "../tts/wav";
 import { formatPathRelativeToCwd, resolveToCwd } from "./path-utils";
@@ -197,8 +204,14 @@ async function synthesizeLocal(
 	const modelSetting = readStringSetting("tts.localModel");
 	const modelKey = modelSetting && isTtsLocalModelKey(modelSetting) ? modelSetting : DEFAULT_TTS_LOCAL_MODEL_KEY;
 	const voice = readStringSetting("tts.localVoice") || DEFAULT_TTS_VOICE;
+	let speed = DEFAULT_TTS_SPEED;
+	try {
+		speed = normalizeTtsSpeed(settings.get("tts.localSpeed"));
+	} catch {
+		// Settings not initialized — fall back to the natural rate.
+	}
 
-	const audio = await ttsClient.synthesize(modelKey, params.text, { voice, signal });
+	const audio = await ttsClient.synthesize(modelKey, params.text, { voice, speed, signal });
 	if (!audio) {
 		return {
 			isError: true,
@@ -222,7 +235,7 @@ async function synthesizeLocal(
 		content: [
 			{
 				type: "text",
-				text: `Saved ${wav.length} bytes to ${displayPath} (voice=${modelKey}/${voice}, codec=wav, backend=local, ${audio.sampleRate} Hz).${note}`,
+				text: `Saved ${wav.length} bytes to ${displayPath} (voice=${modelKey}/${voice}, speed=${speed}×, codec=wav, backend=local, ${audio.sampleRate} Hz).${note}`,
 			},
 		],
 		details: { bytes: wav.length, voiceId: `${modelKey}/${voice}`, codec: "wav", backend: "local" },

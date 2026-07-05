@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `tts.localSpeed`, a speaking-rate multiplier for the local (Kokoro) TTS backend — `1` = natural rate, `>1` faster, `<1` slower. The `tts` tool, `omp say` (new `--speed` flag), and streaming speech vocalization all honor it; any positive number is accepted in `config.yml`, with a discrete preset picker in the settings UI. Kokoro's `generate`/`stream` already accepted a `speed` tensor — this threads the setting through the worker protocol and normalizes non-positive/non-finite values back to the natural rate.
+
 ## [16.3.6] - 2026-07-04
 
 ### Changed

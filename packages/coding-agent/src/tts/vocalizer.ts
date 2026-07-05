@@ -39,7 +39,7 @@
  */
 import { logger } from "@oh-my-pi/pi-utils";
 import { settings } from "../config/settings";
-import { DEFAULT_TTS_VOICE } from "./models";
+import { DEFAULT_TTS_VOICE, normalizeTtsSpeed } from "./models";
 import { SpeakableStream } from "./speakable";
 import { BlockAccumulator, type SpeechEnhancer } from "./speech-enhancer";
 import { createStreamingPlayer, DUCK_GAIN } from "./streaming-player";
@@ -327,7 +327,8 @@ export class Vocalizer {
 	#openSession(abort: AbortController): TtsStreamHandle {
 		const modelKey = settings.get("tts.localModel");
 		const voice = settings.get("speech.voice") || DEFAULT_TTS_VOICE;
-		const handle = ttsClient.synthesizeStream(modelKey, { voice, signal: abort.signal });
+		const speed = normalizeTtsSpeed(settings.get("tts.localSpeed"));
+		const handle = ttsClient.synthesizeStream(modelKey, { voice, speed, signal: abort.signal });
 		const player = this.#createPlayer();
 		player.setGain(this.#ducked ? DUCK_GAIN : 1);
 		this.#liveAborts.add(abort);

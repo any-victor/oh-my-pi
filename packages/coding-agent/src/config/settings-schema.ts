@@ -28,6 +28,7 @@ import {
 } from "../tiny/models";
 import {
 	DEFAULT_TTS_LOCAL_MODEL_KEY,
+	DEFAULT_TTS_SPEED,
 	DEFAULT_TTS_VOICE,
 	TTS_LOCAL_MODEL_OPTIONS,
 	TTS_LOCAL_MODEL_VALUES,
@@ -4472,6 +4473,26 @@ export const SETTINGS_SCHEMA = {
 			label: "Local TTS Voice",
 			description: "Kokoro voice used by the local TTS backend (American/British, female/male)",
 			options: TTS_LOCAL_VOICE_OPTIONS,
+		},
+	},
+	"tts.localSpeed": {
+		type: "number",
+		default: DEFAULT_TTS_SPEED,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Local TTS Speed",
+			description:
+				"Speaking-rate multiplier for the local TTS backend (Kokoro): 1 = natural, >1 faster, <1 slower. Any positive number is accepted in config.yml",
+			options: [
+				{ value: "0.75", label: "0.75×", description: "Slower" },
+				{ value: "1", label: "1×", description: "Natural (default)" },
+				{ value: "1.15", label: "1.15×" },
+				{ value: "1.25", label: "1.25×", description: "Faster" },
+				{ value: "1.5", label: "1.5×" },
+				{ value: "1.75", label: "1.75×" },
+				{ value: "2", label: "2×" },
+			],
 		},
 	},
 	"speech.enabled": {

@@ -11,6 +11,7 @@ import { getProjectDir, Snowflake } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import chalk from "chalk";
 import { Settings, settings } from "../config/settings";
+import { normalizeTtsSpeed } from "../tts/models";
 import { playAudioFile, removeTempFile } from "../tts/player";
 import { shutdownTtsClient, ttsClient } from "../tts/tts-client";
 import { encodeWav } from "../tts/wav";
@@ -26,12 +27,14 @@ export default class Say extends Command {
 		voice: Flags.string({ description: "Voice id" }),
 		model: Flags.string({ description: "Local TTS model key" }),
 		out: Flags.string({ char: "o", description: "Write WAV to this path instead of playing" }),
+		speed: Flags.string({ description: "Speaking-rate multiplier, e.g. 1.25 (1 = natural rate)" }),
 	};
 
 	static examples = [
 		'omp say "hello world"',
 		'omp say "hello world" --out /tmp/hello.wav',
 		'omp say "bonjour" --voice af_heart --model kokoro',
+		'omp say "hello" --speed 1.25',
 	];
 
 	async run(): Promise<void> {
@@ -41,6 +44,15 @@ export default class Say extends Command {
 		await Settings.init({ cwd: getProjectDir() });
 		const model = flags.model ?? settings.get("tts.localModel");
 		const voice = flags.voice ?? settings.get("tts.localVoice");
+		let speed = normalizeTtsSpeed(settings.get("tts.localSpeed"));
+		if (flags.speed !== undefined) {
+			const parsed = Number(flags.speed);
+			if (!Number.isFinite(parsed) || parsed <= 0) {
+				process.stderr.write(chalk.red(`error: --speed must be a positive number (got "${flags.speed}")\n`));
+				process.exit(1);
+			}
+			speed = parsed;
+		}
 
 		let exitCode = 0;
 		const unsubscribe = ttsClient.onProgress(event => {
@@ -55,7 +67,7 @@ export default class Say extends Command {
 		});
 
 		try {
-			const audio = await ttsClient.synthesize(model, text, { voice });
+			const audio = await ttsClient.synthesize(model, text, { voice, speed });
 			if (!audio) {
 				process.stderr.write(
 					chalk.red(
@@ -74,7 +86,7 @@ export default class Say extends Command {
 				await Bun.write(flags.out, wav);
 				process.stdout.write(
 					`${chalk.green("saved")} ${flags.out} ` +
-						`${chalk.dim(`(${voice}, ${model}, ${durationSec.toFixed(1)}s, ${wav.byteLength} bytes)`)}\n`,
+						`${chalk.dim(`(${voice}, ${model}, ${speed}×, ${durationSec.toFixed(1)}s, ${wav.byteLength} bytes)`)}\n`,
 				);
 				return;
 			}
@@ -84,7 +96,7 @@ export default class Say extends Command {
 			try {
 				await playAudioFile(tmp);
 				process.stdout.write(
-					`${chalk.green("spoke")} ${chalk.dim(`(${voice}, ${model}, ${durationSec.toFixed(1)}s)`)}\n`,
+					`${chalk.green("spoke")} ${chalk.dim(`(${voice}, ${model}, ${speed}×, ${durationSec.toFixed(1)}s)`)}\n`,
 				);
 			} finally {
 				await removeTempFile(tmp);

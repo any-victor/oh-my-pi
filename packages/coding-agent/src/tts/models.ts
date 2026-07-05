@@ -55,6 +55,9 @@ export const KOKORO_VOICES: readonly TtsLocalVoiceSpec[] = [
 /** Default voice within the default model — Kokoro's flagship grade-A voice. */
 export const DEFAULT_TTS_VOICE = "af_heart";
 
+/** Default Kokoro speaking-rate multiplier — 1 = the model's natural rate. */
+export const DEFAULT_TTS_SPEED = 1;
+
 /** Default local TTS model used when `tts.localModel` is unset. */
 export const DEFAULT_TTS_LOCAL_MODEL_KEY = "kokoro";
 
@@ -134,4 +137,14 @@ export function resolveTtsVoice(modelKey: string | undefined, voice: string | un
 	if (!spec || !voice) return fallback;
 	const match = spec.voices.find(v => v.id === voice);
 	return match ? match.id : fallback;
+}
+
+/**
+ * Normalize a configured/requested speaking-rate multiplier for Kokoro. Kokoro
+ * feeds `speed` straight into the model as a float tensor with no guard, so a
+ * non-finite or non-positive value would corrupt synthesis; fall back to the
+ * natural rate. No upper bound is imposed — higher multipliers stay valid.
+ */
+export function normalizeTtsSpeed(value: number | undefined): number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : DEFAULT_TTS_SPEED;
 }

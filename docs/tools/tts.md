@@ -45,7 +45,7 @@
 ## Side Effects
 - Filesystem: writes `output_path`, or a sibling `.wav` path when local synthesis receives a non-WAV destination.
 - Network: xAI backend calls the configured xAI/Grok Voice HTTP endpoint; local backend may download/cache model weights through the tiny-model stack.
-- Session state: reads cwd, model registry, and settings `providers.tts`, `tts.localModel`, and `tts.localVoice`.
+- Session state: reads cwd, model registry, and settings `providers.tts`, `tts.localModel`, `tts.localVoice`, and `tts.localSpeed`.
 - Background work / cancellation: xAI calls use a 60 s timeout; local synthesis receives the caller abort signal.
 
 ## Limits & Caps
@@ -54,6 +54,7 @@
 - Built-in xAI voices listed in the description: `ara`, `eve`, `leo`, `rex`, `sal`; custom xAI voice ids are accepted.
 - Default local model: `kokoro` (`onnx-community/Kokoro-82M-v1.0-ONNX`, q8).
 - Default local voice: `af_heart`; supported local voices include `af_heart`, `af_bella`, `af_nicole`, `af_aoede`, `af_kore`, `af_sarah`, `am_michael`, `am_fenrir`, `am_puck`, `bf_emma`, `bm_george`, and `bm_fable`.
+- Default local speed: `1` (natural rate); `tts.localSpeed` accepts any positive multiplier (`>1` faster, `<1` slower).
 
 ## Errors
 - xAI credentials missing returns an error result: `No xAI credentials. Run /login → xAI Grok OAuth (SuperGrok Subscription) or set XAI_API_KEY.`
