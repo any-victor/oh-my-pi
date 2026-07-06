@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `agent://` (and the `output()` eval helper) failing to resolve a deeply nested subagent's output while the agent tree is live, when the subagent was spawned two or more levels deep from the root session. The resolver now searches both each ref's adopted `ArtifactManager` directory and its own session-file directory, so output written one directory deeper per spawn hop is found at any depth ([#4650](https://github.com/can1357/oh-my-pi/issues/4650)).
+
 ## [16.3.9] - 2026-07-06
 
 ### Added
