@@ -175,18 +175,24 @@ async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {
 	}
 }
 
+// Validates the friendlyName but returns it UNSANITIZED: `SecretObfuscator`'s
+// own `#createPlaceholder` sanitizes it again and, critically, needs the raw
+// string for `#friendlyNameCollidesWithSecret`'s regex-collision check — a
+// case-sensitive/punctuated regex pattern (e.g. `tok_[a-z0-9]+`) only matches
+// the label as it was actually written, not an already-uppercased,
+// separator-stripped rendering of it. Pre-sanitizing here would silently
+// defeat that check for every `secrets.yml`-loaded entry.
 function loadFriendlyName(entry: RawSecretEntry, filePath: string, index: number): string | undefined {
 	if (entry.friendlyName === undefined) return undefined;
 	if (typeof entry.friendlyName !== "string") {
 		logger.warn(`secrets.yml[${index}]: friendlyName must be a string`, { path: filePath });
 		return undefined;
 	}
-	const friendlyName = sanitizeSecretFriendlyName(entry.friendlyName);
-	if (!friendlyName) {
+	if (sanitizeSecretFriendlyName(entry.friendlyName) === undefined) {
 		logger.warn(`secrets.yml[${index}]: friendlyName must contain at least one letter or digit`, { path: filePath });
 		return undefined;
 	}
-	return friendlyName;
+	return entry.friendlyName;
 }
 
 function validateEntry(entry: unknown, filePath: string, index: number): entry is RawSecretEntry {

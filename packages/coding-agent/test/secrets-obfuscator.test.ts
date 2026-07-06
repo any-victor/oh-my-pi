@@ -2244,6 +2244,48 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		expect(out).not.toContain("TOKABC123");
 	});
 
+	it("refuses deobfuscate()'s bare-alias fallback for a forged secret-shaped prefix, but still honors a genuine rename", () => {
+		// Regression: `#lookupLiveAlias`'s bare-alias fallback (`#PREFIX_HASH#` →
+		// strip prefix → look up bare `#HASH#`) used to accept ANY prefix
+		// unconditionally as long as the bare hash suffix belonged to a real
+		// placeholder. On the live provider-output / tool-call-argument restore
+		// path, an attacker who observed any real placeholder's bare hash suffix
+		// elsewhere in a transcript could wrap it in a forged prefix that is a
+		// sanitized/normalized rendering of a configured secret's own value (or a
+		// different secret's), and deobfuscate() would restore that OTHER
+		// secret's raw value in its place — worse than the obfuscate-direction
+		// leak defended against above, since this is the path that reconstitutes
+		// real secrets for outbound tool calls. The fix reuses
+		// `#prefixIsSecretShaped` (shared with `#isGeneratedPlaceholder`) to
+		// refuse the fallback whenever the dropped prefix is itself
+		// secret-shaped, while a genuine friendly-name rename — a prefix that
+		// matches no configured secret value or pattern — still round-trips.
+		const secret = "github_pat_abc123";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+
+		const real = obfuscator.obfuscate(secret);
+		const suffix = /#([A-Z0-9]{4,}(?::[ULCM])?)#/.exec(real)?.[1];
+		expect(suffix).toBeDefined();
+
+		// Forge a prefix that is the sanitized rendering of the SAME configured
+		// secret's own value, wrapped around the real bare-alias suffix.
+		const forged = `run tool with #GITHUBPATABC123_${suffix}# now`;
+		const restored = obfuscator.deobfuscate(forged);
+		expect(restored).not.toContain(secret);
+		expect(restored).toContain("#GITHUBPATABC123_");
+
+		// A genuine rename is unaffected: the OLD friendly-name prefix is not
+		// itself secret-shaped, so the bare-alias fallback still resolves it to
+		// the same secret under the RENAMED (equally non-secret-shaped) prefix.
+		const renameObfuscator = new SecretObfuscator([
+			{ type: "plain", content: "some-other-secret-value", friendlyName: "OldName" },
+		]);
+		const currentToken = renameObfuscator.obfuscate("some-other-secret-value");
+		expect(currentToken).toMatch(/^#OLDNAME_[A-Z0-9]+:L#$/);
+		const renameSuffix = currentToken.replace(/^#OLDNAME/, "");
+		expect(renameObfuscator.deobfuscate(`#NEWNAME${renameSuffix}`)).toBe("some-other-secret-value");
+	});
+
 	it("drops a friendly name that contains another configured secret's literal value", () => {
 		// Regression: a friendlyName is baked verbatim into every placeholder
 		// minted for its secret (`#NAME_hash:hint#`) via an EXACT
@@ -2566,6 +2608,40 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 			const entries = await loadSecrets(project, agentDir);
 
 			expect(entries).toEqual([]);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves the raw friendlyName from secrets.yml so a regex entry's self-collision check still catches it", async () => {
+		// Regression: `loadFriendlyName` used to return the SANITIZED (uppercased,
+		// separator-stripped) friendlyName, which then got stored verbatim as
+		// `entry.friendlyName` in the loaded `SecretEntry`. That defeated the
+		// regex-entry self-collision check above (see "rejects a regex entry
+		// friendlyName that is itself a live match for its own pattern"), which
+		// must test the RAW label against the configured pattern: a
+		// case-sensitive/punctuated pattern like `tok_[a-z0-9]+` can never match
+		// an already-uppercased, separator-stripped rendering of itself. The fix
+		// still validates the friendlyName but returns it unsanitized.
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secret-friendly-"));
+		try {
+			const project = path.join(root, "project");
+			const agentDir = path.join(root, "agent");
+			await fs.mkdir(path.join(project, ".omp"), { recursive: true });
+			await fs.mkdir(agentDir, { recursive: true });
+			await fs.writeFile(
+				path.join(project, ".omp", "secrets.yml"),
+				'- type: regex\n  content: "tok_[a-z0-9]+"\n  friendlyName: "tok_abc123"\n',
+			);
+
+			const entries = await loadSecrets(project, agentDir);
+			expect(entries[0]?.friendlyName).toBe("tok_abc123");
+
+			const obfuscator = new SecretObfuscator(entries);
+			const obfuscated = obfuscator.obfuscate("use tok_abc123 now");
+
+			expect(obfuscated).not.toMatch(/TOKABC123_/);
+			expect(obfuscated).toMatch(/^use #[A-Z0-9]+:L# now$/);
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}

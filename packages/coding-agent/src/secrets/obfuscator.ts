@@ -275,6 +275,18 @@ export function sanitizeSecretFriendlyName(name: string): string | undefined {
 }
 
 /**
+ * Normalize a secret value into the same alnum-only, uppercased shape a
+ * friendly-name label or placeholder prefix is sanitized into, so comparing a
+ * raw (possibly lowercase/punctuated) secret value against already-sanitized,
+ * model-visible text does not miss a case- or separator-only variant. Unlike
+ * `sanitizeSecretFriendlyName` this never truncates and never signals "empty"
+ * via `undefined` — callers already guard on `.length > 0` before comparing.
+ */
+function sanitizeForCollisionCheck(value: string): string {
+	return value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+}
+
+/**
  * Whether an entry needs the persisted placeholder key: either because it can
  * produce a reversible (keyed) obfuscate-mode placeholder, or because a default
  * (no custom `replacement`) replace-mode regex can reach
@@ -863,13 +875,33 @@ export class SecretObfuscator {
 		return this.#deobfuscate(text, true);
 	}
 
+	// Reverse-direction counterpart to `#isGeneratedPlaceholder`'s guard: the
+	// bare-alias fallback below intentionally accepts ANY prefix so a
+	// placeholder minted under a renamed friendly name still deobfuscates
+	// (see `#prefixIsSecretShaped`'s docstring for why), but unconditionally
+	// stripping and ignoring an attacker-authored prefix would let a forged
+	// token like `#GITHUBPATABC123_<suffix-copied-from-any-real-placeholder>#`
+	// restore to that OTHER secret's raw value with no check at all — worse
+	// than the obfuscate-direction leak, since deobfuscation is what feeds
+	// tool-call arguments and provider-output restoration. Refuse the
+	// fallback (leave the token as opaque, unresolved text) when the prefix
+	// is itself secret-shaped; an exact full-token match is unaffected, since
+	// that was minted by this instance and carries no forgery risk.
+	#lookupLiveAlias(placeholder: string): { secret: string; recursive: boolean } | undefined {
+		const direct = this.#deobfuscateMap.get(placeholder);
+		if (direct !== undefined) return direct;
+		const match = /^#([A-Z0-9]+)_([A-Z0-9]{4,}(?::[ULCM])?)#$/.exec(placeholder);
+		if (match === null || this.#prefixIsSecretShaped(match[1]!)) return undefined;
+		return this.#deobfuscateMap.get(`#${match[2]}#`);
+	}
+
 	#deobfuscate(text: string, allowLegacy: boolean): string {
 		if (!this.#hasAny || !text.includes("#")) return text;
 		let result = text;
 		for (;;) {
 			let shouldContinue = false;
 			const next = result.replace(PLACEHOLDER_RE, match => {
-				const mapped = lookupFriendlyPlaceholderAlias(this.#deobfuscateMap, match);
+				const mapped = this.#lookupLiveAlias(match);
 				if (mapped !== undefined) {
 					shouldContinue ||= mapped.recursive;
 					return mapped.secret;
@@ -1175,7 +1207,7 @@ export class SecretObfuscator {
 	// secret.
 	#friendlyNameCollidesWithSecret(sanitizedName: string, rawName: string): boolean {
 		for (const secretValue of this.#configuredSecretValues) {
-			const sanitizedSecret = secretValue.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+			const sanitizedSecret = sanitizeForCollisionCheck(secretValue);
 			if (sanitizedSecret.length > 0 && sanitizedName.includes(sanitizedSecret)) return true;
 		}
 		for (const entry of this.#regexEntries) {
@@ -1201,45 +1233,52 @@ export class SecretObfuscator {
 		}
 	}
 
-	// Exact match always qualifies. Otherwise fall back to the friendly-name-
-	// independent bare alias: needed so a placeholder minted under a NOW-
-	// renamed friendly name (same secret, same key, different `secrets.yml`
-	// label) still round-trips when older provider-visible text is re-scanned
-	// by a renamed-config instance — the hash suffix is a keyed digest of the
-	// secret VALUE alone, so a same-key instance recomputes it identically
-	// regardless of the label. The dropped prefix is otherwise unconstrained
-	// text, though: an attacker who has observed ANY live placeholder's hash
-	// suffix elsewhere in the transcript could wrap it around a DIFFERENT
-	// real secret's plaintext to make the whole token look pre-redacted and
-	// smuggle that secret through untouched. Refuse the alias fallback when the
-	// dropped prefix contains a configured plain secret's literal value, any
-	// regex-discovered secret's value this instance has ever minted a
-	// placeholder for (`#obfuscateMappings` — regex secrets are found
-	// dynamically, so they are never in `#configuredSecretValues`), OR is
-	// itself matched by a configured regex pattern directly — a case- or
-	// flag-variant occurrence (e.g. `content: "tok[a-z0-9]+", flags: "i"`
-	// discovering lowercase `tokabc123`) never lands in `#obfuscateMappings`
-	// under its differently-cased form, but the pattern itself still flags it,
-	// so a forged `#TOKABC123_<observed-suffix>#` must not be waved through as
-	// already-redacted. Either check means the plain-secret/regex pass still
-	// catches it instead of skipping the whole span.
-	#isGeneratedPlaceholder(placeholder: string): boolean {
-		if (this.#deobfuscateMap.has(placeholder)) return true;
-		const match = /^#([A-Z0-9]+)_([A-Z0-9]{4,}(?::[ULCM])?)#$/.exec(placeholder);
-		if (match === null) return false;
-		const prefix = match[1]!;
+	// Whether an alnum-only, uppercase friendly-name-shaped prefix dropped from
+	// a candidate placeholder token is itself something that should have been
+	// redacted, rather than an arbitrary label: a sanitized form of a
+	// configured plain secret's value, a sanitized form of any regex-
+	// discovered secret's value this instance has ever minted a placeholder
+	// for, or text a configured regex pattern matches directly. Shared by the
+	// obfuscate-direction guard below and the deobfuscate-direction bare-alias
+	// guard in `#deobfuscate` — both fall back to a friendly-name-independent
+	// alias keyed only by the hash suffix, so both need the same defense
+	// against a forged/attacker-chosen prefix.
+	#prefixIsSecretShaped(prefix: string): boolean {
 		for (const secretValue of this.#configuredSecretValues) {
-			if (secretValue.length > 0 && prefix.includes(secretValue)) return false;
+			const sanitizedSecret = sanitizeForCollisionCheck(secretValue);
+			if (sanitizedSecret.length > 0 && prefix.includes(sanitizedSecret)) return true;
 		}
 		for (const { secret } of this.#obfuscateMappings.values()) {
-			if (secret.length > 0 && prefix.includes(secret)) return false;
+			const sanitizedSecret = sanitizeForCollisionCheck(secret);
+			if (sanitizedSecret.length > 0 && prefix.includes(sanitizedSecret)) return true;
 		}
 		for (const entry of this.#regexEntries) {
 			entry.regex.lastIndex = 0;
 			const matches = entry.regex.test(prefix);
 			entry.regex.lastIndex = 0;
-			if (matches) return false;
+			if (matches) return true;
 		}
+		return false;
+	}
+
+	// A placeholder is an exact match, or the friendly-name-independent bare
+	// alias: needed so a placeholder minted under a NOW-renamed friendly name
+	// (same secret, same key, different `secrets.yml` label) still round-trips
+	// when older provider-visible text is re-scanned by a renamed-config
+	// instance — the hash suffix is a keyed digest of the secret VALUE alone,
+	// so a same-key instance recomputes it identically regardless of the
+	// label. The dropped prefix is otherwise unconstrained text, though: an
+	// attacker who has observed ANY live placeholder's hash suffix elsewhere
+	// in the transcript could wrap it around a DIFFERENT real secret's
+	// plaintext (or a normalized rendering of one) to make the whole token
+	// look pre-redacted and smuggle that secret through untouched.
+	// `#prefixIsSecretShaped` above guards against that, shared with the
+	// deobfuscate-direction check in `#deobfuscate`.
+	#isGeneratedPlaceholder(placeholder: string): boolean {
+		if (this.#deobfuscateMap.has(placeholder)) return true;
+		const match = /^#([A-Z0-9]+)_([A-Z0-9]{4,}(?::[ULCM])?)#$/.exec(placeholder);
+		if (match === null) return false;
+		if (this.#prefixIsSecretShaped(match[1]!)) return false;
 		return this.#deobfuscateMap.has(`#${match[2]}#`);
 	}
 
