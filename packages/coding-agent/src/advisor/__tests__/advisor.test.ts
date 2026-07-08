@@ -895,6 +895,64 @@ describe("advisor", () => {
 			expect(restored).toContain("tok_abc123");
 		});
 
+		it("redacts secrets inside assistant thinking blocks, honoring the whole-delta friendly-prefix collision set", async () => {
+			// Regression: obfuscateAssistantMessage (the advisor-local redaction path)
+			// must rewrite `thinking` blocks the same way it rewrites `text` blocks.
+			// Mirrors the collision scenario above but sources the friendly-prefixed
+			// placeholder from a PRIOR thinking block: if thinking fell through
+			// unredacted, the advisor prompt would receive both the raw secret AND,
+			// had it been redacted without sharing the regex collision set, a
+			// normalized "#TOKABC123_<hash>#" rendering of the regex-protected value
+			// (tok_abc123) only discovered later in the same delta.
+			const obfuscator = new SecretObfuscator([
+				{ type: "plain", content: "OTHERSECRET", friendlyName: "TOKABC123" },
+				{ type: "regex", content: "tok_[a-z0-9]+" },
+			]);
+			const promptInputs: string[] = [];
+			const agent = makeAgent(promptInputs);
+			const diff = `--- a/config.ts\n+++ b/config.ts\n@@ -1 +1 @@\n-const token = "old";\n+const token = "tok_abc123";`;
+			const messages: AgentMessage[] = [
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "Remember OTHERSECRET for later." },
+						{ type: "toolCall", id: "c1", name: "edit", arguments: { path: "config.ts" } },
+					],
+					timestamp: 1,
+				} as unknown as AgentMessage,
+				{
+					role: "toolResult",
+					toolCallId: "c1",
+					toolName: "edit",
+					content: "ok",
+					details: { diff },
+					timestamp: 2,
+				} as unknown as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				obfuscator,
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd();
+			await Promise.resolve();
+
+			expect(promptInputs).toHaveLength(1);
+			const prompt = promptInputs[0]!;
+			expect(prompt).toContain("_thinking:_");
+			expect(prompt).not.toContain("OTHERSECRET");
+			expect(prompt).not.toContain("tok_abc123");
+			expect(prompt).not.toContain("TOKABC123_");
+
+			// Both originals still round-trip through deobfuscation of the
+			// advisor-bound prompt text.
+			const restored = obfuscator.deobfuscate(prompt);
+			expect(restored).toContain("OTHERSECRET");
+			expect(restored).toContain("tok_abc123");
+		});
+
 		it("expands plan-mode context once, then collapses an unchanged re-injection", async () => {
 			const promptInputs: string[] = [];
 			const agent = makeAgent(promptInputs);

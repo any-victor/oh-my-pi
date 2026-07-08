@@ -437,6 +437,12 @@ function obfuscateAssistantMessage(
 			changed = true;
 			return { ...block, text };
 		}
+		if (block.type === "thinking") {
+			const thinking = obfuscator.obfuscate(block.thinking, sharedRegexSecretValues);
+			if (thinking === block.thinking) return block;
+			changed = true;
+			return { ...block, thinking };
+		}
 		if (block.type === "toolCall") {
 			const args = obfuscateToolArguments(obfuscator, block.arguments, sharedRegexSecretValues);
 			if (args === block.arguments) return block;
