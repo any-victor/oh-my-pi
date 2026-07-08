@@ -372,6 +372,26 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		expect(obfuscator.deobfuscate(obfuscated)).toBe(longSecret);
 	});
 
+	it("rejects a friendlyName whose sanitized value is exactly the first 32 characters of a longer secret", () => {
+		// Regression: `sanitizedLabelCollidesWithSecret` must also reject a
+		// friendlyName that is a strict PREFIX of a longer secret's sanitized
+		// form, not just one that equals the secret outright (the case above).
+		// A friendlyName that sanitizes to exactly `MAX_FRIENDLY_NAME_LEN` (32)
+		// characters and happens to be the secret's own leading 32 sanitized
+		// characters must still be treated as a collision — otherwise those 32
+		// characters are accepted and baked into the placeholder verbatim as a
+		// visible, secret-derived prefix (e.g.
+		// "#GITHUBPATABCDEFGHIJKLMNOPQRSTUVW_<hash>:L#").
+		const longSecret = "github_pat_abcdefghijklmnopqrstuvwxyz0123456789";
+		const leakedPrefix = "GITHUBPATABCDEFGHIJKLMNOPQRSTUVW"; // first 32 sanitized chars of longSecret
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: longSecret, friendlyName: leakedPrefix }]);
+		const obfuscated = obfuscator.obfuscate(longSecret);
+
+		expect(obfuscated).not.toContain(leakedPrefix);
+		expect(obfuscated).toMatch(/^#[A-Z0-9]+:L#$/);
+		expect(obfuscator.deobfuscate(obfuscated)).toBe(longSecret);
+	});
+
 	it("uses regex entry friendly names for discovered matches", () => {
 		const secret = "tok_abc123";
 		const obfuscator = new SecretObfuscator([{ type: "regex", content: "tok_[a-z0-9]+", friendlyName: "API Key" }]);

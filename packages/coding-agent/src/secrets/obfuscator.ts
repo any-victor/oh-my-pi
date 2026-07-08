@@ -286,6 +286,15 @@ function sanitizeForCollisionCheck(value: string): string {
 	return value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 }
 
+// A label leaks a secret either by containing the whole normalized secret or,
+// once it reaches the public display cap, by being the secret's visible prefix.
+// Shorter names like "TOKEN" can still be intentional generic labels.
+function sanitizedLabelCollidesWithSecret(sanitizedLabel: string, sanitizedSecret: string): boolean {
+	if (sanitizedSecret.length === 0) return false;
+	if (sanitizedLabel.includes(sanitizedSecret)) return true;
+	return sanitizedLabel.length >= MAX_FRIENDLY_NAME_LEN && sanitizedSecret.startsWith(sanitizedLabel);
+}
+
 /**
  * Whether an entry needs the persisted placeholder key: either because it can
  * produce a reversible (keyed) obfuscate-mode placeholder, or because a default
@@ -1248,7 +1257,7 @@ export class SecretObfuscator {
 	#friendlyNameCollidesWithSecret(sanitizedName: string, rawName: string, secret: string): boolean {
 		if (this.#prefixIsSecretShaped(sanitizedName)) return true;
 		const sanitizedSecretValue = sanitizeForCollisionCheck(secret);
-		if (sanitizedSecretValue.length > 0 && sanitizedName.includes(sanitizedSecretValue)) return true;
+		if (sanitizedLabelCollidesWithSecret(sanitizedName, sanitizedSecretValue)) return true;
 		for (const entry of this.#regexEntries) {
 			entry.regex.lastIndex = 0;
 			const matches = entry.regex.test(rawName);
@@ -1293,15 +1302,15 @@ export class SecretObfuscator {
 	#prefixIsSecretShaped(prefix: string): boolean {
 		for (const secretValue of this.#configuredSecretValues) {
 			const sanitizedSecret = sanitizeForCollisionCheck(secretValue);
-			if (sanitizedSecret.length > 0 && prefix.includes(sanitizedSecret)) return true;
+			if (sanitizedLabelCollidesWithSecret(prefix, sanitizedSecret)) return true;
 		}
 		for (const secretValue of this.#currentRegexSecretValues) {
 			const sanitizedSecret = sanitizeForCollisionCheck(secretValue);
-			if (sanitizedSecret.length > 0 && prefix.includes(sanitizedSecret)) return true;
+			if (sanitizedLabelCollidesWithSecret(prefix, sanitizedSecret)) return true;
 		}
 		for (const { secret } of this.#obfuscateMappings.values()) {
 			const sanitizedSecret = sanitizeForCollisionCheck(secret);
-			if (sanitizedSecret.length > 0 && prefix.includes(sanitizedSecret)) return true;
+			if (sanitizedLabelCollidesWithSecret(prefix, sanitizedSecret)) return true;
 		}
 		for (const entry of this.#regexEntries) {
 			entry.regex.lastIndex = 0;
