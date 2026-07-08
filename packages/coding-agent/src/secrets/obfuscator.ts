@@ -723,6 +723,7 @@ export class SecretObfuscator {
 		for (const secretValue of this.#collectRegexSecretValuesAfterRegexReplacements(result, origin)) {
 			this.#currentRegexSecretValues.add(secretValue);
 		}
+		({ text: result, origin } = this.#stripUnsafeFriendlyPrefixes(result, origin));
 
 		// 2. Process obfuscate-mode plain secrets
 		for (const [secret, index] of [...this.#plainMappings].sort((a, b) => b[0].length - a[0].length)) {
@@ -1346,6 +1347,31 @@ export class SecretObfuscator {
 		const match = /^#([A-Z0-9]+)_/.exec(placeholder);
 		if (match === null || !this.#prefixIsSecretShaped(match[1]!)) return placeholder;
 		return unprefixed;
+	}
+
+	#stripUnsafeFriendlyPrefixes(text: string, origin: string): { text: string; origin: string } {
+		PLACEHOLDER_RE.lastIndex = 0;
+		let result = "";
+		let resultOrigin = "";
+		let cursor = 0;
+		for (;;) {
+			const match = PLACEHOLDER_RE.exec(text);
+			if (match === null) break;
+			const placeholder = match[0];
+			const unprefixed = placeholderWithoutFriendlyName(placeholder);
+			const replacement =
+				unprefixed !== undefined && this.#deobfuscateMap.has(unprefixed)
+					? this.#placeholderForCurrentInput(placeholder)
+					: placeholder;
+			result += text.slice(cursor, match.index);
+			resultOrigin += origin.slice(cursor, match.index);
+			result += replacement;
+			resultOrigin += origin[match.index]?.repeat(replacement.length) ?? "";
+			cursor = match.index + placeholder.length;
+		}
+		result += text.slice(cursor);
+		resultOrigin += origin.slice(cursor);
+		return { text: result, origin: resultOrigin };
 	}
 
 	#registerDeobfuscationAlias(placeholder: string, secret: string, recursive: boolean): void {

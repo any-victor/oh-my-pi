@@ -597,6 +597,52 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		expect(obfuscator.deobfuscate(obfuscated)).toBe("use OTHERSECRET and tok_abc123 now");
 	});
 
+	it("strips an already-obfuscated placeholder's unsafe friendly prefix carried in from earlier history when a later input reveals the regex-protected value it normalizes to", () => {
+		// Regression: the two same-call forecasts above only re-check a friendly
+		// prefix at the moment its placeholder is FIRST substituted into THIS
+		// call's output, against a collision set forecasted from THIS call's own
+		// input. A friendly placeholder minted in an EARLIER call — before
+		// `tok_abc123` had ever appeared anywhere — is baked into provider-visible
+		// history and re-enters a LATER `obfuscate()` call verbatim as part of the
+		// input text (the SDK re-obfuscates the whole message array every turn).
+		// The obfuscator must re-check that ALREADY-PRESENT placeholder's baked-in
+		// prefix against the freshly forecasted collision set on every call too —
+		// not just newly minted placeholders — and fall back to the
+		// friendly-name-independent bare alias once a later turn's regex-protected
+		// value normalizes to that prefix. Copying the placeholder verbatim would
+		// leave "TOKABC123_" standing in for `tok_abc123`, the very value the
+		// `tok_[a-z0-9]+` regex is configured to hide.
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", content: "OTHERSECRET", friendlyName: "TOKABC123" },
+			{ type: "regex", content: "tok_[a-z0-9]+" },
+		]);
+
+		// Turn 1: tok_abc123 has not appeared anywhere yet, so "TOKABC123" is not
+		// a collision — the friendly prefix is applied and persisted into history.
+		const turn1 = obfuscator.obfuscate("use OTHERSECRET now");
+		expect(turn1).toMatch(/^use #TOKABC123_[A-Z0-9]+:U# now$/);
+		const oldPlaceholder = turn1.match(/#TOKABC123_[A-Z0-9]+:U#/)![0];
+		const bareAlias = oldPlaceholder.replace(/^#TOKABC123_/, "#");
+
+		// Turn 2: the already-obfuscated turn-1 output re-enters as prior history
+		// alongside NEW text that reveals tok_abc123 — a regex-protected value that
+		// normalizes to exactly the prefix already baked into the turn-1 placeholder.
+		const turn2Input = `${turn1} and now use tok_abc123`;
+		const turn2 = obfuscator.obfuscate(turn2Input);
+
+		expect(turn2).not.toContain("TOKABC123_");
+		expect(turn2).not.toContain(oldPlaceholder);
+		expect(turn2).not.toContain("tok_abc123");
+		// The preserved placeholder is re-emitted as its bare, friendly-name-independent alias.
+		expect(turn2).toContain(bareAlias);
+		// OTHERSECRET still round-trips via the bare alias, and the newly
+		// discovered regex secret restores to the value actually matched.
+		expect(obfuscator.deobfuscate(turn2)).toBe("use OTHERSECRET now and now use tok_abc123");
+		// Stripping the unsafe prefix is itself a fixed point: a further pass must
+		// not resurrect the friendly prefix or otherwise change the bytes.
+		expect(obfuscator.obfuscate(turn2)).toBe(turn2);
+	});
+
 	it("does not replace plain secrets inside generated friendly placeholders", () => {
 		const longSecret = "long-secret-token";
 		const prefixSecret = "TOKENABC";
