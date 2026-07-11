@@ -370,8 +370,8 @@ describe("streamPiNative event flow", () => {
 		const stream = streamPiNative(fakeModel(), baseContext, {
 			apiKey: "k",
 			fetch: fetchImpl,
-			streamFirstEventTimeoutMs: 500,
-			streamIdleTimeoutMs: 300,
+			streamFirstEventTimeoutMs: 1000,
+			streamIdleTimeoutMs: 1000,
 		});
 
 		const result = await stream.result();

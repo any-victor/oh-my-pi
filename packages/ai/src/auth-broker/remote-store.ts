@@ -39,6 +39,7 @@ import type {
  * one broker call instead of N.
  */
 const USAGE_CACHE_TTL_MS = 15_000;
+const CREDENTIAL_BLOCK_RECONCILE_DELAY_MS = 5 * 60_000;
 const WAIT_THRESHOLD_MS = 1_000;
 const MAX_WAIT_MS = 5_000;
 const BACKGROUND_WAIT_MS = 30_000;
@@ -50,7 +51,9 @@ function compareCredentialBlockSnapshots(a: CredentialBlockSnapshot, b: Credenti
 	if (provider !== 0) return provider;
 	const scope = a.blockScope.localeCompare(b.blockScope);
 	if (scope !== 0) return scope;
-	return a.blockedUntilMs - b.blockedUntilMs;
+	const blockedUntil = a.blockedUntilMs - b.blockedUntilMs;
+	if (blockedUntil !== 0) return blockedUntil;
+	return (a.updatedAtMs ?? 0) - (b.updatedAtMs ?? 0);
 }
 
 function toCredentialBlockSnapshot(block: StoredCredentialBlock): CredentialBlockSnapshot {
@@ -58,7 +61,44 @@ function toCredentialBlockSnapshot(block: StoredCredentialBlock): CredentialBloc
 		providerKey: block.providerKey,
 		blockScope: block.blockScope,
 		blockedUntilMs: block.blockedUntilMs,
+		...(block.updatedAtMs !== undefined ? { updatedAtMs: block.updatedAtMs } : {}),
 	};
+}
+
+function credentialBlockSnapshotsEqual(
+	left: readonly CredentialBlockSnapshot[] | undefined,
+	right: readonly CredentialBlockSnapshot[] | undefined,
+): boolean {
+	const leftBlocks = left ?? [];
+	const rightBlocks = right ?? [];
+	if (leftBlocks.length !== rightBlocks.length) return false;
+	for (let index = 0; index < leftBlocks.length; index += 1) {
+		const leftBlock = leftBlocks[index]!;
+		const rightBlock = rightBlocks[index]!;
+		if (
+			leftBlock.providerKey !== rightBlock.providerKey ||
+			leftBlock.blockScope !== rightBlock.blockScope ||
+			leftBlock.blockedUntilMs !== rightBlock.blockedUntilMs ||
+			leftBlock.updatedAtMs !== rightBlock.updatedAtMs
+		) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function snapshotBlocksChanged(previous: readonly SnapshotEntry[], next: readonly SnapshotEntry[]): boolean {
+	const previousBlocksById = new Map<number, readonly CredentialBlockSnapshot[] | undefined>();
+	for (const entry of previous) previousBlocksById.set(entry.id, entry.blocks);
+	for (const entry of next) {
+		const previousBlocks = previousBlocksById.get(entry.id);
+		if (!credentialBlockSnapshotsEqual(previousBlocks, entry.blocks)) return true;
+		previousBlocksById.delete(entry.id);
+	}
+	for (const previousBlocks of previousBlocksById.values()) {
+		if (previousBlocks && previousBlocks.length > 0) return true;
+	}
+	return false;
 }
 
 function credentialEntryWithBlocks(
@@ -173,6 +213,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#cache: Map<string, CacheEntry> = new Map();
 	#usageCache?: UsageCacheEntry;
 	#usageInflight?: Promise<UsageReport[] | null>;
+	#credentialBlockReconcileAfter: Map<string, number> = new Map();
+	#usageCacheEpoch = 0;
 	#closed = false;
 	/**
 	 * `true` once the SSE consumer received its first frame and hasn't dropped
@@ -200,12 +242,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		return this.#snapshot;
 	}
 
-	#applySnapshot(snapshot: SnapshotResponse, generation: number): void {
+	#applySnapshot(snapshot: SnapshotResponse, generation: number, protectNewBlocks = true): void {
 		const nowMs = Date.now();
-		this.#snapshot = {
-			...snapshot,
-			credentials: snapshot.credentials.map(entry => this.#normalizeSnapshotEntryBlocks(entry, nowMs)),
-		};
+		const previousCredentials = this.#snapshot.credentials;
+		const credentials = snapshot.credentials.map(entry => this.#normalizeSnapshotEntryBlocks(entry, nowMs));
+		if (snapshotBlocksChanged(previousCredentials, credentials)) this.#invalidateUsageCache();
+		if (protectNewBlocks) this.#protectNewSnapshotBlocks(previousCredentials, credentials, nowMs);
+		this.#snapshot = { ...snapshot, credentials };
 		this.#generation = generation;
 		this.#snapshotReceivedAt = nowMs;
 		const onSnapshot = this.#onSnapshot;
@@ -214,6 +257,34 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			onSnapshot(this.#snapshot, generation);
 		} catch (error) {
 			logger.debug("auth-broker snapshot callback failed", { error: String(error) });
+		}
+	}
+	#protectNewSnapshotBlocks(previous: readonly SnapshotEntry[], next: readonly SnapshotEntry[], nowMs: number): void {
+		const previousBlocksByKey = new Map<string, string>();
+		for (const entry of previous) {
+			for (const block of entry.blocks ?? []) {
+				previousBlocksByKey.set(
+					`${entry.id}\0${block.providerKey}\0${block.blockScope}`,
+					`${block.blockedUntilMs}\0${block.updatedAtMs ?? ""}`,
+				);
+			}
+		}
+		const activeKeys = new Set<string>();
+		for (const entry of next) {
+			for (const block of entry.blocks ?? []) {
+				const key = `${entry.id}\0${block.providerKey}\0${block.blockScope}`;
+				activeKeys.add(key);
+				const signature = `${block.blockedUntilMs}\0${block.updatedAtMs ?? ""}`;
+				if (previousBlocksByKey.get(key) === signature) continue;
+				const updatedAtMs = block.updatedAtMs ?? nowMs;
+				this.#credentialBlockReconcileAfter.set(
+					key,
+					Math.min(block.blockedUntilMs, updatedAtMs + CREDENTIAL_BLOCK_RECONCILE_DELAY_MS),
+				);
+			}
+		}
+		for (const key of this.#credentialBlockReconcileAfter.keys()) {
+			if (!activeKeys.has(key)) this.#credentialBlockReconcileAfter.delete(key);
 		}
 	}
 
@@ -304,16 +375,22 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	): void {
 		const incoming = this.#normalizeSnapshotEntryBlocks(entry, Date.now());
 		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === incoming.id);
+		const previousBlocks = index === -1 ? undefined : this.#snapshot.credentials[index]?.blocks;
+		const blocksChanged = !credentialBlockSnapshotsEqual(previousBlocks, incoming.blocks);
+		if (blocksChanged) this.#invalidateUsageCache();
 		const credentials =
 			index === -1
 				? [...this.#snapshot.credentials, incoming]
 				: this.#snapshot.credentials.map((candidate, i) => (i === index ? incoming : candidate));
+		if (blocksChanged) this.#protectNewSnapshotBlocks(this.#snapshot.credentials, credentials, Date.now());
 		this.#snapshot = { ...this.#snapshot, generation, serverNowMs, refresher, credentials };
 		this.#generation = generation;
 		this.#snapshotReceivedAt = Date.now();
 	}
 
 	#removeStreamCredential(id: number, refresher: RefresherSchedule, generation: number, serverNowMs: number): void {
+		const removed = this.#snapshot.credentials.find(entry => entry.id === id);
+		if (removed?.blocks && removed.blocks.length > 0) this.#invalidateUsageCache();
 		const credentials = this.#snapshot.credentials.filter(entry => entry.id !== id);
 		this.#snapshot = { ...this.#snapshot, generation, serverNowMs, refresher, credentials };
 		this.#generation = generation;
@@ -353,6 +430,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		return block.blockedUntilMs;
 	}
 
+	getCredentialBlockReconcileAfter(credentialId: number, providerKey: string, blockScope: string): number | undefined {
+		if (this.getCredentialBlock(credentialId, providerKey, blockScope) === undefined) return undefined;
+		return this.#credentialBlockReconcileAfter.get(`${credentialId}\0${providerKey}\0${blockScope}`);
+	}
+
 	listCredentialBlocks(credentialIds: readonly number[]): StoredCredentialBlock[] {
 		const nowMs = Date.now();
 		this.cleanExpiredCredentialBlocks(nowMs);
@@ -367,6 +449,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					providerKey: block.providerKey,
 					blockScope: block.blockScope,
 					blockedUntilMs: block.blockedUntilMs,
+					updatedAtMs: block.updatedAtMs,
 				});
 			}
 		}
@@ -376,6 +459,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 
 	upsertCredentialBlock(block: StoredCredentialBlock): void {
 		this.#upsertSnapshotBlock(block);
+		this.#invalidateUsageCache();
+		this.#credentialBlockReconcileAfter.set(
+			`${block.credentialId}\0${block.providerKey}\0${block.blockScope}`,
+			Math.min(block.blockedUntilMs, Date.now() + CREDENTIAL_BLOCK_RECONCILE_DELAY_MS),
+		);
 		const body = toCredentialBlockSnapshot(block);
 		void this.#client
 			.upsertCredentialBlock(block.credentialId, body)
@@ -394,6 +482,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 
 	deleteCredentialBlocks(credentialId: number): void {
 		this.#deleteSnapshotBlocks(credentialId);
+		for (const key of this.#credentialBlockReconcileAfter.keys()) {
+			if (key.startsWith(`${credentialId}\0`)) this.#credentialBlockReconcileAfter.delete(key);
+		}
+		this.#invalidateUsageCache();
 		void this.#client
 			.deleteCredentialBlocks(credentialId)
 			.then(() => {
@@ -409,6 +501,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 
 	cleanExpiredCredentialBlocks(nowMs: number): void {
 		this.#pruneExpiredCredentialBlocks(nowMs);
+		for (const [key, reconcileAfterMs] of this.#credentialBlockReconcileAfter) {
+			if (reconcileAfterMs <= nowMs) this.#credentialBlockReconcileAfter.delete(key);
+		}
 	}
 
 	/**
@@ -606,6 +701,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				providerKey: block.providerKey,
 				blockScope: block.blockScope,
 				blockedUntilMs: block.blockedUntilMs,
+				...(block.updatedAtMs !== undefined ? { updatedAtMs: block.updatedAtMs } : {}),
 			}))
 			.sort(compareCredentialBlockSnapshots);
 		if (blocks.length > 0) return { ...entry, blocks };
@@ -696,6 +792,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		for (const [key, entry] of this.#cache) {
 			if (entry.expiresAtSec <= nowSec) this.#cache.delete(key);
 		}
+	}
+
+	#invalidateUsageCache(): void {
+		this.#usageCache = undefined;
+		this.#usageInflight = undefined;
+		this.#usageCacheEpoch += 1;
 	}
 
 	/**
@@ -834,9 +936,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			return Promise.resolve(cached.reports);
 		}
 		if (this.#usageInflight) return this.#usageInflight;
+		const epoch = this.#usageCacheEpoch;
 		const inflight = this.#client
 			.fetchUsage()
 			.then(body => {
+				if (epoch !== this.#usageCacheEpoch) return this.#loadUsageReports();
 				this.#usageCache = { reports: body.reports, fetchedAt: Date.now() };
 				return body.reports;
 			})
@@ -845,11 +949,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				// Documented 15s TTL fallback: cache the null so sequential callers
 				// don't re-hit the broker while it's still down. See
 				// docs/auth-broker-gateway.md § "Client-side single-flight".
+				if (epoch !== this.#usageCacheEpoch) return this.#loadUsageReports();
 				this.#usageCache = { reports: null, fetchedAt: Date.now() };
 				return null;
 			})
 			.finally(() => {
-				this.#usageInflight = undefined;
+				if (this.#usageInflight === inflight) this.#usageInflight = undefined;
 			});
 		this.#usageInflight = inflight;
 		return inflight;
