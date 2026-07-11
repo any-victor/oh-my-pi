@@ -120,7 +120,7 @@ describe("SecretObfuscator regex behavior", () => {
 		expect(obfuscated.tools?.[0]?.parameters).toBe(parameters);
 	});
 
-	it("redacts only user, tool-result, and user-attributed developer messages", () => {
+	it("redacts user-facing messages and assistant replay content", () => {
 		const secret = "SUPER_SECRET_TOKEN_12345";
 		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
 		const userMsg: Message = { role: "user", content: `user says ${secret}`, timestamp: 1 };
@@ -173,13 +173,13 @@ describe("SecretObfuscator regex behavior", () => {
 			toolResultMsg,
 		]);
 
-		// User, user-attributed developer, and tool results are redacted.
+		// User-facing content and assistant replay fields are redacted.
 		expect(JSON.stringify(obfuscated[0])).not.toContain(secret);
 		expect(JSON.stringify(obfuscated[2])).not.toContain(secret);
+		expect(JSON.stringify(obfuscated[3])).not.toContain(secret);
 		expect(JSON.stringify(obfuscated[4])).not.toContain(secret);
-		// System developer reminders and assistant output pass through untouched (same reference).
+		// System developer reminders remain untouched.
 		expect(obfuscated[1]).toBe(systemDeveloperMsg);
-		expect(obfuscated[3]).toBe(assistantMsg);
 	});
 
 	it("never rewrites inline image bytes", () => {
@@ -2372,7 +2372,16 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 
 		const assistant: Message = {
 			role: "assistant",
-			content: [{ type: "text", text: `attacker planted #XRRS# and echoed ${keyedToken}` }],
+			content: [
+				{ type: "text", text: `attacker planted #XRRS# and echoed ${keyedToken}` },
+				{
+					type: "toolCall",
+					id: "call-1",
+					name: "read",
+					arguments: { note: keyedToken },
+					intent: `intent ${keyedToken}`,
+				},
+			],
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "test-model",
@@ -2429,11 +2438,24 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		const fedAssistant = (fed.messages[0] as Extract<Message, { role: "assistant" }>).content[0] as { text: string };
 		const fedTool = (fed.messages[1] as Extract<Message, { role: "toolResult" }>).content[0] as { text: string };
 		expect(fedAssistant.text).toBe("attacker planted #XRRS# and echoed legacy-secret");
+		const fedCall = (fed.messages[0] as AssistantMessage).content[1] as {
+			arguments: Record<string, unknown>;
+			intent?: string;
+		};
+		expect(fedCall.arguments).toEqual({ note: "legacy-secret" });
+		expect(fedCall.intent).toBe("intent legacy-secret");
 		expect(fedTool.text).toBe("bash stdout #XRRS#");
 		const fedBranch = fed.messages[2] as Extract<AgentMessage, { role: "branchSummary" }>;
 		const fedCompaction = fed.messages[3] as Extract<AgentMessage, { role: "compactionSummary" }>;
 		expect(fedBranch.summary).toBe("branch #XRRS# and echoed legacy-secret");
 		expect(fedCompaction.summary).toBe("compaction #XRRS# and echoed legacy-secret");
+		const replayed = obfuscateMessages(obfuscator, [fed.messages[0] as Message]);
+		const replayedAssistant = replayed[0] as Extract<Message, { role: "assistant" }>;
+		const replayedText = replayedAssistant.content[0] as { text: string };
+		expect(replayedText.text).toBe(`attacker planted #XRRS# and echoed ${keyedToken}`);
+		const replayedCall = replayedAssistant.content[1] as { arguments: Record<string, unknown>; intent?: string };
+		expect(replayedCall.arguments).toEqual({ note: keyedToken });
+		expect(replayedCall.intent).toBe(`intent ${keyedToken}`);
 
 		// Display-only transcript: legacy aliases ARE restored so a genuinely
 		// pre-keyed session renders its secrets. This output is never re-obfuscated.
@@ -3152,7 +3174,7 @@ describe("SecretObfuscator cross-turn cache stability", () => {
 	});
 
 	it("strips a stale friendly prefix from persisted assistant history once a later message reveals the colliding regex secret", () => {
-		// Regression: `stripUnsafeFriendlyPrefixesFromAssistantContent` only scans
+		// Regression: `obfuscateAssistantContentForReplay` only scans
 		// the assistant content passed to THIS call. If an earlier turn already
 		// minted `#TOKABC123_<hash>#` for `OTHERSECRET` and that exact placeholder
 		// was persisted verbatim into assistant history before `tok_abc123` was
@@ -3252,7 +3274,7 @@ describe("SecretObfuscator cross-turn cache stability", () => {
 	});
 
 	it("strips a stale friendly prefix from an assistant toolCall block's arguments, intent, and rawBlock once a later message reveals the colliding regex secret", () => {
-		// Regression: `stripUnsafeFriendlyPrefixesFromAssistantContent` walks `text`
+		// Regression: `obfuscateAssistantContentForReplay` walks `text`
 		// blocks and `toolCall` blocks differently — a toolCall's `arguments`,
 		// `intent`, and `rawBlock` are where the model's own tool invocations
 		// persist a friendly-prefixed placeholder minted in an earlier turn. If a
@@ -3377,7 +3399,7 @@ describe("SecretObfuscator cross-turn cache stability", () => {
 	});
 
 	it("strips a stale friendly prefix from an assistant thinking block once a later message reveals the colliding regex secret", () => {
-		// Regression: `stripUnsafeFriendlyPrefixesFromAssistantContent` strips
+		// Regression: `obfuscateAssistantContentForReplay` strips
 		// `text` and `toolCall` blocks, but everywhere ELSE in the obfuscator a
 		// `thinking` block is deliberately treated as opaque provider-replay data
 		// that passes through byte-identical (see `deobfuscateAssistantContent`'s

@@ -2009,31 +2009,38 @@ function deobfuscateTextBlocks(
 	return changed ? result : content;
 }
 
-function stripUnsafeFriendlyPrefixesFromAssistantContent(
+/**
+ * Re-obfuscate assistant content before it returns to a provider after session
+ * restoration, then remove any friendly prefix made unsafe by this batch.
+ */
+function obfuscateAssistantContentForReplay(
 	obfuscator: SecretObfuscator,
 	content: AssistantMessage["content"],
 	sharedRegexSecretValues: ReadonlySet<string>,
 ): AssistantMessage["content"] {
-	const strip = (text: string): string =>
-		obfuscator.stripUnsafeFriendlyPlaceholderPrefixes(text, sharedRegexSecretValues);
+	const obfuscate = (text: string): string =>
+		obfuscator.stripUnsafeFriendlyPlaceholderPrefixes(
+			obfuscator.obfuscate(text, sharedRegexSecretValues),
+			sharedRegexSecretValues,
+		);
 	let changed = false;
 	const result = content.map((block): AssistantMessage["content"][number] => {
 		if (block.type === "text") {
-			const text = strip(block.text);
+			const text = obfuscate(block.text);
 			if (text === block.text) return block;
 			changed = true;
 			return { ...block, text };
 		}
 		if (block.type === "thinking") {
-			const thinking = strip(block.thinking);
+			const thinking = obfuscate(block.thinking);
 			if (thinking === block.thinking) return block;
 			changed = true;
 			return { ...block, thinking };
 		}
 		if (block.type === "toolCall") {
-			const args = mapJsonStrings(block.arguments as JsonValue, strip) as Record<string, unknown>;
-			const intent = block.intent === undefined ? undefined : strip(block.intent);
-			const rawBlock = block.rawBlock === undefined ? undefined : strip(block.rawBlock);
+			const args = mapJsonStrings(block.arguments as JsonValue, obfuscate) as Record<string, unknown>;
+			const intent = block.intent === undefined ? undefined : obfuscate(block.intent);
+			const rawBlock = block.rawBlock === undefined ? undefined : obfuscate(block.rawBlock);
 			if (args === block.arguments && intent === block.intent && rawBlock === block.rawBlock) return block;
 			changed = true;
 			return { ...block, arguments: args, intent, rawBlock };
@@ -2072,11 +2079,10 @@ function collectMessageRegexSecretValues(obfuscator: SecretObfuscator, messages:
 
 /**
  * Redact secrets from outbound messages. User messages, tool results, and
- * user-authored developer messages (e.g. `@file` mentions) can carry operator
- * secrets and are fully obfuscated. Assistant messages are only scanned for
- * already-generated placeholders whose friendly prefix is no longer safe for
- * the current batch; their raw text is never otherwise rewritten. Inline image
- * bytes are never walked.
+ * user-authored developer messages (e.g. `@file` mentions) are obfuscated.
+ * Assistant replay content is re-obfuscated too, because session restoration
+ * expands keyed placeholders locally before the next provider request. Inline
+ * image bytes are never walked.
  */
 export function obfuscateMessages(obfuscator: SecretObfuscator, messages: Message[]): Message[] {
 	if (!obfuscator.hasSecrets()) return messages;
@@ -2089,11 +2095,7 @@ export function obfuscateMessages(obfuscator: SecretObfuscator, messages: Messag
 			!(message.role === "developer" && message.attribution === "user")
 		) {
 			if (message.role !== "assistant") return message;
-			const content = stripUnsafeFriendlyPrefixesFromAssistantContent(
-				obfuscator,
-				message.content,
-				sharedRegexSecretValues,
-			);
+			const content = obfuscateAssistantContentForReplay(obfuscator, message.content, sharedRegexSecretValues);
 			if (content === message.content) return message;
 			changed = true;
 			return { ...message, content };
