@@ -51,6 +51,8 @@ export const BASH_DEFAULT_PREVIEW_LINES = DEFAULT_TERMINAL_PREVIEW_LINES;
 
 const BASH_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS = 60_000;
+const BASH_APPROVAL_SHELL_CONTROL_RE = /[\n\r;&|<>`$()]/u;
+const BASH_PATTERN_APPROVAL_VALUES = new Set(["allow", "deny", "prompt"]);
 
 /**
  * Shape a shell command line for an ACP-conformant `terminal/create` request.
@@ -126,6 +128,63 @@ export const CRITICAL_BASH_PATTERNS = [
 	// Network-shell exfil.
 	/\bnc\b[^|;]*\s-[a-zA-Z]*[ec][a-zA-Z]*\s/i, // `nc -e` / `nc -c`.
 ] as const;
+
+type BashPatternApproval = "allow" | "deny" | "prompt";
+
+interface BashApprovalPatternRule {
+	match: string;
+	approval: BashPatternApproval;
+}
+
+function normalizeBashApprovalPattern(value: string): string {
+	return value.trim().replace(/\s+/gu, " ");
+}
+
+function bashApprovalPatternToRegExp(pattern: string): RegExp {
+	const escaped = normalizeBashApprovalPattern(pattern)
+		.split("*")
+		.map(part => part.replace(/[\\^$+?.()|[\]{}]/gu, "\\$&"))
+		.join(".*");
+	return new RegExp(`^${escaped}$`, "u");
+}
+
+function normalizeBashPatternApproval(value: unknown): BashPatternApproval | undefined {
+	if (typeof value !== "string") return undefined;
+	const normalized = value.trim().toLowerCase();
+	return BASH_PATTERN_APPROVAL_VALUES.has(normalized) ? (normalized as BashPatternApproval) : undefined;
+}
+
+function getBashApprovalPatternRules(value: unknown): BashApprovalPatternRule[] {
+	if (!Array.isArray(value)) return [];
+	return value
+		.map(item => {
+			if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+			const record = item as Record<string, unknown>;
+			if (typeof record.match !== "string") return undefined;
+			const match = normalizeBashApprovalPattern(record.match);
+			const approval = normalizeBashPatternApproval(record.approval);
+			return match.length > 0 && approval ? { match, approval } : undefined;
+		})
+		.filter((rule): rule is BashApprovalPatternRule => !!rule);
+}
+
+function commandMatchesBashApprovalPattern(command: string, pattern: string): boolean {
+	const normalizedCommand = normalizeBashApprovalPattern(command);
+	if (normalizedCommand.length === 0) return false;
+	return bashApprovalPatternToRegExp(pattern).test(normalizedCommand);
+}
+
+function findBashApprovalPatternRule(
+	command: string,
+	rules: readonly BashApprovalPatternRule[],
+): BashApprovalPatternRule | undefined {
+	return rules.find(rule => {
+		if (rule.approval === "allow" && BASH_APPROVAL_SHELL_CONTROL_RE.test(normalizeBashApprovalPattern(command))) {
+			return false;
+		}
+		return commandMatchesBashApprovalPattern(command, rule.match);
+	});
+}
 
 async function saveBashOriginalArtifact(session: ToolSession, originalText: string): Promise<string | undefined> {
 	try {
@@ -384,8 +443,28 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 	readonly approval = (args: unknown): ToolApprovalDecision => {
 		const rawCommand = (args as Partial<BashToolInput>).command;
 		const command = typeof rawCommand === "string" ? rawCommand : "";
+		const patternRules = getBashApprovalPatternRules(this.session.settings.get("bash.patterns"));
+		const patternRule = patternRules.find(rule => commandMatchesBashApprovalPattern(command, rule.match));
+		if (patternRule?.approval === "deny") {
+			return {
+				tier: "exec",
+				override: true,
+				policy: "deny",
+				reason: `Blocked by bash pattern: ${patternRule.match}`,
+			};
+		}
 		if (command !== "" && CRITICAL_BASH_PATTERNS.some(pattern => pattern.test(command))) {
 			return { tier: "exec", override: true, reason: "Critical pattern detected" };
+		}
+		const safePatternRule = findBashApprovalPatternRule(command, patternRules);
+		if (safePatternRule?.approval === "allow") return { tier: "write", policy: "allow" };
+		if (safePatternRule?.approval === "prompt") {
+			return {
+				tier: "exec",
+				override: true,
+				policy: "prompt",
+				reason: `Prompt required by bash pattern: ${safePatternRule.match}`,
+			};
 		}
 		return "exec";
 	};

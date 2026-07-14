@@ -147,6 +147,28 @@ tools:
     read: allow
 ```
 
+### Bash command approval patterns
+
+`tools.approval` sets default policy by tool name. For bash, you can add ordered command rules with `bash.patterns`; the first matching rule wins. Patterns support literal text plus `*` as a wildcard.
+
+```yaml
+tools:
+  approvalMode: write
+  approval:
+    bash: allow
+
+bash:
+  patterns:
+    - match: "git *"
+      approval: allow
+    - match: "rm -rf *"
+      approval: deny
+    - match: "*"
+      approval: allow
+```
+
+Valid rule approvals are `allow`, `prompt`, and `deny`. Critical bash commands still require confirmation unless a matching rule explicitly denies them; broad allow rules such as `match: "*"` do not bypass the critical-command guard.
+
 ### Worked example: global vs. project
 
 ```yaml
