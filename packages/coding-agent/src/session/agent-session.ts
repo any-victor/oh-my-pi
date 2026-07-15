@@ -2257,11 +2257,11 @@ export class AgentSession {
 		// todo list from it and start" — so the switch waits until a todo list
 		// exists AND the model has actually started implementing (first
 		// edit/write). The todo call itself never triggers: firing there handed
-		// the fast model the whole implementation cold. The gate keys on the
-		// ACTIVE tool set, not the registry: a registered-but-deactivated todo
-		// (e.g. a restricted active-tool slate) is uncallable and would
-		// deadlock the switch.
-		if (context.toolResults.some(result => result.toolName === "todo")) {
+		// the fast model the whole implementation cold. A failed todo call does
+		// not establish the list. The gate keys on the ACTIVE tool set, not the
+		// registry: a registered-but-deactivated todo (e.g. a restricted
+		// active-tool slate) is uncallable and would deadlock the switch.
+		if (context.toolResults.some(result => result.toolName === "todo" && !result.isError)) {
 			this.#prewalkTodoSeen = true;
 		}
 		const todoGateOpen = this.#prewalkTodoSeen || !this.getActiveToolNames().includes("todo");
