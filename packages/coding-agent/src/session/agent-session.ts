@@ -4405,8 +4405,10 @@ export class AgentSession {
 			const settledMessages = event.messages;
 			const activeMessages = this.agent.state.messages;
 			const emitAgentEndNotification = async (isTerminal = true) => {
-				await this.#emitAgentEndNotification(activeMessages);
 				await this.#emitSessionEvent({ ...event, isTerminal });
+				void this.#emitAgentEndNotification(activeMessages).catch(err => {
+					logger.error("Agent end extension notification failed", { err });
+				});
 			};
 			const usage = this.getSessionStats().tokens;
 			await this.#goalRuntime.onAgentEnd({

@@ -830,6 +830,43 @@ describe("AgentSession concurrent prompt guard", () => {
 		expect(reentrantPromptResults).toEqual(["resolved"]);
 	});
 
+	it("does not let extension notifications block public agent_end", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+		});
+		const { promise: extensionGate, resolve: releaseExtension } = Promise.withResolvers<void>();
+		const extensionRunner = {
+			emit: vi.fn((event: { type: string }) =>
+				event.type === "agent_end" ? extensionGate : Promise.resolve(undefined),
+			),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn().mockReturnValue(false),
+		} as unknown as ExtensionRunner;
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, extensionRunner });
+
+		const { promise: publicAgentEnd, resolve: onPublicAgentEnd } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "agent_end") onPublicAgentEnd();
+		});
+
+		await session.prompt("First message");
+		await publicAgentEnd;
+		expect(extensionRunner.emit).toHaveBeenCalledWith({ type: "agent_end", messages: expect.any(Array) });
+
+		releaseExtension();
+		await session.waitForIdle();
+	});
+
 	it("queues idle ACP client-triggered custom messages instead of starting an ownerless turn", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
