@@ -214,7 +214,7 @@ mkdir -p "$TARBALL_APP_DIR"
       echo "Published SDK types export is incorrect: $sdk_types_export"
       exit 1
    }
-   sdk_exports="$(bun -e 'import { AgentSession, AuthStorage, ModelRegistry, SessionManager, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk"; process.stdout.write([AgentSession, AuthStorage, ModelRegistry, SessionManager, createAgentSession].every(value => typeof value === "function") ? "ok" : "invalid");')"
+   sdk_exports="$(bun -e 'import { AgentSession, AuthStorage, EventBus, ModelRegistry, RedisSessionStorage, SessionManager, SqlSessionStorage, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk"; process.stdout.write([AgentSession, AuthStorage, EventBus, ModelRegistry, RedisSessionStorage, SessionManager, SqlSessionStorage, createAgentSession].every(value => typeof value === "function") ? "ok" : "invalid");')"
    [ "$sdk_exports" = "ok" ] || {
       echo "Published SDK entrypoint exports are incomplete: $sdk_exports"
       exit 1
