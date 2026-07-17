@@ -4,26 +4,27 @@ Programmatic usage of omp-coding-agent via `createAgentSession()`.
 
 ## Examples
 
-| File                       | Description                                    |
-| -------------------------- | ---------------------------------------------- |
-| `01-minimal.ts`            | Simplest usage with all defaults               |
-| `02-custom-model.ts`       | Select model and thinking level                |
-| `03-custom-prompt.ts`      | Replace or modify system prompt                |
-| `04-skills.ts`             | Discover, filter, or replace skills            |
-| `05-tools.ts`              | Built-in tools, custom tools                   |
-| `06-hooks.ts`              | Logging, blocking, result modification         |
-| `07-context-files.ts`      | AGENTS.md context files                        |
-| `08-slash-commands.ts`     | File-based slash commands                      |
-| `09-api-keys-and-oauth.ts` | API key resolution, OAuth config               |
-| `10-settings.ts`           | Override compaction, retry, terminal settings  |
-| `11-sessions.ts`           | In-memory, persistent, continue, list sessions |
-| `12-full-control.ts`       | Replace everything, no discovery               |
+| File                       | Description                                         |
+| -------------------------- | --------------------------------------------------- |
+| `01-minimal.ts`            | Simplest usage with all defaults                    |
+| `02-custom-model.ts`       | Select model and thinking level                     |
+| `03-custom-prompt.ts`      | Replace or modify system prompt                     |
+| `04-skills.ts`             | Discover, filter, or replace skills                 |
+| `06-extensions.ts`         | Extensions for tools, events, and commands          |
+| `06-hooks.ts`              | Logging, blocking, result modification              |
+| `07-context-files.ts`      | AGENTS.md context files                             |
+| `08-prompt-templates.ts`   | File-based prompt templates                         |
+| `08-slash-commands.ts`     | File-based slash commands (prompt templates)        |
+| `09-api-keys-and-oauth.ts` | API key resolution, OAuth config                    |
+| `11-sessions.ts`           | In-memory, persistent, continue, list sessions      |
+| `12-redis-sessions.ts`     | Redis/Valkey-backed session storage                 |
+| `13-sql-sessions.ts`       | SQL-backed session storage (Postgres/MySQL/SQLite)  |
 
 ## Running
 
 ```bash
 cd packages/coding-agent
-npx tsx examples/sdk/01-minimal.ts
+bun examples/sdk/01-minimal.ts
 ```
 
 ## Quick Reference

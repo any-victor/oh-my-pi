@@ -616,6 +616,7 @@ export function resolveDialect(
 
 // Re-exports
 
+export { ModelRegistry } from "./config/model-registry";
 export type { PromptTemplate } from "./config/prompt-templates";
 export { Settings, type SkillsSettings } from "./config/settings";
 export type { CustomCommand, CustomCommandFactory } from "./extensibility/custom-commands/types";
@@ -624,7 +625,22 @@ export type * from "./extensibility/extensions";
 export type { Skill } from "./extensibility/skills";
 export type { FileSlashCommand } from "./extensibility/slash-commands";
 export type { MCPManager, MCPServerConfig, MCPServerConnection, MCPToolsLoadResult } from "./mcp";
+export { AgentSession, type AgentSessionDisposeOptions } from "./session/agent-session";
+export { AuthStorage } from "./session/auth-storage";
+export {
+	RedisSessionStorage,
+	type RedisSessionStorageClient,
+	type RedisSessionStorageOptions,
+} from "./session/redis-session-storage";
+export { type ReadonlySessionManager, SessionManager } from "./session/session-manager";
+export {
+	SqlSessionStorage,
+	type SqlSessionStorageAdapter,
+	type SqlSessionStorageClient,
+	type SqlSessionStorageOptions,
+} from "./session/sql-session-storage";
 export type { Tool } from "./tools";
+export { EventBus } from "./utils/event-bus";
 export { buildDirectoryTree, buildWorkspaceTree, type DirectoryTree, type WorkspaceTree } from "./workspace-tree";
 
 export {

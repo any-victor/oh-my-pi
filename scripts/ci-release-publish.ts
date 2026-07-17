@@ -153,7 +153,7 @@ async function rewriteManifest(pkg: PublishPackage, write: boolean): Promise<Pac
 	return manifest;
 }
 
-async function preparePackage(pkg: PublishPackage): Promise<PackageManifest> {
+export async function preparePackageForPublish(pkg: PublishPackage): Promise<PackageManifest> {
 	const pkgDir = path.join(repoRoot, pkg.dir);
 	for (const argv of pkg.preBuild ?? []) {
 		await $`${argv}`.cwd(pkgDir);
@@ -167,22 +167,6 @@ async function preparePackage(pkg: PublishPackage): Promise<PackageManifest> {
 	// Rewrite them to explicit `.js` so the published types resolve everywhere.
 	await fixDtsExtensions(path.join(pkgDir, "dist/types"));
 	return rewriteManifest(pkg, !isDryRun);
-}
-
-/**
- * Apply only the published `bin` rewrite to a package's working-tree
- * manifest. Used by `scripts/install-tests/run-ci.sh` to pack the coding
- * agent with its published topology (bin → prepack bundle) without running
- * the type-emission steps; the caller backs up and restores the manifest.
- */
-export async function applyPublishBin(pkgRelDir: string, write: boolean): Promise<PackageManifest> {
-	const pkg = packages.find(entry => entry.dir === pkgRelDir);
-	if (!pkg?.publishBin) throw new Error(`No publishBin override declared for ${pkgRelDir}`);
-	const manifestPath = path.join(repoRoot, pkgRelDir, "package.json");
-	const manifest = (await Bun.file(manifestPath).json()) as PackageManifest;
-	manifest.bin = { ...pkg.publishBin };
-	if (write) await Bun.write(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
-	return manifest;
 }
 
 function buildNativeOptionalDependencies(version: string): JsonObject {
@@ -306,7 +290,7 @@ async function publishPackage(pkg: PublishPackage): Promise<void> {
 		return;
 	}
 	const pkgDir = path.join(repoRoot, pkg.dir);
-	const manifest = await preparePackage(pkg);
+	const manifest = await preparePackageForPublish(pkg);
 	const name = manifest.name ?? path.basename(pkg.dir);
 	if (manifest.private) {
 		console.log(`Skipping ${name} (private)`);

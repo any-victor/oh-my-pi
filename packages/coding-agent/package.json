@@ -117,6 +117,10 @@
       "types": "./src/index.ts",
       "import": "./src/index.ts"
     },
+    "./sdk": {
+      "types": "./src/sdk.ts",
+      "import": "./src/sdk.ts"
+    },
     "./*": {
       "types": "./src/*.ts",
       "import": "./src/*.ts"

@@ -13,15 +13,16 @@ bun add @oh-my-pi/pi-coding-agent
 
 ## Entry points
 
-`@oh-my-pi/pi-coding-agent` exports the SDK APIs from the package root (and also via `@oh-my-pi/pi-coding-agent/sdk`).
+`@oh-my-pi/pi-coding-agent/sdk` is the explicit programmatic entrypoint. The package root continues to export the same APIs for compatibility.
 
 Core exports for embedders:
 
-- `createAgentSession`
-- `SessionManager`
-- `Settings`
-- `AuthStorage`
-- `ModelRegistry`
+- `createAgentSession`, `CreateAgentSessionOptions`, and `CreateAgentSessionResult`
+- `AgentSession` and `AgentSessionDisposeOptions`
+- `SessionManager` and `ReadonlySessionManager`
+- `Settings` and `SkillsSettings`
+- `AuthStorage`, `ModelRegistry`, and `EventBus`
+- `RedisSessionStorage` and `SqlSessionStorage` with their client/options types
 - `discoverAuthStorage`
 - Discovery helpers (`discoverExtensions`, `discoverSkills`, `discoverContextFiles`, `discoverPromptTemplates`, `discoverSlashCommands`, `discoverCustomTSCommands`, `discoverMCPServers`)
 - Tool factory surface (`createTools`, `BUILTIN_TOOLS`, tool classes)
@@ -29,7 +30,7 @@ Core exports for embedders:
 ## Quick start (auto-discovery defaults)
 
 ```ts
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent";
+import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 
 const { session, modelFallbackMessage } = await createAgentSession();
 
@@ -87,7 +88,7 @@ Typically you must provide only what you want to control:
 ### File-backed (default)
 
 ```ts
-import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
+import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent/sdk";
 
 const { session } = await createAgentSession({
   sessionManager: SessionManager.create(process.cwd()),
@@ -103,7 +104,7 @@ console.log(session.sessionFile); // absolute .jsonl path
 ### In-memory
 
 ```ts
-import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
+import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent/sdk";
 
 const { session } = await createAgentSession({
   sessionManager: SessionManager.inMemory(),
@@ -119,7 +120,7 @@ console.log(session.sessionFile); // undefined
 ### Resume/open/list helpers
 
 ```ts
-import { SessionManager } from "@oh-my-pi/pi-coding-agent";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/sdk";
 
 const recent = await SessionManager.continueRecent(process.cwd());
 const listed = await SessionManager.list(process.cwd());
@@ -138,7 +139,7 @@ import {
   discoverAuthStorage,
   ModelRegistry,
   SessionManager,
-} from "@oh-my-pi/pi-coding-agent";
+} from "@oh-my-pi/pi-coding-agent/sdk";
 
 const authStorage = await discoverAuthStorage();
 const modelRegistry = new ModelRegistry(authStorage);
@@ -177,6 +178,21 @@ If restore fails, `modelFallbackMessage` explains fallback.
 4. stored OAuth credential, including refresh when needed
 5. provider environment variables
 6. custom-provider resolver fallback
+
+## Lifecycle ownership
+
+Always `await session.dispose()` when an embedder is finished with a session. Disposal is idempotent and closes the session manager plus session-owned MCP, async-job, provider-session, memory, browser, and kernel resources.
+
+| Resource | Owner | Embedder responsibility |
+|:--|:--|:--|
+| `AgentSession` | Session caller | Await `session.dispose()` during normal cleanup; repeated calls are safe. |
+| `SessionManager` | Caller until successful `AgentSession` construction; then session | If construction throws before a session exists, close a caller-supplied manager. After success, `session.dispose()` closes it. Internally created pre-session failure cleanup is a current SDK gap. |
+| Caller-supplied `AuthStorage` / `ModelRegistry` | Caller | Retain both for the host lifetime; after every dependent session is disposed, close `AuthStorage` when the host no longer needs it. `ModelRegistry` has no separate disposal API. |
+| Internally discovered `AuthStorage` / `ModelRegistry` | Current SDK bootstrap | Normal `session.dispose()` does not close the auth storage, and the result does not expose it. Long-lived embedders that require explicit auth-store ownership should supply both objects. |
+| Caller-supplied `MCPManager` | Caller | Disconnect when the host no longer needs it; session disposal disconnects only managers created by that session. |
+| Event subscription | Caller | Call the returned unsubscribe function when updates are no longer needed, preferably before disposal. |
+
+This contract describes one embedded session. It does not promise isolation between independently configured top-level hosts in the same process; several registries remain process-scoped today.
 
 ## Event subscription model
 
@@ -332,7 +348,7 @@ import {
   ModelRegistry,
   SessionManager,
   Settings,
-} from "@oh-my-pi/pi-coding-agent";
+} from "@oh-my-pi/pi-coding-agent/sdk";
 
 const authStorage = await discoverAuthStorage();
 const modelRegistry = new ModelRegistry(authStorage);

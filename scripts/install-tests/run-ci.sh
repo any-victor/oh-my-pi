@@ -100,20 +100,46 @@ for pkg in utils wire hashline catalog ai mnemopi snapcompact agent tui stats co
    )
 done
 
-# 4. Pack the coding agent with its *published* manifest: release swaps
-#    `bin.omp` from `src/cli.ts` to the prepack bundle `dist/cli.js`. The repo
-#    manifest keeps pointing at source so `bun link`/`install.sh --source`
-#    work without a build, so the swap must be reproduced here for the smoke
-#    to exercise the bundled worker-host entry the published package ships.
-#    Always restore the working-tree manifest.
+# 4. Pack the coding agent with its published manifest and declarations. Release
+# emits dist/types, rewrites every source types export to that tree, and swaps
+# bin.omp to dist/cli.js. Back up both mutable paths so this smoke leaves a
+# developer worktree unchanged.
 agent_pkg_backup="$WORK_DIR/coding-agent-package.json.orig"
 cp "$ROOT_DIR/packages/coding-agent/package.json" "$agent_pkg_backup"
+agent_types_backup="$WORK_DIR/coding-agent-dist-types.orig"
+agent_had_types=0
+if [ -d "$ROOT_DIR/packages/coding-agent/dist/types" ]; then
+   cp -a "$ROOT_DIR/packages/coding-agent/dist/types" "$agent_types_backup"
+   agent_had_types=1
+fi
+publish_state_active=1
+restore_publish_state() {
+   if [ "$publish_state_active" -eq 0 ]; then return; fi
+   rm -rf "$ROOT_DIR/packages/coding-agent/dist/types"
+   if [ "$agent_had_types" -eq 1 ] && [ -d "$agent_types_backup" ]; then
+      mv "$agent_types_backup" "$ROOT_DIR/packages/coding-agent/dist/types"
+   fi
+   if [ -f "$agent_pkg_backup" ]; then
+      cp "$agent_pkg_backup" "$ROOT_DIR/packages/coding-agent/package.json"
+   fi
+   publish_state_active=0
+}
+cleanup() {
+   local rc=$?
+   trap - EXIT
+   restore_publish_state
+   rm -rf "$WORK_DIR"
+   exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 agent_rc=0
 {
-   bun -e 'import { applyPublishBin } from "./scripts/ci-release-publish.ts"; await applyPublishBin("packages/coding-agent", true);' &&
+   bun -e 'import { packages, preparePackageForPublish } from "./scripts/ci-release-publish.ts"; const pkg = packages.find(candidate => candidate.dir === "packages/coding-agent"); if (!pkg) throw new Error("Coding-agent publish package not found"); await preparePackageForPublish(pkg);' &&
       (cd "$ROOT_DIR/packages/coding-agent" && bun pm pack --destination "$TARBALL_DIR" --quiet >/dev/null)
 } || agent_rc=$?
-cp "$agent_pkg_backup" "$ROOT_DIR/packages/coding-agent/package.json"
+restore_publish_state
 [ "$agent_rc" -eq 0 ] || exit "$agent_rc"
 
 utils_tgz="$(find_tarball "$TARBALL_DIR"/oh-my-pi-pi-utils-*.tgz)"
@@ -176,6 +202,26 @@ mkdir -p "$TARBALL_APP_DIR"
    }
    [ -f "node_modules/@oh-my-pi/collab-web/dist/index.html" ] || {
       echo "Collab web tarball did not install built dist/index.html"
+      exit 1
+   }
+   sdk_types="node_modules/@oh-my-pi/pi-coding-agent/dist/types/sdk.d.ts"
+   [ -f "$sdk_types" ] || {
+      echo "Published SDK declaration missing: $sdk_types"
+      exit 1
+   }
+   sdk_types_export="$(bun -e 'const manifest = await Bun.file("node_modules/@oh-my-pi/pi-coding-agent/package.json").json(); process.stdout.write(manifest.exports?.["./sdk"]?.types ?? "missing");')"
+   [ "$sdk_types_export" = "./dist/types/sdk.d.ts" ] || {
+      echo "Published SDK types export is incorrect: $sdk_types_export"
+      exit 1
+   }
+   sdk_exports="$(bun -e 'import { AgentSession, AuthStorage, ModelRegistry, SessionManager, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk"; process.stdout.write([AgentSession, AuthStorage, ModelRegistry, SessionManager, createAgentSession].every(value => typeof value === "function") ? "ok" : "invalid");')"
+   [ "$sdk_exports" = "ok" ] || {
+      echo "Published SDK entrypoint exports are incomplete: $sdk_exports"
+      exit 1
+   }
+   sdk_identity="$(bun -e 'import { createAgentSession as rootCreateAgentSession } from "@oh-my-pi/pi-coding-agent"; import { createAgentSession as sdkCreateAgentSession } from "@oh-my-pi/pi-coding-agent/sdk"; process.stdout.write(rootCreateAgentSession === sdkCreateAgentSession ? "same" : "different");')"
+   [ "$sdk_identity" = "same" ] || {
+      echo "Root and SDK entrypoints resolve different createAgentSession implementations"
       exit 1
    }
    smoke_cli ./node_modules/.bin/omp
