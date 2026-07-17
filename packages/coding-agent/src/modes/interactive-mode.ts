@@ -2349,19 +2349,45 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		const planModeState = this.session.getPlanModeState();
+		const planModeTools = this.session.getActiveToolNames();
+		const planModeModelState = this.session.model
+			? { model: this.session.model, thinkingLevel: this.session.configuredThinkingLevel() }
+			: undefined;
 		this.session.setPlanModeState(undefined);
 		try {
 			if (this.#planModePreviousTools !== undefined) {
 				await this.session.setActiveToolsByName(this.#planModePreviousTools);
 			}
+			if (this.#planModePreviousModelState && !options?.deferModelRestore) {
+				await this.#restorePlanPreviousModel(this.#planModePreviousModelState);
+			}
 		} catch (error) {
 			this.session.setPlanModeState(planModeState);
+			if (
+				planModeModelState &&
+				(!modelsAreEqual(this.session.model, planModeModelState.model) ||
+					this.session.configuredThinkingLevel() !== planModeModelState.thinkingLevel)
+			) {
+				try {
+					await this.#restorePlanPreviousModel(planModeModelState);
+				} catch (rollbackError) {
+					logger.warn("Failed to restore plan model after plan exit failure", { error: String(rollbackError) });
+				}
+			}
+			const activeTools = this.session.getActiveToolNames();
+			if (
+				activeTools.length !== planModeTools.length ||
+				activeTools.some((name, index) => name !== planModeTools[index])
+			) {
+				try {
+					await this.session.setActiveToolsByName(planModeTools);
+				} catch (rollbackError) {
+					logger.warn("Failed to restore plan tools after plan exit failure", { error: String(rollbackError) });
+				}
+			}
 			throw error;
 		}
 		if (this.#planModePreviousModelState) {
-			if (!options?.deferModelRestore) {
-				await this.#restorePlanPreviousModel(this.#planModePreviousModelState);
-			}
 			// If #applyPlanModeModel queued a deferred switch to the plan-role model
 			// (because the session was streaming on entry), drop it now: we are
 			// leaving plan mode, so flushing it on the next agent_end would land the
