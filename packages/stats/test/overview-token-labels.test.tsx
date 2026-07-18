@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { formatCompact } from "../src/client/data/formatters";
 import { MetricCluster } from "../src/client/ui/MetricCluster";
 import type { AggregatedStats } from "../src/shared-types";
 
@@ -30,6 +31,13 @@ describe("overview token metrics", () => {
 		expect(html).toContain("Cache Read");
 		expect(html).toContain("Conversation Total");
 		expect(html).toContain("Uncached input + cache reads + cache writes + output");
-		expect(html).toContain('<div class="stats-metric-value">460</div>');
+
+		const expectedTotal = formatCompact(
+			stats.totalInputTokens +
+				stats.totalOutputTokens +
+				stats.totalCacheReadTokens +
+				stats.totalCacheWriteTokens,
+		);
+		expect(html).toContain(`<div class="stats-metric-value">${expectedTotal}</div>`);
 	});
 });
