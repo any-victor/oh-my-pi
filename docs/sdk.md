@@ -14,6 +14,8 @@ bun add @oh-my-pi/pi-coding-agent
 ## Entry points
 
 `@oh-my-pi/pi-coding-agent/sdk` is the explicit programmatic entrypoint. The package root continues to export the same APIs for compatibility.
+The install smoke verifies that this entrypoint resolves at runtime and that its published manifest points to the bundled declaration artifact. Full TypeScript checking of the installed transitive dependency graph is currently best-effort.
+
 
 Core exports for embedders:
 

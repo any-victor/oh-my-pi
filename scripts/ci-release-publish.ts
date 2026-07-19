@@ -8,8 +8,8 @@
  * downloads the matching `.node` artifacts.
  *
  * For each public TypeScript package we:
- *   1. Emit `.d.ts` declarations into `dist/types/` so consumers get
- *      stable types regardless of their tsconfig `lib`.
+ *   1. Emit `.d.ts` declaration artifacts into `dist/types/` for the published
+ *      manifest entries.
  *   2. Rewrite `package.json` in place — every `types`/`exports[*].types`
  *      that points at `./src/*.ts(x)` is repointed to `./dist/types/*.d.ts`,
  *      `dist/types` (plus `dist/client` for `stats`) is added to `files`,

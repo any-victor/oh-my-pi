@@ -100,9 +100,9 @@ for pkg in utils wire hashline catalog ai mnemopi snapcompact agent tui stats co
    )
 done
 
-# 4. Pack the coding agent with its published manifest and declarations. Release
-# emits dist/types, rewrites every source types export to that tree, and swaps
-# bin.omp to dist/cli.js. Back up both mutable paths so this smoke leaves a
+# 4. Pack the coding agent with its published manifest and declaration artifacts.
+# Release emits dist/types, rewrites every source types export to that tree, and
+# swaps bin.omp to dist/cli.js. Back up both mutable paths so this smoke leaves a
 # developer worktree unchanged.
 agent_pkg_backup="$WORK_DIR/coding-agent-package.json.orig"
 cp "$ROOT_DIR/packages/coding-agent/package.json" "$agent_pkg_backup"
@@ -206,12 +206,12 @@ mkdir -p "$TARBALL_APP_DIR"
    }
    sdk_types="node_modules/@oh-my-pi/pi-coding-agent/dist/types/sdk.d.ts"
    [ -f "$sdk_types" ] || {
-      echo "Published SDK declaration missing: $sdk_types"
+      echo "Published SDK declaration artifact missing: $sdk_types"
       exit 1
    }
    sdk_types_export="$(bun -e 'const manifest = await Bun.file("node_modules/@oh-my-pi/pi-coding-agent/package.json").json(); process.stdout.write(manifest.exports?.["./sdk"]?.types ?? "missing");')"
    [ "$sdk_types_export" = "./dist/types/sdk.d.ts" ] || {
-      echo "Published SDK types export is incorrect: $sdk_types_export"
+      echo "Published SDK declaration manifest entry is incorrect: $sdk_types_export"
       exit 1
    }
    sdk_exports="$(bun -e 'import { AgentSession, AuthStorage, EventBus, ModelRegistry, RedisSessionStorage, SessionManager, SqlSessionStorage, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk"; process.stdout.write([AgentSession, AuthStorage, EventBus, ModelRegistry, RedisSessionStorage, SessionManager, SqlSessionStorage, createAgentSession].every(value => typeof value === "function") ? "ok" : "invalid");')"
