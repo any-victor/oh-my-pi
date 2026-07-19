@@ -115,9 +115,9 @@ function createCtx(leafEntry: SessionEntry, navigateTreeResult: unknown = { canc
 /** Grabs the `TreeSelectorComponent` mounted by the most recent `showTreeSelector()` call and fires its onSelect as if the user pressed Enter on `entryId`. */
 async function pickEntry(editorContainer: EditorSlot, entryId: string): Promise<void> {
 	const mounted = editorContainer.addChild.mock.calls.at(-1)?.[0] as {
-		getTreeList: () => { onSelect?: (id: string) => unknown };
+		getTreeList: () => { onSelect?: (id: string, options: { summarize: boolean }) => unknown };
 	};
-	await mounted.getTreeList().onSelect?.(entryId);
+	await mounted.getTreeList().onSelect?.(entryId, { summarize: false });
 }
 
 describe("SelectorController.showTreeSelector re-answering the active ask leaf", () => {
