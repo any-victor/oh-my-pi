@@ -2753,7 +2753,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"hindsight.apiToken": { type: "string", default: undefined },
+	"hindsight.apiToken": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "memory",
+			group: "Hindsight",
+			label: "Hindsight API Token",
+			description: "Bearer token for authenticated Hindsight servers",
+			condition: "hindsightActive",
+		},
+	},
 
 	"hindsight.bankId": {
 		type: "string",
