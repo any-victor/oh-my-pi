@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed locally consumed extension commands triggering automatic title generation and exposing their command text to the title model ([#6061](https://github.com/can1357/oh-my-pi/issues/6061)).
+
 ## [17.0.5] - 2026-07-18
 
 ### Added
