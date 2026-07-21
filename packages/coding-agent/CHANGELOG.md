@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Formalized `@oh-my-pi/pi-coding-agent/sdk` as an explicit package entrypoint and exposed the reusable session, model, auth, event, and persistence primitives embedders need without deep imports.
+
 
 ## [17.0.7] - 2026-07-21
 
@@ -226,9 +230,6 @@
 ### Removed
 
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers
-### Added
-
-- Formalized `@oh-my-pi/pi-coding-agent/sdk` as an explicit package entrypoint and exposed the reusable session, model, auth, event, and persistence primitives embedders need without deep imports.
 
 ## [17.0.2] - 2026-07-17
 
