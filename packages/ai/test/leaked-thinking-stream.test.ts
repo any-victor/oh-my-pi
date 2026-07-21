@@ -244,6 +244,59 @@ describe("wrapLeakedThinkingStream", () => {
 		expect(thinks(result).map(b => b.thinkingSignature)).toEqual([signature]);
 	});
 
+	it("finalizes a native thinking block by source index after later blocks start", async () => {
+		const firstSignature = "sig-first";
+		const secondSignature = "sig-second";
+		const call: ToolCall = {
+			type: "toolCall",
+			id: "call_between_thinking",
+			name: "read",
+			arguments: { path: "x" },
+		};
+		const first = { type: "thinking" as const, thinking: "first", thinkingSignature: "" };
+		const second = { type: "thinking" as const, thinking: "second", thinkingSignature: "" };
+		const { result } = await runWrapper(inner => {
+			inner.push({ type: "start", partial: msg() });
+			inner.push({
+				type: "thinking_delta",
+				contentIndex: 0,
+				delta: first.thinking,
+				partial: msg({ content: [first] }),
+			});
+			const withCall = msg({ content: [first, call] });
+			inner.push({ type: "toolcall_start", contentIndex: 1, partial: withCall });
+			inner.push({ type: "toolcall_end", contentIndex: 1, toolCall: call, partial: withCall });
+			inner.push({
+				type: "thinking_delta",
+				contentIndex: 2,
+				delta: second.thinking,
+				partial: msg({ content: [first, call, second] }),
+			});
+			const firstSigned = {
+				...first,
+				thinkingSignature: firstSignature,
+			};
+			const secondSigned = {
+				...second,
+				thinkingSignature: secondSignature,
+			};
+			inner.push({
+				type: "thinking_end",
+				contentIndex: 0,
+				content: first.thinking,
+				partial: msg({ content: [firstSigned, call, second] }),
+			});
+			const signed = msg({ content: [firstSigned, call, secondSigned] });
+			inner.push({ type: "thinking_end", contentIndex: 2, content: second.thinking, partial: signed });
+			inner.push({ type: "done", reason: "stop", message: signed });
+		});
+
+		expect(thinks(result).map(block => [block.thinking, block.thinkingSignature])).toEqual([
+			["first", firstSignature],
+			["second", secondSignature],
+		]);
+	});
+
 	it("preserves native tool-call ids and streamed partial JSON while healing", async () => {
 		const inner = new AssistantMessageEventStream();
 		const out = wrapLeakedThinkingStream(inner);
