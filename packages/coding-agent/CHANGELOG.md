@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/changelog` and `/changelog full` reporting no entries in standalone binaries by embedding omp's release history as the safe fallback when no package asset directory exists ([#6172](https://github.com/can1357/oh-my-pi/issues/6172)).
+
 ## [17.0.6] - 2026-07-20
 
 - Fixed failed plan-mode exits leaving the session on the restored execution model while plan mode remained active and silently changing ambient `xd://` tool presentation; rollback now restores the plan model, thinking level, and exact top-level-versus-mounted tool partition so exit can be retried safely ([#6013](https://github.com/can1357/oh-my-pi/pull/6013)).
