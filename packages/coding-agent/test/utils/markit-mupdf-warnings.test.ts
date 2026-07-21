@@ -43,6 +43,19 @@ describe("markit MuPDF warnings", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("initializes MuPDF once for concurrent PDF conversions", async () => {
+		const results = await Promise.all(
+			Array.from({ length: 16 }, () =>
+				convertBufferWithMarkit(warningPdf(), ".pdf", undefined, { useCache: false }),
+			),
+		);
+
+		for (const result of results) {
+			expect(result.ok).toBe(true);
+			expect(result.content).toContain("Tagged PDF repro text");
+		}
+	});
+
 	it("routes recoverable PDF warnings to the file logger", async () => {
 		const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
 		const debug = vi.spyOn(logger, "debug").mockImplementation(() => undefined);

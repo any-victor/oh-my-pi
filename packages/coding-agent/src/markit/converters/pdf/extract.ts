@@ -19,10 +19,24 @@ import type { ImageRegion, PageContent, Segment, TextBox } from "./types";
 // exposing the converter classes before their module-level consts initialize
 // (e.g. `EXTENSIONS` reads as undefined). Importing mupdf lazily keeps the chunk
 // init synchronous and also keeps the ~10MB wasm off non-PDF conversions.
-let mupdfModule: typeof mupdf | undefined;
-async function loadMupdf(): Promise<typeof mupdf> {
+let mupdfModule: Promise<typeof mupdf> | undefined;
+
+async function importMupdf(): Promise<typeof mupdf> {
+	const module = await import("mupdf");
+	// Bun can expose an ESM namespace while MuPDF's top-level WASM await is still
+	// running. Touch an export declared after that await before sharing it.
+	void module.Document;
+	return module;
+}
+
+function loadMupdf(): Promise<typeof mupdf> {
 	if (!mupdfModule) {
-		mupdfModule = await import("mupdf");
+		let initializing: Promise<typeof mupdf>;
+		initializing = importMupdf().catch(error => {
+			if (mupdfModule === initializing) mupdfModule = undefined;
+			throw error;
+		});
+		mupdfModule = initializing;
 	}
 	return mupdfModule;
 }
