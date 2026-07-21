@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI-compatible providers configured with `auth: none` still sending `Authorization: Bearer N/A`, which broke custom endpoints that authenticate via their own headers (e.g. `headers.x-api-key`) and reject the bogus bearer. The keyless sentinel now suppresses the `Authorization` injection in `resolveOpenAIRequestSetup`, matching the existing guards on the `google-vertex` and `amazon-bedrock` transports ([#6188](https://github.com/can1357/oh-my-pi/issues/6188)).
+
 ## [17.0.6] - 2026-07-20
 
 ### Fixed
