@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import fs from "node:fs/promises";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { convertBufferWithMarkit } from "@oh-my-pi/pi-coding-agent/utils/markit";
 import { logger } from "@oh-my-pi/pi-utils";
 
@@ -38,22 +43,66 @@ function warningPdf(): Uint8Array {
 	return new TextEncoder().encode(pdf);
 }
 
+async function convertWithCompiledMarkit(): Promise<string> {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mupdf-compiled-"));
+	const entry = path.join(root, "convert.ts");
+	const output = path.join(root, "convert");
+	const markitPath = fileURLToPath(new URL("../../src/utils/markit.ts", import.meta.url));
+	const mupdfWasmPath = path.join(path.dirname(createRequire(import.meta.url).resolve("mupdf")), "mupdf-wasm.wasm");
+	const nativeAddonPath = fileURLToPath(
+		new URL(`../../../natives/native/pi_natives.${process.platform}-${process.arch}.node`, import.meta.url),
+	);
+	try {
+		await fs.writeFile(
+			entry,
+			`import { readFileSync } from "node:fs";
+import wasmPath from ${JSON.stringify(mupdfWasmPath)} with { type: "file" };
+globalThis.$libmupdf_wasm_Module = { wasmBinary: readFileSync(wasmPath) };
+// The compiled entry must dynamically load markit so Bun lowers the lazy converter boundary.
+const { convertBufferWithMarkit } = await import(${JSON.stringify(markitPath)});
+const results = await Promise.all(
+	Array.from({ length: 16 }, () =>
+		convertBufferWithMarkit(new Uint8Array(${JSON.stringify([...warningPdf()])}), ".pdf", undefined, { useCache: false }),
+	),
+);
+for (const result of results) {
+	if (!result.ok) throw new Error(result.error);
+	if (!result.content.includes("Tagged PDF repro text")) throw new Error("missing converted text");
+}
+process.stdout.write("compiled conversion succeeded");
+`,
+		);
+		const build = await Bun.build({
+			entrypoints: [entry],
+			root: fileURLToPath(new URL("../../../..", import.meta.url)),
+			external: ["fastembed", "onnxruntime-node"],
+			compile: { outfile: output },
+			throw: false,
+		});
+		expect(build.success).toBe(true);
+		await fs.copyFile(nativeAddonPath, path.join(root, path.basename(nativeAddonPath)));
+
+		const process = Bun.spawn([output], { stdout: "pipe", stderr: "pipe" });
+		const [exitCode, stdout, stderr] = await Promise.all([
+			process.exited,
+			new Response(process.stdout).text(),
+			new Response(process.stderr).text(),
+		]);
+		if (exitCode !== 0) throw new Error(`compiled converter failed:\n${stderr}`);
+		expect(stderr).toBe("");
+		return stdout;
+	} finally {
+		await fs.rm(root, { force: true, recursive: true });
+	}
+}
+
 describe("markit MuPDF warnings", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
 
-	it("initializes MuPDF once for concurrent PDF conversions", async () => {
-		const results = await Promise.all(
-			Array.from({ length: 16 }, () =>
-				convertBufferWithMarkit(warningPdf(), ".pdf", undefined, { useCache: false }),
-			),
-		);
-
-		for (const result of results) {
-			expect(result.ok).toBe(true);
-			expect(result.content).toContain("Tagged PDF repro text");
-		}
+	it("initializes MuPDF once in a compiled binary under concurrent PDF conversions", async () => {
+		expect(await convertWithCompiledMarkit()).toBe("compiled conversion succeeded");
 	});
 
 	it("routes recoverable PDF warnings to the file logger", async () => {
