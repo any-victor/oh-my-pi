@@ -16789,7 +16789,16 @@ export class AgentSession {
 				});
 			}
 			// Refresh the workspace-roots block to match the resumed session's directory set.
-			await this.refreshBaseSystemPrompt();
+			// Wrapped so a rebuild failure (e.g. a gate that intentionally fails in tests)
+			// doesn't roll back an otherwise-successful session switch.
+			try {
+				await this.refreshBaseSystemPrompt();
+			} catch (refreshErr) {
+				logger.warn("Failed to refresh system prompt after session switch", {
+					targetSessionFile: sessionPath,
+					error: String(refreshErr),
+				});
+			}
 			this.#finishBashSessionTransition(bashTransition, true);
 			return true;
 		} catch (error) {
