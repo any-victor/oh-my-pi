@@ -287,6 +287,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Options for subagent execution */
 export interface ExecutorOptions {
 	cwd: string;
+	/** Additional workspace directories to seed on the subagent session (multi-root). */
+	additionalDirectories?: string[];
 	worktree?: string;
 	agent: AgentDefinition;
 	task: string;
@@ -2539,6 +2541,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// artifacts dir) — only the SessionManager differs.
 			const buildSubagentSessionOptions = (sessionManagerForRun: SessionManager): CreateAgentSessionOptions => ({
 				cwd: worktree ?? cwd,
+				additionalDirectories: options.additionalDirectories,
 				authStorage,
 				modelRegistry,
 				settings: subagentSettings,

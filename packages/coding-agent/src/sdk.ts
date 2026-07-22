@@ -1665,6 +1665,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			isToolActive: name => activeToolNames.has(name),
 			setActiveToolNames,
 			hasUI: options.hasUI ?? false,
+			get additionalDirectories() {
+				return sessionManager.getAdditionalDirectories();
+			},
 			enableLsp,
 			enableIrc: restrictToolNames ? false : options.enableIrc,
 			restrictToolNames,
