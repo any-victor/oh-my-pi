@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import fs from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
-import os from "node:os";
-import path from "node:path";
+import * as os from "node:os";
+import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { convertBufferWithMarkit } from "@oh-my-pi/pi-coding-agent/utils/markit";
 import { logger } from "@oh-my-pi/pi-utils";
+import { getAddonFilenames } from "../../../natives/native/loader-state.js";
 
 function warningPdf(): Uint8Array {
 	const objects: string[] = [];
@@ -43,15 +44,38 @@ function warningPdf(): Uint8Array {
 	return new TextEncoder().encode(pdf);
 }
 
+async function resolveNativeAddonPath({
+	nativeDir,
+	platform,
+	arch,
+}: {
+	nativeDir: string;
+	platform: string;
+	arch: string;
+}): Promise<string> {
+	const filenames = getAddonFilenames({
+		tag: `${platform}-${arch}`,
+		arch,
+		variant: arch === "x64" ? "modern" : null,
+	});
+	for (const filename of filenames) {
+		const addonPath = path.join(nativeDir, filename);
+		if (await Bun.file(addonPath).exists()) return addonPath;
+	}
+	throw new Error(`No native addon found in ${nativeDir}; tried: ${filenames.join(", ")}`);
+}
+
 async function convertWithCompiledMarkit(): Promise<string> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mupdf-compiled-"));
 	const entry = path.join(root, "convert.ts");
 	const output = path.join(root, "convert");
 	const markitPath = fileURLToPath(new URL("../../src/utils/markit.ts", import.meta.url));
 	const mupdfWasmPath = path.join(path.dirname(createRequire(import.meta.url).resolve("mupdf")), "mupdf-wasm.wasm");
-	const nativeAddonPath = fileURLToPath(
-		new URL(`../../../natives/native/pi_natives.${process.platform}-${process.arch}.node`, import.meta.url),
-	);
+	const nativeAddonPath = await resolveNativeAddonPath({
+		nativeDir: fileURLToPath(new URL("../../../natives/native", import.meta.url)),
+		platform: process.platform,
+		arch: process.arch,
+	});
 	try {
 		await fs.writeFile(
 			entry,
@@ -103,6 +127,27 @@ describe("markit MuPDF warnings", () => {
 
 	it("initializes MuPDF once in a compiled binary under concurrent PDF conversions", async () => {
 		expect(await convertWithCompiledMarkit()).toBe("compiled conversion succeeded");
+	});
+
+	it("selects Linux x64 variant-only artifacts in native loader order", async () => {
+		const nativeDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-native-variants-"));
+		try {
+			const modern = "pi_natives.linux-x64-modern.node";
+			const baseline = "pi_natives.linux-x64-baseline.node";
+			await Bun.write(path.join(nativeDir, baseline), "");
+			await Bun.write(path.join(nativeDir, modern), "");
+
+			expect(path.basename(await resolveNativeAddonPath({ nativeDir, platform: "linux", arch: "x64" }))).toBe(
+				modern,
+			);
+
+			await fs.rm(path.join(nativeDir, modern));
+			expect(path.basename(await resolveNativeAddonPath({ nativeDir, platform: "linux", arch: "x64" }))).toBe(
+				baseline,
+			);
+		} finally {
+			await fs.rm(nativeDir, { force: true, recursive: true });
+		}
 	});
 
 	it("routes recoverable PDF warnings to the file logger", async () => {
