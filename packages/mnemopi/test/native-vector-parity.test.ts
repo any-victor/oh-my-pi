@@ -59,7 +59,10 @@ describe("native vector kernel parity", () => {
 		const expected: number[] = [];
 		for (let i = 0; i < count; i += 1) {
 			for (let j = i + 1; j < count; j += 1) {
-				if (cosineSimilarity(flat.subarray(i * dim, (i + 1) * dim), flat.subarray(j * dim, (j + 1) * dim)) >= threshold) {
+				if (
+					cosineSimilarity(flat.subarray(i * dim, (i + 1) * dim), flat.subarray(j * dim, (j + 1) * dim)) >=
+					threshold
+				) {
 					expected.push(i, j);
 				}
 			}
@@ -141,10 +144,7 @@ describe("native vector kernel parity", () => {
 		const scores = new Float64Array(count);
 		for (let i = 0; i < count; i += 1) {
 			const n = 1 + Math.floor(rng() * 8);
-			contents.push(
-				Array.from({ length: n }, () => words[Math.floor(rng() * words.length)])
-					.join(" "),
-			);
+			contents.push(Array.from({ length: n }, () => words[Math.floor(rng() * words.length)]).join(" "));
 			scores[i] = rng();
 		}
 		scores[5] = scores[6] = 0.5; // exercise strict-> tie keeping the earlier candidate
