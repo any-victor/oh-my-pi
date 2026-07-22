@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed repeated OpenRouter Gemini reasoning-to-payload stream closures consuming the full ten-attempt retry budget; thinking-bearing `server_error: stream closed with reason: error` failures now get one recovery attempt before surfacing.
+
 ## [17.0.7] - 2026-07-21
 
 ### Fixed

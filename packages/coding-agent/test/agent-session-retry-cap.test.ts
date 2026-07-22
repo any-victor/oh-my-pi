@@ -1242,6 +1242,74 @@ describe("AgentSession retry delay cap", () => {
 		expect(last.stopReason).toBe("aborted");
 	});
 
+	it("caps repeated OpenRouter stream closes after streamed thinking at one retry", async () => {
+		const model = getBundledModel("openrouter", "~google/gemini-flash-latest");
+		if (!model) {
+			throw new Error("Expected bundled OpenRouter Gemini test model to exist");
+		}
+		authStorage.setRuntimeApiKey("openrouter", "openrouter-test-key");
+
+		const mock = createMockModel({
+			provider: "openrouter",
+			responses: [
+				{
+					content: [{ type: "thinking", thinking: "reasoning attempt 1" }],
+					stopReason: "error",
+					errorMessage: "server_error: stream closed with reason: error",
+				},
+				{
+					content: [{ type: "thinking", thinking: "reasoning attempt 2" }],
+					stopReason: "error",
+					errorMessage: "server_error: stream closed with reason: error",
+				},
+				{ content: ["must remain unused"] },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => mock.stream(requestedModel, context, options),
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 10,
+			"retry.modelFallback": false,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const retryStartEvents: AutoRetryStartEvent[] = [];
+		const retryEndEvents: AutoRetryEndEvent[] = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_start") retryStartEvents.push(event);
+			if (event.type === "auto_retry_end") retryEndEvents.push(event);
+		});
+
+		await session.prompt("Trigger OpenRouter reasoning transition failure");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryStartEvents[0]).toMatchObject({ attempt: 1, maxAttempts: 1 });
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ success: false, attempt: 1 });
+		expect(lastAssistant(session).errorMessage).toBe("server_error: stream closed with reason: error");
+		expect(session.isRetrying).toBe(false);
+	});
+
 	it("defaults 502 auto-retry to ten capped backoff attempts", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) {

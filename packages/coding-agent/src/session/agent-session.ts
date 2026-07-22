@@ -14810,6 +14810,21 @@ export class AgentSession {
 		return message.content.some(block => block.type === "toolCall");
 	}
 
+	/**
+	 * OpenRouter can repeatedly close Gemini streams at the reasoning-to-payload
+	 * transition. One retry covers a transient edge failure; the normal ten-retry
+	 * budget would otherwise re-run the same expensive reasoning cycle unchanged.
+	 */
+	#isOpenRouterThinkingStreamClose(message: AssistantMessage): boolean {
+		return (
+			message.provider === "openrouter" &&
+			/server_error:\s*stream closed with reason:\s*error/i.test(message.errorMessage ?? "") &&
+			message.content.some(block => block.type === "thinking" && block.thinking.trim().length > 0)
+		);
+	}
+	
+	
+
 	#isClassifierRefusal(message: AssistantMessage): boolean {
 		if (message.stopReason !== "error") return false;
 		const stopType = message.stopDetails?.type;
@@ -15408,7 +15423,8 @@ export class AgentSession {
 		// (every rotation sets switchedCredential and skips it), so without
 		// this last resort a provider-wide usage cap never fails over to the
 		// configured chain.
-		const retryBudgetExhausted = this.#retryAttempt > retrySettings.maxRetries;
+		const maxRetries = this.#isOpenRouterThinkingStreamClose(message) ? Math.min(retrySettings.maxRetries, 1) : retrySettings.maxRetries;
+		const retryBudgetExhausted = this.#retryAttempt > maxRetries;
 
 		const errorMessage = message.errorMessage || "Unknown error";
 		const id = this.#classifyRetryMessage(message);
@@ -15567,7 +15583,7 @@ export class AgentSession {
 		await this.#emitSessionEvent({
 			type: "auto_retry_start",
 			attempt: this.#retryAttempt,
-			maxAttempts: retrySettings.maxRetries,
+			maxAttempts: maxRetries,
 			delayMs,
 			errorMessage,
 			errorId: message.errorId,
