@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added batch vector kernels for mnemopi recall paths: `cosineSimilarityBatch`, `cosineSimilarityPairs`, `vectorIndexTopK`, `hammingDistanceBatch`, `hammingDistanceForDimBatch`, and `mmrRerankIndices`.
+- Added batch vector kernels for mnemopi recall paths: `cosineSimilarityBatch`, `cosineSimilarityPairs`, `vectorIndexTopK`, `hammingDistanceBatch`, `hammingDistanceForDimBatch`, and `mmrRerankIndices` ([#6280](https://github.com/can1357/oh-my-pi/pull/6280) by [@wolfiesch](https://github.com/wolfiesch)).
 
 ## [17.0.5] - 2026-07-18
 
