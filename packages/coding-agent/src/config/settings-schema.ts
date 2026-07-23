@@ -26,6 +26,7 @@ import {
 	TINY_TITLE_MODEL_OPTIONS,
 	TINY_TITLE_MODEL_VALUES,
 } from "../tiny/models";
+import { IMAGE_PROVIDER_CHOICES, type ImageProvider } from "../tools/image-providers";
 import {
 	DEFAULT_TTS_LOCAL_MODEL_KEY,
 	DEFAULT_TTS_VOICE,
@@ -35,7 +36,7 @@ import {
 	TTS_LOCAL_VOICE_VALUES,
 } from "../tts/models";
 import { EDIT_MODES } from "../utils/edit-mode";
-import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES, type SearchProviderId } from "../web/search/types";
+import { SEARCH_PROVIDER_CHOICES, type SearchProviderId } from "../web/search/types";
 import {
 	SERVICE_TIER_ANTHROPIC_OPTIONS,
 	SERVICE_TIER_ANTHROPIC_VALUES,
@@ -218,10 +219,18 @@ interface UiString extends UiBase {
 	options?: ReadonlyArray<SubmenuOption> | "runtime";
 }
 
+interface UiArray extends UiBase {
+	/** Membership choices. Without options, an array setting has no UI representation (config-file only). */
+	options?: ReadonlyArray<SubmenuOption>;
+	/** Selection order is meaningful; the editor renders positions and supports reordering. */
+	ordered?: boolean;
+}
+
 /** Wide ui shape exposed to consumers that walk the schema generically. */
 export type AnyUiMetadata = UiBase & {
 	options?: ReadonlyArray<SubmenuOption> | "runtime";
 	secret?: boolean;
+	ordered?: boolean;
 };
 
 interface BooleanDef {
@@ -252,7 +261,7 @@ interface EnumDef<T extends readonly string[]> {
 interface ArrayDef<T> {
 	type: "array";
 	default: T[];
-	ui?: UiBase;
+	ui?: UiArray;
 }
 
 interface RecordDef<T> {
@@ -4555,18 +4564,6 @@ export const SETTINGS_SCHEMA = {
 				"Maximum concurrent Ollama Cloud subagent runs per process; 0 disables the provider-specific limit",
 		},
 	},
-	"providers.webSearch": {
-		type: "enum",
-		values: SEARCH_PROVIDER_PREFERENCES,
-		default: "auto",
-		ui: {
-			tab: "providers",
-			group: "Services",
-			label: "Web Search Provider",
-			description: "Preferred provider for the web_search tool",
-			options: SEARCH_PROVIDER_OPTIONS,
-		},
-	},
 	"providers.webSearchOrder": {
 		type: "array",
 		default: [] as SearchProviderId[],
@@ -4574,7 +4571,10 @@ export const SETTINGS_SCHEMA = {
 			tab: "providers",
 			group: "Services",
 			label: "Web Search Provider Order",
-			description: "Prioritized providers; unlisted providers retain their default order afterward",
+			description:
+				"Prioritized providers for the web_search tool; unlisted providers retain their default order afterward",
+			options: SEARCH_PROVIDER_CHOICES,
+			ordered: true,
 		},
 	},
 	"providers.webSearchExclude": {
@@ -4585,6 +4585,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Services",
 			label: "Excluded Web Search Providers",
 			description: "Providers that web_search should never use, even as fallbacks",
+			options: SEARCH_PROVIDER_CHOICES,
 		},
 	},
 	"providers.webSearchGeminiModel": {
@@ -4625,46 +4626,17 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
-	"providers.image": {
-		type: "enum",
-		values: ["auto", "openai", "openai-codex", "antigravity", "xai", "gemini", "openrouter"] as const,
-		default: "auto",
+	"providers.imageOrder": {
+		type: "array",
+		default: [] as ImageProvider[],
 		ui: {
 			tab: "providers",
 			group: "Services",
-			label: "Image Provider",
-			description: "Preferred provider for image generation",
-			options: [
-				{
-					value: "auto",
-					label: "Auto",
-					description:
-						"Priority: per-request provider > configured provider > active session provider > GPT model image tool > Codex subscription > Antigravity > xAI > OpenRouter > Gemini",
-				},
-				{
-					value: "openai",
-					label: "OpenAI",
-					description:
-						"OPENAI_API_KEY (gpt-image-2) or active GPT model; falls back to a connected Codex subscription",
-				},
-				{
-					value: "openai-codex",
-					label: "OpenAI Codex (ChatGPT)",
-					description: "Uses a connected Codex / ChatGPT subscription — no OPENAI_API_KEY needed",
-				},
-				{
-					value: "antigravity",
-					label: "Antigravity",
-					description: "Requires google-antigravity OAuth",
-				},
-				{
-					value: "xai",
-					label: "xAI Grok Imagine",
-					description: "Requires xAI Grok OAuth or XAI_API_KEY",
-				},
-				{ value: "gemini", label: "Gemini", description: "Requires GEMINI_API_KEY" },
-				{ value: "openrouter", label: "OpenRouter", description: "Requires OPENROUTER_API_KEY" },
-			],
+			label: "Image Provider Order",
+			description:
+				"Prioritized providers for image generation; unlisted providers follow the active session provider and the built-in order",
+			options: IMAGE_PROVIDER_CHOICES,
+			ordered: true,
 		},
 	},
 	"providers.fireworksTier": {

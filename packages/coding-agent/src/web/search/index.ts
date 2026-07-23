@@ -135,11 +135,9 @@ async function executeSearch(
 	let candidates: SearchProviderCandidate[];
 	if (explicitProvider && explicitProvider !== "auto") {
 		candidates = [{ id: explicitProvider, explicit: true }];
-	} else if (explicitProvider === "auto") {
-		// Explicit `--provider auto` bypasses the configured preferred provider
-		// for this invocation; exclusions still apply.
-		candidates = resolveProviderCandidates("auto");
 	} else {
+		// `--provider auto` and the default both walk the configured chain;
+		// exclusions still apply.
 		candidates = resolveProviderCandidates();
 	}
 
@@ -350,11 +348,6 @@ export function getSearchTools(): CustomTool<any, any>[] {
 	return [webSearchCustomTool];
 }
 
-export {
-	getSearchProvider,
-	setExcludedSearchProviders,
-	setPreferredSearchProvider,
-	setSearchProviderOrder,
-} from "./provider";
+export { getSearchProvider, setExcludedSearchProviders, setSearchProviderOrder } from "./provider";
 export type { SearchProviderId as SearchProvider, SearchResponse } from "./types";
 export { isSearchProviderId, isSearchProviderPreference } from "./types";

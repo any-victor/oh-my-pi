@@ -34,7 +34,9 @@ import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";
+import { AUTO_IMAGE_PROVIDER_ORDER, isImageProviderId } from "../tools/image-providers";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
+import { isSearchProviderId, SEARCH_PROVIDER_ORDER } from "../web/search/types";
 import { withFileLock } from "./file-lock";
 import {
 	type BashInterceptorRule,
@@ -1595,6 +1597,45 @@ export class Settings {
 		}
 		delete raw["mcp.discoveryMode"];
 		delete raw["mcp.discoveryDefaultServers"];
+
+		// providers.webSearch / providers.image (single preferred provider) →
+		// providers.webSearchOrder / providers.imageOrder (priority lists). A
+		// concrete legacy choice becomes the head of the new list with every
+		// remaining provider appended in its built-in order, so the old
+		// preference stays #1 and the fallback chain is written out explicitly.
+		// "auto" (or an unknown id) just drops the key — the default chain.
+		const providerPrefsObj = raw.providers as Record<string, unknown> | undefined;
+		const migrateProviderPreference = (
+			legacyKey: string,
+			orderKey: string,
+			expand: (value: string) => string[] | undefined,
+		): void => {
+			const flatLegacyKey = `providers.${legacyKey}`;
+			const legacy = providerPrefsObj?.[legacyKey] ?? raw[flatLegacyKey];
+			if (legacy === undefined) return;
+			const existingOrder = providerPrefsObj?.[orderKey] ?? raw[`providers.${orderKey}`];
+			const orderAlreadySet = Array.isArray(existingOrder) && existingOrder.length > 0;
+			if (!orderAlreadySet && typeof legacy === "string") {
+				const expanded = expand(legacy);
+				if (expanded) {
+					const root = providerPrefsObj ?? {};
+					root[orderKey] = expanded;
+					raw.providers = root;
+				}
+			}
+			if (providerPrefsObj) delete providerPrefsObj[legacyKey];
+			delete raw[flatLegacyKey];
+		};
+		migrateProviderPreference("webSearch", "webSearchOrder", value =>
+			value !== "auto" && isSearchProviderId(value)
+				? [value, ...SEARCH_PROVIDER_ORDER.filter(id => id !== value)]
+				: undefined,
+		);
+		migrateProviderPreference("image", "imageOrder", value =>
+			value !== "auto" && isImageProviderId(value)
+				? [value, ...AUTO_IMAGE_PROVIDER_ORDER.filter(id => id !== value)]
+				: undefined,
+		);
 
 		return raw;
 	}

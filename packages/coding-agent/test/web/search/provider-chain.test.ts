@@ -5,7 +5,6 @@ import {
 	resolveProviderCandidates,
 	resolveProviderChain,
 	setExcludedSearchProviders,
-	setPreferredSearchProvider,
 	setSearchProviderOrder,
 } from "@oh-my-pi/pi-coding-agent/web/search/provider";
 import { SEARCH_PROVIDER_ORDER } from "@oh-my-pi/pi-coding-agent/web/search/types";
@@ -34,14 +33,13 @@ function restoreEnv(): void {
 }
 
 afterEach(() => {
-	setPreferredSearchProvider("auto");
 	setExcludedSearchProviders([]);
 	setSearchProviderOrder([]);
 	restoreEnv();
 });
 
 describe("resolveProviderCandidates", () => {
-	it("orders the preferred provider before configured and built-in fallbacks", () => {
+	it("orders the forced provider before configured and built-in fallbacks", () => {
 		setSearchProviderOrder(["gemini", "exa"]);
 
 		const candidates = resolveProviderCandidates("perplexity");
@@ -52,6 +50,15 @@ describe("resolveProviderCandidates", () => {
 			"exa",
 			...SEARCH_PROVIDER_ORDER.filter(id => id !== "perplexity" && id !== "gemini" && id !== "exa"),
 		]);
+	});
+
+	it("marks configured-order entries explicit so hand-listed providers keep explicit-selection semantics", () => {
+		setSearchProviderOrder(["perplexity"]);
+
+		const candidates = resolveProviderCandidates();
+
+		expect(candidates[0]).toEqual({ id: "perplexity", explicit: true });
+		expect(candidates[1]?.explicit).toBe(false);
 	});
 
 	it("omits excluded providers without resolving them", () => {
@@ -68,7 +75,7 @@ describe("resolveProviderCandidates", () => {
 
 		controller.handleSettingChange("providers.webSearchOrder", ["exa", "not-a-provider", "exa", "gemini"]);
 
-		const candidates = resolveProviderCandidates("auto");
+		const candidates = resolveProviderCandidates();
 		expect(candidates.slice(0, 2).map(candidate => candidate.id)).toEqual(["exa", "gemini"]);
 		expect(candidates).toHaveLength(SEARCH_PROVIDER_ORDER.length);
 	});
@@ -79,12 +86,12 @@ describe("resolveProviderChain", () => {
 		enableKeyBackedProviders();
 		setExcludedSearchProviders(SEARCH_PROVIDER_ORDER.filter(id => id !== "jina"));
 
-		const providers = await resolveProviderChain(authStorage, "auto");
+		const providers = await resolveProviderChain(authStorage);
 
 		expect(providers.map(provider => provider.id)).toEqual(["jina"]);
 	});
 
-	it("ignores the preferred provider when it is excluded", async () => {
+	it("ignores the forced provider when it is excluded", async () => {
 		enableKeyBackedProviders();
 		setExcludedSearchProviders(SEARCH_PROVIDER_ORDER.filter(id => id !== "jina"));
 
@@ -102,7 +109,7 @@ describe("resolveProviderChain", () => {
 			SEARCH_PROVIDER_ORDER.filter(id => id !== "jina"),
 		);
 
-		const providers = await resolveProviderChain(authStorage, "auto");
+		const providers = await resolveProviderChain(authStorage);
 
 		expect(providers.map(provider => provider.id)).toEqual(["jina"]);
 	});

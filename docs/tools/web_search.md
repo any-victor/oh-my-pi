@@ -101,10 +101,9 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 
 ## Modes / Variants
 - **Provider selection**
-  - **Forced provider**: internal callers may pass `provider`; a non-`auto` value is the only attempted provider, while `auto` bypasses the configured preference and uses the ordered fallback chain. This field is not in the model-facing schema.
-  - **Preferred provider**: `setPreferredSearchProvider()` sets a module-global first choice used by `resolveProviderCandidates()`. Failure continues through the configured fallback order. `packages/coding-agent/src/sdk.ts` and `packages/coding-agent/src/modes/controllers/selector-controller.ts` wire this from settings.
-  - **Configured order**: `setSearchProviderOrder()` prioritizes the valid, first-occurrence provider IDs in `providers.webSearchOrder`; providers omitted from the setting follow in their built-in relative order. `providers.webSearch` remains the first-choice override.
-  - **Excluded providers**: `setExcludedSearchProviders()` records providers `resolveProviderCandidates()` must skip, including as fallbacks. Wired from the `providers.webSearchExclude` setting (`providers.webSearch` drives the preferred provider) in `packages/coding-agent/src/sdk.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/coding-agent/src/modes/controllers/selector-controller.ts`.
+  - **Forced provider**: internal callers may pass `provider`; a non-`auto` value is the only attempted provider, while `auto` (or omitting it) walks the configured chain. This field is not in the model-facing schema.
+  - **Configured order**: `setSearchProviderOrder()` prioritizes the valid, first-occurrence provider IDs in `providers.webSearchOrder`; providers omitted from the setting follow in their built-in relative order. Listed providers are explicit selections — they resolve through `isExplicitlyAvailable()`, so e.g. a hand-listed Perplexity may fall back to anonymous search. Wired from settings in `packages/coding-agent/src/config/provider-globals.ts` (SDK startup, cwd reloads, live settings changes).
+  - **Excluded providers**: `setExcludedSearchProviders()` records providers `resolveProviderCandidates()` must skip, including as fallbacks. Wired from the `providers.webSearchExclude` setting via the same `provider-globals.ts` paths.
   - **Default auto chain order** (25 providers): `perplexity`, `gemini`, `anthropic`, `codex`, `xai`, `zai`, `exa`, `tinyfish`, `jina`, `kagi`, `tavily`, `firecrawl`, `brave`, `kimi`, `parallel`, `synthetic`, `searxng`, `duckduckgo`, `bing`, `yahoo`, `startpage`, `google`, `ecosia`, `mojeek`, `public` (`SEARCH_PROVIDER_ORDER` in `packages/coding-agent/src/web/search/types.ts`). `public` is explicit-only: its `isAvailable()` returns `false` so the auto chain never fans out implicitly.
 - **Provider adapters**
   - **Perplexity** — `packages/coding-agent/src/web/search/providers/perplexity.ts`
@@ -148,7 +147,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
     - `limit` and `num_search_results` are collapsed together before dispatch.
     - Output may include parsed free-text `answer`, `sources`, `requestId`.
   - **Exa** — `packages/coding-agent/src/web/search/providers/exa.ts`
-    - Availability: env or `agent.db` credential for `exa` admits Exa to the auto chain; settings must not explicitly disable `exa.enabled` or `exa.enableSearch`. Explicit selection (`providers.webSearch: exa`) reaches Exa even without a credential and falls back to public MCP.
+    - Availability: env or `agent.db` credential for `exa` admits Exa to the auto chain; settings must not explicitly disable `exa.enabled` or `exa.enableSearch`. Explicit selection (listing `exa` in `providers.webSearchOrder`, or a forced `provider: exa`) reaches Exa even without a credential and falls back to public MCP.
     - Querying: POST `https://api.exa.ai/search` with the resolved Exa API key, otherwise JSON-RPC `tools/call` against `https://mcp.exa.ai/mcp` for remote MCP tool `web_search_exa`.
     - `limit` and `num_search_results` are collapsed together before dispatch.
     - Output: synthesized `answer` from up to 3 result summaries, `sources`, `requestId`.

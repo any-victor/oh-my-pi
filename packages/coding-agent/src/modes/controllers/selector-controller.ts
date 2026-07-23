@@ -57,12 +57,9 @@ import {
 	parseConfiguredThinkingLevel,
 } from "../../thinking";
 import {
-	isImageProviderPreference,
 	isSearchProviderId,
-	isSearchProviderPreference,
 	setExcludedSearchProviders,
-	setPreferredImageProvider,
-	setPreferredSearchProvider,
+	setImageProviderOrder,
 	setSearchProviderOrder,
 	type ToolSession,
 } from "../../tools";
@@ -610,11 +607,6 @@ export class SelectorController {
 			}
 
 			// Provider settings - update runtime preferences
-			case "providers.webSearch":
-				if (typeof value === "string" && isSearchProviderPreference(value)) {
-					setPreferredSearchProvider(value);
-				}
-				break;
 			case "providers.webSearchOrder":
 				if (Array.isArray(value)) {
 					setSearchProviderOrder(value.filter(isSearchProviderId));
@@ -625,9 +617,9 @@ export class SelectorController {
 					setExcludedSearchProviders(value.filter(isSearchProviderId));
 				}
 				break;
-			case "providers.image":
-				if (isImageProviderPreference(value)) {
-					setPreferredImageProvider(value);
+			case "providers.imageOrder":
+				if (Array.isArray(value)) {
+					setImageProviderOrder(value.filter((entry): entry is string => typeof entry === "string"));
 				}
 				break;
 
