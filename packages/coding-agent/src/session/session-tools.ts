@@ -397,7 +397,7 @@ export class SessionTools {
 					if (outcome.outcome === "cancelled") {
 						throw new ToolAbortError("Permission request cancelled");
 					}
-					const selectedOption = PERMISSION_OPTIONS_BY_ID[outcome.optionId];
+					const selectedOption = PERMISSION_OPTIONS_BY_ID.get(outcome.optionId);
 					if (!selectedOption) {
 						throw new ToolError(`Tool permission response used unknown option ID: ${outcome.optionId}`);
 					}
