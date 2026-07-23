@@ -13854,9 +13854,13 @@ export class AgentSession {
 	 * {@link #computeSnapcompactMaxFrames} sizes against — a rebuilt archive
 	 * must land back under the maintenance trigger, or the next settle
 	 * re-enters the same dead-end. Cap reserve mirrors
-	 * #computeSnapcompactMaxFrames (text edges + summary template).
+	 * #computeSnapcompactMaxFrames (text edges + summary template), and
+	 * `keptTailTokens` charges the kept entries AFTER the archive so the
+	 * budget mirrors what #compactionCreatedHeadroom will actually measure.
+	 * Returns 0 when not even one frame fits that budget — the rebuild could
+	 * never create headroom, so the caller must not append it.
 	 */
-	#computeSnapcompactRescueMaxFrames(settings: CompactionSettings): number {
+	#computeSnapcompactRescueMaxFrames(settings: CompactionSettings, keptTailTokens: number): number {
 		const ctxWindow = this.model?.contextWindow ?? 0;
 		if (ctxWindow <= 0) return Math.min(snapcompact.MAX_FRAMES_DEFAULT, snapcompact.maxFramesForDataBudget());
 		const thresholdTokens = resolveThresholdTokens(ctxWindow, settings);
@@ -13866,18 +13870,15 @@ export class AgentSession {
 		const edgeCap = snapcompact.geometry(shape).capacity;
 		const textEdgeTokens = Math.ceil((2 * edgeCap * 1.15) / 4);
 		const SUMMARY_TEMPLATE_TOKENS = 2000;
-		const frameBudget = recoveryBandTokens - baseTokens - textEdgeTokens - SUMMARY_TEMPLATE_TOKENS;
-		if (frameBudget < snapcompact.FRAME_TOKEN_ESTIMATE) return 1;
+		const frameBudget = recoveryBandTokens - baseTokens - keptTailTokens - textEdgeTokens - SUMMARY_TEMPLATE_TOKENS;
+		if (frameBudget < snapcompact.FRAME_TOKEN_ESTIMATE) return 0;
 		// Same hard caps as #computeSnapcompactMaxFrames: a threshold-derived
 		// count above the per-request payload budget would "shrink" a huge
 		// archive to a frame count the rebuilt prompt can never attach anyway.
-		return Math.max(
-			1,
-			Math.min(
-				Math.floor(frameBudget / snapcompact.FRAME_TOKEN_ESTIMATE),
-				snapcompact.MAX_FRAMES_DEFAULT,
-				snapcompact.maxFramesForDataBudget(),
-			),
+		return Math.min(
+			Math.floor(frameBudget / snapcompact.FRAME_TOKEN_ESTIMATE),
+			snapcompact.MAX_FRAMES_DEFAULT,
+			snapcompact.maxFramesForDataBudget(),
 		);
 	}
 
@@ -13913,30 +13914,27 @@ export class AgentSession {
 		const staleEntry = getLatestCompactionEntry(branchEntries);
 		if (!staleEntry) return undefined;
 		// Only rescue when the archive is the actual source of the overflow.
-		// If the kept tail AFTER it is itself over the recovery band (e.g. a
-		// huge kept tool result), rebuilding the archive would append the
-		// replacement compaction at the leaf — turning the branch tail into a
-		// compaction entry, which prepareCompaction's last-entry guard can
-		// never summarize past even after an elide shrinks the real culprit.
-		// Bail and let the elide/image tiers handle that tail instead.
-		const ctxWindow = this.model.contextWindow ?? 0;
-		if (ctxWindow > 0) {
-			const tailBar = Math.floor(resolveThresholdTokens(ctxWindow, settings) * COMPACTION_RECOVERY_BAND);
-			let tailTokens = 0;
-			for (let i = branchEntries.length - 1; i >= 0; i--) {
-				const entry = branchEntries[i];
-				if (entry.id === staleEntry.id) break;
-				const message = (entry as { message?: AgentMessage }).message;
-				if (message) tailTokens += estimateTokens(message);
-			}
-			if (tailTokens > tailBar) return undefined;
+		// The frame budget below charges the kept tail AFTER the archive plus
+		// the fixed context, mirroring what #compactionCreatedHeadroom will
+		// measure. When not even one frame fits (e.g. a huge kept tool result
+		// dominates), rebuilding would append the replacement compaction at
+		// the leaf — turning the branch tail into a compaction entry, which
+		// prepareCompaction's last-entry guard can never summarize past even
+		// after an elide shrinks the real culprit. Bail and let the
+		// elide/image tiers handle that tail instead.
+		let keptTailTokens = 0;
+		for (let i = branchEntries.length - 1; i >= 0; i--) {
+			const entry = branchEntries[i];
+			if (entry.id === staleEntry.id) break;
+			const message = (entry as { message?: AgentMessage }).message;
+			if (message) keptTailTokens += estimateTokens(message);
 		}
 		const archive = snapcompact.getPreservedArchive(staleEntry.preserveData);
 		if (!archive || archive.frames.length <= 1) return undefined;
 		const archiveText = snapcompact.archiveSourceText(archive);
 		if (!archiveText) return undefined;
-		const maxFrames = this.#computeSnapcompactRescueMaxFrames(settings);
-		if (maxFrames >= archive.frames.length) return undefined;
+		const maxFrames = this.#computeSnapcompactRescueMaxFrames(settings, keptTailTokens);
+		if (maxFrames < 1 || maxFrames >= archive.frames.length) return undefined;
 
 		const staleDetails = staleEntry.details as snapcompact.CompactionDetails | undefined;
 		const fileOps = snapcompact.createFileOps();
@@ -14298,11 +14296,19 @@ export class AgentSession {
 						continuationScheduled = true;
 					}
 					if (noProgressDeadEnd) {
-						this.emitNotice(
-							"warning",
-							compactionDeadEndWarning("shrink it (e.g. clear large tool output)"),
-							"compaction",
-						);
+						const deadEndWarning = compactionDeadEndWarning("shrink it (e.g. clear large tool output)");
+						this.emitNotice("warning", deadEndWarning, "compaction");
+						// A rescue that appended a rebuilt archive without creating
+						// headroom must carry the dead-end badge on the entry the
+						// transcript actually shows (the rebuilt one), or the pause
+						// loses its explanation once the notice scrolls away.
+						if (frameRescueResult) {
+							const stampEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
+							if (stampEntry) {
+								stampEntry.warning = deadEndWarning;
+								await this.sessionManager.rewriteEntries();
+							}
+						}
 					}
 					// A rescue that offloaded content but still could not produce a
 					// preparation rewrote the branch; flag it so the overflow-recovery
@@ -14723,12 +14729,18 @@ export class AgentSession {
 			}
 
 			const deadEndWarning = noProgressDeadEnd ? compactionDeadEndWarning("clear large tool output") : undefined;
-			if (deadEndWarning && savedCompactionEntry) {
+			if (deadEndWarning) {
 				// Stamp the divider: the compaction bar badges the dead-end and
 				// carries the full warning in its ctrl+o detail, so the pause
-				// stays explained even after the notice row scrolls away.
-				savedCompactionEntry.warning = deadEndWarning;
-				await this.sessionManager.rewriteEntries();
+				// stays explained even after the notice row scrolls away. Stamp
+				// the branch's LATEST compaction entry — a frame rescue may have
+				// superseded `savedCompactionEntry` with a rebuilt one, and the
+				// collapsed transcript badges only the active entry.
+				const stampEntry = getLatestCompactionEntry(this.sessionManager.getBranch()) ?? savedCompactionEntry;
+				if (stampEntry) {
+					stampEntry.warning = deadEndWarning;
+					await this.sessionManager.rewriteEntries();
+				}
 			}
 
 			await this.#emitSessionEvent({ type: "auto_compaction_end", action, result, aborted: false, willRetry });

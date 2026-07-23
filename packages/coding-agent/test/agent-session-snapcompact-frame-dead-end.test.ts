@@ -373,6 +373,44 @@ describe("AgentSession snapcompact frame dead-end rescue", () => {
 		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
 		expect(noProgress.length).toBe(1);
 		expect(noProgress[0].level).toBe("warning");
+		// The dead-end badge must live on the ACTIVE (rebuilt) entry — the
+		// collapsed transcript only shows the latest compaction divider.
+		const compactions = sessionManager.getBranch().filter(e => e.type === "compaction") as CompactionEntry[];
+		const active = compactions.at(-1);
+		expect(snapcompact.getPreservedArchive(active?.preserveData)?.frames.length).toBe(4);
+		expect(active?.warning).toContain(NO_PROGRESS_FRAGMENT);
+	});
+
+	it("bails when the kept tail plus fixed context leaves no frame budget", async () => {
+		// Codex review on #6362 (round 5): a tail just under the recovery band
+		// still cannot coexist with the fixed context + a minimum rebuilt
+		// archive. The budget now charges the kept tail like
+		// #compactionCreatedHeadroom does, so the rescue must bail instead of
+		// appending a rebuild that can never create headroom.
+		await createSession({ frameCount: SEEDED_FRAME_COUNT });
+		// ~40k estimated tokens: under the 48k band, but over band − edges/template.
+		sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "call-mid",
+			toolName: "bash",
+			content: [{ type: "text", text: "y".repeat(160_000) }],
+			isError: false,
+			timestamp: Date.now(),
+		});
+		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(undefined);
+		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 190000, contextWindow: 200000, percent: 95 });
+		const shakeSpy = vi
+			.spyOn(session, "shake")
+			.mockResolvedValue({ mode: "elide", toolResultsDropped: 0, blocksDropped: 0, tokensFreed: 0 });
+		const compactSpy = vi.spyOn(snapcompact, "compact");
+
+		await triggerMaintenance();
+
+		expect(compactSpy).not.toHaveBeenCalled();
+		expect(shakeSpy).toHaveBeenCalledWith("elide", expect.anything());
+		expect(sessionManager.getBranch().at(-1)?.type).not.toBe("compaction");
 	});
 
 	it("leaves an oversized non-archive tail to the elide tiers instead of rescuing the archive", async () => {
