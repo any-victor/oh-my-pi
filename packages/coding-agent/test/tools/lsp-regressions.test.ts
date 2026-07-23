@@ -2877,6 +2877,37 @@ describe("lsp regressions", () => {
 			}
 		});
 
+		it("recognizes -32601 by code even when the server's message text is nonstandard", async () => {
+			const tempDir = TempDir.createSync("@omp-lsp-reload-fallback-code-");
+			try {
+				const server = installFakeLsp((message, srv) => {
+					if (message.method === "initialize") {
+						srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+					} else if (message.method === "rust-analyzer/reloadWorkspace") {
+						// None of isMethodNotFoundError's message substrings — only the
+						// JSON-RPC code identifies this as method-not-found.
+						srv.send({ jsonrpc: "2.0", id: message.id, error: { code: -32_601, message: "Unknown request" } });
+					} else if (message.method === "shutdown") {
+						srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+					} else if (message.method === "exit") {
+						srv.exit(0);
+					}
+				});
+				const config: ServerConfig = { command: "fake-reload-fallback-code", fileTypes: [".ts"], rootMarkers: [] };
+				vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: { fake: config }, idleTimeoutMs: undefined });
+
+				const tool = new LspTool(makeLspSession(tempDir.path()));
+				const result = await tool.execute("reload-fallback-code", { action: "reload", file: "*" });
+
+				expect(textResult(result)).toContain("Reloaded fake");
+				expect(server.killed).toBe(false);
+			} finally {
+				vi.restoreAllMocks();
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		});
+
 		it("shutdownClientInstance removes the client by identity and confirms process exit", async () => {
 			const tempDir = TempDir.createSync("@omp-lsp-teardown-confirm-");
 			try {

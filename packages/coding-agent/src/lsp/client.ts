@@ -364,7 +364,13 @@ async function startMessageReader(client: LspClient): Promise<void> {
 						if (pending) {
 							client.pendingRequests.delete(message.id);
 							if ("error" in message && message.error) {
-								pending.reject(new Error(`LSP error: ${message.error.message}`));
+								// Include the JSON-RPC error code: `isMethodNotFoundError` matches
+								// `-32601` by substring, so method-not-found is recognized even when
+								// the server's message text is nonstandard (e.g. "Unknown request").
+								const code = message.error.code;
+								pending.reject(
+									new Error(`LSP error${typeof code === "number" ? ` ${code}` : ""}: ${message.error.message}`),
+								);
 							} else {
 								pending.resolve(message.result);
 							}
