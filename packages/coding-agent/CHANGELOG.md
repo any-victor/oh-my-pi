@@ -29,6 +29,7 @@
 
 ### Fixed
 
+- Preserved superseded compaction summaries, snapcompact archives, and OpenAI replacement history so branching or rewinding before a newer compaction rebuilds the original model context ([#4090](https://github.com/can1357/oh-my-pi/issues/4090)).
 - Fixed discarded `Settings` instances keeping debounced save timers and chained background saves armed; discarding an instance now cancels its pending writes so they cannot race a successor's file locks.
 - Fixed `error.notify` raising a "Stopped with error" toast for provider failures while an auto-retry or async-delivery continuation was pending; the toast now waits for the true terminal settle.
 - Fixed terminal `yield` results racing post-turn maintenance, which could trigger an unnecessary automatic handoff or compaction.
