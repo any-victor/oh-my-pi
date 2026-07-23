@@ -10,6 +10,9 @@
 
 - Fixed outbound credential-pattern redaction (`[github_token_redacted]` & co.) running unconditionally: it is now opt-in via `configureCredentialRedaction` and disabled by default, so credential-shaped strings the user deliberately pastes reach the provider unmodified unless the host enables redaction.
 - Added interactive Meta Model API key login and `MODEL_API_KEY` / `META_API_KEY` environment authentication ([#4941](https://github.com/can1357/oh-my-pi/issues/4941)).
+### Fixed
+
+- Fixed SuperGrok (`xai-oauth`) `/usage` showing "no usage data" for unified-billing accounts: when `?format=credits` lacks `creditUsagePercent` (or marks `isUnifiedBillingUser`), fall back to / merge the default monthly `monthlyLimit`/`used` payload.
 
 ## [17.0.9] - 2026-07-23
 
