@@ -25,6 +25,7 @@
 - Fixed Agent Hub fallback rows hiding routing provenance and the resolved provider/model ([#6316](https://github.com/can1357/oh-my-pi/issues/6316)).
 - Reduced format-on-write latency by avoiding cold language-server startup when diagnostics are disabled.
 - Rewrote the `/guided-goal` interviewer rubric around loop-engineering: deterministic success criteria, verification commands, attempt caps, scope boundaries, and stop conditions. Ready objectives must use the five-section structured markdown form.
+- Added `task.isolation.apply` (default `true`) to choose whether successful isolated `task` runs automatically apply their changes to the parent checkout or retain patch/branch artifacts for later integration.
 
 ## [17.0.8] - 2026-07-22
 

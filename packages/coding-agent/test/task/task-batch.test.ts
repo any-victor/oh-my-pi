@@ -128,7 +128,7 @@ describe("task.batch schema gating", () => {
 		expect(items?.properties?.schemaMode).toBeDefined();
 	});
 
-	it("places isolated per item in the batch shape when isolation is enabled", async () => {
+	it("keeps isolation boolean-only and describes the configured apply behavior", async () => {
 		mockDiscovery();
 
 		const tool = await TaskTool.create(
@@ -137,7 +137,24 @@ describe("task.batch schema gating", () => {
 		const properties = getSchemaProperties(tool);
 		expect(properties.isolated).toBeUndefined();
 		const items = (properties.tasks as { items?: { properties?: Record<string, unknown> } }).items;
-		expect(items?.properties?.isolated).toBeDefined();
+		const isolatedSchema = items?.properties?.isolated;
+		if (!isolatedSchema || typeof isolatedSchema !== "object" || !("type" in isolatedSchema)) {
+			throw new Error("Expected isolated to be a boolean schema");
+		}
+		expect(isolatedSchema.type).toBe("boolean");
+		expect(items?.properties?.apply).toBeUndefined();
+		expect(tool.description).toContain("automatically applied to the parent checkout");
+
+		const captureTool = await TaskTool.create(
+			createSession({
+				settings: {
+					"task.batch": true,
+					"task.isolation.mode": "auto",
+					"task.isolation.apply": false,
+				},
+			}),
+		);
+		expect(captureTool.description).toContain("without modifying the parent checkout");
 	});
 
 	it("hides isolation from the dynamic batch schema in plan mode", async () => {

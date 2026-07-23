@@ -26,7 +26,11 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking 
   - `outputSchema`: Invocation-specific JSON Schema. Overrides the selected agent and parent-session schemas.
   - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
 {{#if isolationEnabled}}
-  - `isolated`: Run in dedicated worktree, return patches. Destroyed on completion, cannot be addressed afterward.
+{{#if applyIsolatedChanges}}
+  - `isolated`: Run in a dedicated worktree; successful changes are automatically applied to the parent checkout.
+{{else}}
+  - `isolated`: Run in a dedicated worktree; changes are retained as patch or branch artifacts without modifying the parent checkout.
+{{/if}}
 {{/if}}
 {{else}}
 - `name`: A stable CamelCase identifier (≤32 chars), used to address the agent (IRC, job ids). Generated automatically if omitted.
@@ -36,7 +40,11 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking 
 - `outputSchema`: Invocation-specific JSON Schema. Overrides the selected agent and parent-session schemas.
 - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
 {{#if isolationEnabled}}
-- `isolated`: Run in dedicated worktree, return patches.
+{{#if applyIsolatedChanges}}
+- `isolated`: Run in a dedicated worktree; successful changes are automatically applied to the parent checkout.
+{{else}}
+- `isolated`: Run in a dedicated worktree; changes are retained as patch or branch artifacts without modifying the parent checkout.
+{{/if}}
 {{/if}}
 {{/if}}
 

@@ -4103,6 +4103,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.isolation.apply": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tasks",
+			group: "Isolation",
+			label: "Apply Isolated Changes",
+			description:
+				"Automatically apply successful isolated task changes to the parent checkout; disable to retain patch or branch artifacts",
+		},
+	},
+
 	"task.isolation.merge": {
 		type: "enum",
 		values: ["patch", "branch"] as const,
