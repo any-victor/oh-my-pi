@@ -52,6 +52,7 @@ const BENCH_PROMPT = benchPrompt.trim();
 const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder();
 const CACHE_PREFIX_CHUNK = cachePrefixChunk;
+const CACHE_PREFIX_PLACEHOLDER = "__OMP_CACHE_BENCH_RAW_PREFIX__";
 const CACHE_PREFIX_CHUNK_BYTES = UTF8_ENCODER.encode(CACHE_PREFIX_CHUNK).byteLength;
 const RESPONSE_CACHE_STATUS_HEADERS = ["cf-aig-cache-status"] as const;
 
@@ -339,6 +340,19 @@ function truncateUtf8(text: string, maxBytes: number): string {
 
 function generatedCachePrefix(bytes: number): string {
 	return truncateUtf8(CACHE_PREFIX_CHUNK.repeat(Math.ceil(bytes / CACHE_PREFIX_CHUNK_BYTES)), bytes);
+}
+
+function renderCacheBenchmarkPrefix(prefix: string, namespace: string): string {
+	const rendered = prompt.render(cachePrefixTemplate, {
+		prefix: CACHE_PREFIX_PLACEHOLDER,
+		namespace,
+	});
+	if (!rendered.includes(CACHE_PREFIX_PLACEHOLDER)) {
+		throw new Error("Cache benchmark prefix template is missing its raw prefix placeholder");
+	}
+	// Render the static wrapper first, then inject caller bytes so prompt
+	// normalization cannot trim spaces or collapse blank lines in prefix files.
+	return rendered.replace(CACHE_PREFIX_PLACEHOLDER, prefix);
 }
 
 async function resolveCachePrefix(
@@ -821,9 +835,7 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 					async (pairIndex): Promise<BenchCachePairReport> => {
 						const cacheNamespace = randomSessionId();
 						const promptCacheKey = `bench-cache:${cacheNamespace}`;
-						const stablePrefix = prompt
-							.render(cachePrefixTemplate, { prefix: cachePrefix!, namespace: cacheNamespace })
-							.trimEnd();
+						const stablePrefix = renderCacheBenchmarkPrefix(cachePrefix!, cacheNamespace);
 						const coldSuffix = prompt.render(cacheSuffixTemplate, { variant: "A" }).trim();
 						const warmSuffix = prompt.render(cacheSuffixTemplate, { variant: "B" }).trim();
 						const coldCapture: CacheRequestCapture = {

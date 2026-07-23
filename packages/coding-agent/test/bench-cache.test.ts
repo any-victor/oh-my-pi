@@ -494,6 +494,45 @@ describe("bench cache mode", () => {
 		expect(stablePrefixes[0]).not.toContain("\uFFFD");
 	});
 
+	it("preserves significant whitespace from the default prefix-file reader", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bench-cache-prefix-whitespace-"));
+		const prefixPath = path.join(tempDir, "prefix.txt");
+		const exactPrefix = "line one  \n\n\nline two\t\n";
+		const stablePrefixes: string[] = [];
+		await Bun.write(prefixPath, exactPrefix);
+		try {
+			await runBenchCommand(
+				{
+					models: ["openai/gpt-cache-test"],
+					flags: { cache: true, cachePrefixFile: prefixPath, cachePrefixBytes: 128, json: true },
+				},
+				{
+					createRuntime: async () => ({ modelRegistry: registry, close: () => {} }),
+					randomSessionId: (() => {
+						let id = 0;
+						return () => `session-${++id}`;
+					})(),
+					writeStdout: () => {},
+					writeStderr: () => {},
+					setExitCode: () => {},
+					streamSimple: (_model, context, options) => {
+						stablePrefixes.push(context.messages[0]?.content as string);
+						void options?.onPayload?.({ input: context.messages });
+						return streamWithMessage(successfulMessage(0, 0));
+					},
+					stdoutIsTTY: false,
+				},
+			);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+
+		expect(stablePrefixes).toHaveLength(2);
+		expect(stablePrefixes[0]).toBe(stablePrefixes[1]);
+		expect(stablePrefixes[0]?.startsWith(exactPrefix)).toBe(true);
+		expect(stablePrefixes[0]?.slice(exactPrefix.length)).toStartWith("\n\nPrompt-cache benchmark namespace:");
+	});
+
 	it("does not turn zero cache counters into a miss", async () => {
 		const summary = await runBenchCommand(
 			{ models: ["openai/gpt-cache-test"], flags: { cache: true, json: true } },
