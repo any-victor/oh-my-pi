@@ -4,6 +4,7 @@ import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/eve
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { vocalizer } from "@oh-my-pi/pi-coding-agent/tts/vocalizer";
 
 function createContext() {
 	const setWorkingMessage = vi.fn();
@@ -59,6 +60,18 @@ describe("EventController aborted-turn working messages", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		resetSettingsForTest();
+	});
+
+	it("preserves playback across internal turns and clears it for a new agent run", async () => {
+		const clear = vi.spyOn(vocalizer, "clear").mockImplementation(() => {});
+		const { ctx } = createContext();
+		const controller = new EventController(ctx);
+
+		await controller.handleEvent({ type: "turn_start" });
+		expect(clear).not.toHaveBeenCalled();
+
+		await controller.handleEvent(AGENT_START);
+		expect(clear).toHaveBeenCalledTimes(1);
 	});
 
 	it("suppresses late intent-driven working-message updates while aborting", async () => {
