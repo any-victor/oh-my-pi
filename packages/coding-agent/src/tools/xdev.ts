@@ -60,6 +60,9 @@ export const XDEV_KEEP_TOP_LEVEL: Record<string, true> = {
  */
 export const XDEV_TRANSPORT_TOOLS: Record<string, true> = { read: true, write: true };
 
+/** Controls which mounted-device docs are inlined into the system prompt. */
+export type XdevDocsMode = "inline" | "builtins" | "catalog";
+
 /**
  * Whether an enabled tool is presented under `xd://` (rather than top-level)
  * while the `xd://` transport is active. Discoverable tools mount unless they
@@ -273,11 +276,16 @@ export class XdevRegistry {
 	 * Dynamic mounts embed at most {@link EXTERNAL_DESCRIPTION_CAP} description
 	 * chars (schema always intact); `read xd://<tool>` returns the full text.
 	 */
-	docsAll(): string {
+	docsAll(mode: XdevDocsMode = "inline"): string {
 		const sections: string[] = [];
 		const overflow: Tool[] = [];
 		let used = 0;
 		for (const tool of this.list()) {
+			const isBuiltin = this.#builtins.has(tool.name);
+			if (mode === "catalog" || (mode === "builtins" && !isBuiltin)) {
+				overflow.push(tool);
+				continue;
+			}
 			const descriptionCap = this.#dynamic.has(tool.name) ? XdevRegistry.EXTERNAL_DESCRIPTION_CAP : undefined;
 			const docs = renderDocs(tool, "##", descriptionCap);
 			if (docs.length > XdevRegistry.DOCS_PER_DEVICE_CAP || used + docs.length > XdevRegistry.DOCS_TOTAL_BUDGET) {
