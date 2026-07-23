@@ -635,10 +635,10 @@ const USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES: Partial<Record<Provider, number>
 	"google-antigravity": 2,
 	zai: 2,
 	// v2: cache identity gained an `org:` component so two subscriptions on one
-	// account email stop sharing a slot. The bump also retires pre-org entries —
-	// otherwise an org-less credential could replay another org's cached pool
-	// (incl. the 24h last-good fallback) via the old bare email/account key.
-	anthropic: 2,
+	// account email stop sharing a slot. v3 retires parsed reports created before
+	// Anthropic extra-usage rows existed; header ingestion can otherwise keep
+	// renewing those incomplete reports throughout the 24h last-good retention.
+	anthropic: 3,
 };
 const DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 10_000;
 /**
@@ -3150,8 +3150,9 @@ export class AuthStorage {
 		const parsedReport = parseHeaders(headers, now);
 		if (!parsedReport) return false;
 		// Throttled to one ingest per interval — except when a window reads
-		// exhausted: that snapshot must land immediately so the next getApiKey
-		// blocks the credential instead of burning a wire 429 on the wall.
+		// exhausted: persist that snapshot immediately. A full-backed cache can
+		// then block the next getApiKey; a cold header-only snapshot first probes
+		// the usage endpoint.
 		const exhausted = parsedReport.limits.some(limit => this.#isUsageLimitExhausted(limit));
 		const last = this.#usageHeaderIngestAt.get(cacheKey);
 		if (!exhausted && last !== undefined && now - last < USAGE_HEADER_INGEST_INTERVAL_MS) return false;
@@ -3171,7 +3172,8 @@ export class AuthStorage {
 		}
 
 		if (this.#fetchUsageReportsOverride || this.#store.fetchUsageReports) return false;
-		const prior = this.#usageCache.getStale<UsageReport | null>(cacheKey)?.value;
+		const priorEntry = this.#usageCache.getStale<UsageReport | null>(cacheKey);
+		const prior = priorEntry?.value;
 		let merged = report;
 		if (prior && Array.isArray(prior.limits)) {
 			const headerLimitsById = new Map(report.limits.map(limit => [limit.id, limit]));
@@ -3195,12 +3197,19 @@ export class AuthStorage {
 				metadata: {
 					...(report.metadata ?? {}),
 					...(prior.metadata ?? {}),
+					source: prior.metadata?.source,
 					headersUpdatedAt: now,
 				},
 			};
 		}
 
-		this.#usageCache.set(cacheKey, { value: merged, expiresAt: now + USAGE_REPORT_TTL_MS });
+		// Header ingestion merges values but never extends a cache entry's lifetime.
+		// Preserve the existing expiry (including active failure cooldowns) so full
+		// reports refetch on their original 5-minute schedule and full-payload-only
+		// rows such as extra usage stay current; headers only refresh window rows
+		// between fetches. A newly minted header-only report is durable but stale.
+		const expiresAt = Math.max(priorEntry?.expiresAt ?? now - 1, now - 1);
+		this.#usageCache.set(cacheKey, { value: merged, expiresAt });
 		this.#usageHeaderIngestAt.set(cacheKey, now);
 		return true;
 	}
