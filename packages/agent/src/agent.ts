@@ -72,6 +72,9 @@ function refreshToolChoiceForActiveTools(
 	if (!toolChoice || typeof toolChoice === "string") {
 		return toolChoice;
 	}
+	if (toolChoice.type === "computer") {
+		return tools.some(tool => tool.native?.type === "computer") ? toolChoice : undefined;
+	}
 
 	const toolName =
 		toolChoice.type === "tool"

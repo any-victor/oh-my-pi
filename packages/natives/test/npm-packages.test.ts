@@ -51,6 +51,8 @@ describe("generated native npm leaf packages", () => {
 			const addonFiles = [
 				"pi_natives.linux-x64-baseline.node",
 				"pi_natives.linux-x64-modern.node",
+				"pi_natives.desktop.linux-x64-baseline.node",
+				"pi_natives.desktop.linux-x64-modern.node",
 				"pi_natives.linux-arm64.node",
 				"pi_natives.darwin-x64-baseline.node",
 				"pi_natives.darwin-arm64.node",
@@ -69,7 +71,12 @@ describe("generated native npm leaf packages", () => {
 				"win32-x64",
 			]);
 			const linuxX64 = leaves.find(leaf => leaf.tag === "linux-x64");
-			expect(linuxX64?.files).toEqual(["pi_natives.linux-x64-baseline.node", "pi_natives.linux-x64-modern.node"]);
+			expect(linuxX64?.files).toEqual([
+				"pi_natives.linux-x64-baseline.node",
+				"pi_natives.linux-x64-modern.node",
+				"pi_natives.desktop.linux-x64-baseline.node",
+				"pi_natives.desktop.linux-x64-modern.node",
+			]);
 			expect(await Bun.file(path.join(packageDir, "npm/linux-x64/pi_natives.linux-x64-modern.node")).text()).toBe(
 				"pi_natives.linux-x64-modern.node",
 			);

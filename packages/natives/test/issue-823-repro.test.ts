@@ -34,10 +34,20 @@ import {
 	type EmbeddedAddonFile,
 	extractEmbeddedAddonArchive,
 	getAddonFilenames,
+	getDesktopAddonFilenames,
 	resolveLoaderCandidates,
 } from "../native/loader-state.js";
 
 describe("issue 823: standalone-binary native loader path resolution", () => {
+	it("derives variant-aware lazy desktop addon filenames only for Linux x64", () => {
+		expect(getDesktopAddonFilenames({ tag: "linux-x64", arch: "x64", variant: "modern" })).toEqual([
+			"pi_natives.desktop.linux-x64-modern.node",
+			"pi_natives.desktop.linux-x64-baseline.node",
+			"pi_natives.desktop.linux-x64.node",
+		]);
+		expect(getDesktopAddonFilenames({ tag: "linux-arm64", arch: "arm64", variant: null })).toEqual([]);
+		expect(getDesktopAddonFilenames({ tag: "darwin-x64", arch: "x64", variant: "modern" })).toEqual([]);
+	});
 	it("detects compiled-binary mode from embedded-addon presence when env and url markers are absent", () => {
 		// Mirrors what a Bun standalone binary actually sees on linux-x64 / WSL:
 		// - `process.env.PI_COMPILED` is undefined (the build flag does not substitute property accesses).

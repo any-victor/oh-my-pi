@@ -374,6 +374,10 @@ if (crossTarget) {
 
 const canonicalAddonFilename = `pi_natives.${targetPlatform}-${targetArch}${variantSuffix}.node`;
 const canonicalAddonPath = path.join(nativeDir, canonicalAddonFilename);
+const desktopAddonFilename = `pi_natives.desktop.${targetPlatform}-${targetArch}${variantSuffix}.node`;
+const desktopAddonPath = path.join(nativeDir, desktopAddonFilename);
+const shouldBuildLinuxDesktopAddon =
+	targetPlatform === "linux" && targetArch === "x64" && !crossTarget?.includes("musl");
 
 console.log(`Building pi-natives for ${targetPlatform}-${targetArch}${variantSuffix}${profileSuffix}…`);
 
@@ -382,6 +386,7 @@ await cleanupStaleTemps(nativeDir);
 await fs.mkdir(path.join(nativeDir, ".build"), { recursive: true });
 const buildOutputDir = await fs.mkdtemp(buildOutputDirPrefix);
 napiArgs[10] = buildOutputDir;
+const desktopBuildOutputDir = shouldBuildLinuxDesktopAddon ? await fs.mkdtemp(`${buildOutputDirPrefix}desktop-`) : null;
 
 // Resolve napi bin directly: `bunx @napi-rs/cli` can pick up the wrong bin on
 // systems where `cli` exists on PATH (e.g. Mono's /usr/bin/cli on Ubuntu).
@@ -396,8 +401,8 @@ if (!napiBin) {
 	throw new Error("Could not locate @napi-rs/cli `napi` binary in node_modules/.bin");
 }
 
-async function runNapiBuildWithSccacheFallback() {
-	let buildResult = await $`${napiBin} ${napiArgs}`.nothrow();
+async function runNapiBuildWithSccacheFallback(args: string[]) {
+	let buildResult = await $`${napiBin} ${args}`.nothrow();
 	let stderr = buildResult.stderr?.toString("utf-8") ?? "";
 	if (
 		buildResult.exitCode !== 0 &&
@@ -413,14 +418,14 @@ async function runNapiBuildWithSccacheFallback() {
 		delete retryEnv.AWS_ACCESS_KEY_ID;
 		delete retryEnv.AWS_SECRET_ACCESS_KEY;
 		console.log("sccache storage unavailable; retrying native build without RUSTC_WRAPPER");
-		buildResult = await $`${napiBin} ${napiArgs}`.env(retryEnv).nothrow();
+		buildResult = await $`${napiBin} ${args}`.env(retryEnv).nothrow();
 		stderr = buildResult.stderr?.toString("utf-8") ?? "";
 	}
 	return { buildResult, stderr };
 }
 
 try {
-	const { buildResult, stderr } = await runNapiBuildWithSccacheFallback();
+	const { buildResult, stderr } = await runNapiBuildWithSccacheFallback(napiArgs);
 	if (buildResult.exitCode !== 0) {
 		throw new Error(`napi build failed${stderr ? `:\n${stderr}` : ""}`);
 	}
@@ -434,9 +439,23 @@ try {
 
 	await installGeneratedBindings(buildOutputDir);
 
+	if (desktopBuildOutputDir) {
+		console.log(`Building lazy Linux desktop addon ${desktopAddonFilename}…`);
+		const desktopArgs = [...napiArgs, "--features", "native-desktop-linux"];
+		desktopArgs[10] = desktopBuildOutputDir;
+		const { buildResult: desktopResult, stderr: desktopStderr } = await runNapiBuildWithSccacheFallback(desktopArgs);
+		if (desktopResult.exitCode !== 0) {
+			throw new Error(`desktop napi build failed${desktopStderr ? `:\n${desktopStderr}` : ""}`);
+		}
+		const builtDesktopAddonPath = await resolveBuiltAddonPath(desktopBuildOutputDir, canonicalAddonFilename);
+		await stripAndVerifyNativeAddon(builtDesktopAddonPath);
+		await installBinary(builtDesktopAddonPath, desktopAddonPath);
+	}
+
 	await generateEnumExports();
 
 	console.log("Build complete.");
 } finally {
 	await fs.rm(buildOutputDir, { recursive: true, force: true });
+	if (desktopBuildOutputDir) await fs.rm(desktopBuildOutputDir, { recursive: true, force: true });
 }

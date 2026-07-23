@@ -87,7 +87,11 @@ function buildGeneratedBlock(dts: string): string {
 	if (classes.length > 0) {
 		lines.push("// classes");
 		for (const name of classes) {
-			lines.push(`export const ${name} = nativeBindings.${name};`);
+			lines.push(
+				name === "DesktopSession"
+					? "export const DesktopSession = createDesktopSession(nativeBindings.DesktopSession);"
+					: `export const ${name} = nativeBindings.${name};`,
+			);
 		}
 	}
 	if (functions.length > 0) {

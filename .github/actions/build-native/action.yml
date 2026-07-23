@@ -125,6 +125,19 @@ runs:
         run: |
            sudo apt-get update
            sudo apt-get install -y build-essential
+      - name: Install Linux desktop addon prerequisites (GitHub-hosted)
+        if: steps.detect.outputs.on_infra == 'false' && runner.os == 'Linux' && inputs.platform == 'linux' && inputs.arch == 'x64' && inputs.libc != 'musl'
+        shell: bash
+        run: |
+           sudo apt-get install -y \
+             libdrm-dev \
+             libegl1-mesa-dev \
+             libgbm-dev \
+             libpipewire-0.3-dev \
+             libwayland-dev \
+             libxcb-randr0-dev \
+             libxcb1-dev \
+             libxkbcommon-dev
       - name: Prepend rustup toolchain bin to PATH (GitHub-hosted)
         if: steps.detect.outputs.on_infra == 'false'
         shell: bash
@@ -310,7 +323,10 @@ runs:
         uses: actions/upload-artifact@v4
         with:
            name: pi-natives-${{ inputs.platform }}-${{ inputs.libc && format('{0}-', inputs.libc) || '' }}${{ inputs.arch }}${{ inputs.variant && format('-{0}', inputs.variant) || '' }}-h${{ inputs.hash }}
-           path: packages/natives/native/pi_natives.${{ inputs.platform }}-${{ inputs.arch }}*.node
+           path: |
+              packages/natives/native/pi_natives.${{ inputs.platform }}-${{ inputs.arch }}*.node
+              packages/natives/native/pi_natives.desktop.${{ inputs.platform }}-${{ inputs.arch }}*.node
+
            if-no-files-found: error
            # Explicit so the native_artifact_lookup canary keeps working even if
            # org defaults shift; bump if Rust source ever stays stable for >90 days

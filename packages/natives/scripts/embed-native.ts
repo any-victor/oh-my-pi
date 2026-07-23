@@ -70,13 +70,22 @@ interface AvailableAddon extends CandidateAddon {
 const targetPlatform = Bun.env.TARGET_PLATFORM || process.platform;
 const targetArch = Bun.env.TARGET_ARCH || process.arch;
 const platformTag = `${targetPlatform}-${targetArch}`;
-const candidates: CandidateAddon[] =
+const coreCandidates: CandidateAddon[] =
 	targetArch === "x64"
 		? [
 				{ variant: "modern", filename: `pi_natives.${platformTag}-modern.node` },
 				{ variant: "baseline", filename: `pi_natives.${platformTag}-baseline.node` },
 			]
 		: [{ variant: "default", filename: `pi_natives.${platformTag}.node` }];
+const candidates: CandidateAddon[] = [
+	...coreCandidates,
+	...(targetPlatform === "linux" && targetArch === "x64"
+		? coreCandidates.map(candidate => ({
+				...candidate,
+				filename: candidate.filename.replace("pi_natives.", "pi_natives.desktop."),
+			}))
+		: []),
+];
 
 const available: AvailableAddon[] = [];
 for (const candidate of candidates) {
@@ -89,6 +98,13 @@ for (const candidate of candidates) {
 	}
 }
 
+if (
+	targetPlatform === "linux" &&
+	targetArch === "x64" &&
+	!available.some(addon => addon.filename.startsWith("pi_natives.desktop."))
+) {
+	throw new Error(`Missing packaged Linux desktop addon for ${platformTag}`);
+}
 if (available.length === 0) {
 	const expected = candidates.map(candidate => `  - ${candidate.filename}`).join("\n");
 	throw new Error(`No native addons found for ${platformTag}. Expected one of:\n${expected}`);

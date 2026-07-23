@@ -58,9 +58,11 @@ export const LEAF_TARGETS: readonly LeafTarget[] = [
 const packageDirDefault = path.join(import.meta.dir, "..");
 
 function expectedAddonFilenames(tag: string): string[] {
-	return tag.endsWith("-x64")
+	const core = tag.endsWith("-x64")
 		? [`pi_natives.${tag}-baseline.node`, `pi_natives.${tag}-modern.node`, `pi_natives.${tag}.node`]
 		: [`pi_natives.${tag}.node`];
+	if (tag !== "linux-x64") return core;
+	return [...core, ...core.map(filename => filename.replace("pi_natives.", "pi_natives.desktop."))];
 }
 
 function discoverAddonFiles(nativeDir: string, tag: string): Promise<string[]> {

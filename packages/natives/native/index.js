@@ -1,4 +1,4 @@
-import { loadNative } from "./loader-state.js";
+import { createDesktopSession, loadNative } from "./loader-state.js";
 
 /**
  * Native addon entrypoint.
@@ -16,6 +16,7 @@ import { loadNative } from "./loader-state.js";
 const nativeBindings = loadNative();
 // --- generated native exports (do not edit) ---
 // classes
+export const DesktopSession = createDesktopSession(nativeBindings.DesktopSession);
 export const MacAppearanceObserver = nativeBindings.MacAppearanceObserver;
 export const MacOSPowerAssertion = nativeBindings.MacOSPowerAssertion;
 export const Process = nativeBindings.Process;

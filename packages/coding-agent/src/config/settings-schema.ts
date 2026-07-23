@@ -141,6 +141,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Available Tools",
 		"Todos",
 		"Grep & Browser",
+		"Computer",
 		"GitHub",
 		"Output Limits",
 		"Execution",
@@ -3827,6 +3828,66 @@ export const SETTINGS_SCHEMA = {
 			group: "Available Tools",
 			label: "Inspect Image",
 			description: "Enable the inspect_image tool, delegating image understanding to a vision-capable model",
+		},
+	},
+
+	"computer.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Computer",
+			description: "Enable native host-desktop screenshots and input for OpenAI computer use",
+		},
+	},
+
+	"computer.backend": {
+		type: "enum",
+		values: ["auto", "native"] as const,
+		default: "auto",
+		ui: {
+			tab: "tools",
+			group: "Computer",
+			label: "Computer Backend",
+			description: "Select automatic or explicit platform-native desktop capture and input",
+			options: [
+				{ value: "auto", label: "Auto" },
+				{ value: "native", label: "Native" },
+			],
+		},
+	},
+
+	"computer.display": {
+		type: "string",
+		default: "all",
+		ui: {
+			tab: "tools",
+			group: "Computer",
+			label: "Computer Display",
+			description: "Composite all displays or select a native display id",
+		},
+	},
+
+	"computer.maxWidth": {
+		type: "number",
+		default: 1920,
+		ui: {
+			tab: "tools",
+			group: "Computer",
+			label: "Computer Screenshot Width",
+			description: "Maximum composite screenshot width in pixels",
+		},
+	},
+
+	"computer.maxHeight": {
+		type: "number",
+		default: 1200,
+		ui: {
+			tab: "tools",
+			group: "Computer",
+			label: "Computer Screenshot Height",
+			description: "Maximum composite screenshot height in pixels",
 		},
 	},
 

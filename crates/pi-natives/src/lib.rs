@@ -27,6 +27,15 @@ pub mod ast;
 pub mod block;
 pub mod clipboard;
 pub mod crash_handler;
+#[cfg(any(
+	target_os = "macos",
+	target_os = "windows",
+	all(target_os = "linux", not(target_env = "musl"), feature = "native-desktop-linux")
+))]
+pub mod desktop;
+#[cfg(all(target_os = "linux", any(target_env = "musl", not(feature = "native-desktop-linux"))))]
+#[path = "desktop_unsupported.rs"]
+pub mod desktop;
 pub mod diff;
 pub mod fd;
 pub mod glob;

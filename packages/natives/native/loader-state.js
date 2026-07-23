@@ -104,6 +104,17 @@ export function getAddonFilenames({ tag, arch, variant }) {
 }
 
 /**
+ * Derive the separately packaged Linux desktop addon names for the selected
+ * core-addon variant. Empty on targets where DesktopSession lives in core.
+ * @param {{ tag: string; arch: string; variant: "modern" | "baseline" | null | undefined }} input
+ * @returns {string[]}
+ */
+export function getDesktopAddonFilenames(input) {
+	if (input.tag !== "linux-x64" || input.arch !== "x64") return [];
+	return getAddonFilenames(input).map(filename => filename.replace("pi_natives.", "pi_natives.desktop."));
+}
+
+/**
  * Decide whether the loader should mirror the package's `native/<filename>.node`
  * into the per-version cache directory (`~/.omp/natives/<version>/`) before loading.
  *
@@ -357,16 +368,17 @@ function resolveCpuVariant(override) {
 
 function selectEmbeddedAddonFile(selectedVariant) {
 	if (!embeddedAddon) return null;
-	const defaultFile = embeddedAddon.files.find(file => file.variant === "default") || null;
-	if (process.arch !== "x64") return defaultFile || embeddedAddon.files[0] || null;
+	const coreFiles = embeddedAddon.files.filter(file => !file.filename.startsWith("pi_natives.desktop."));
+	const defaultFile = coreFiles.find(file => file.variant === "default") || null;
+	if (process.arch !== "x64") return defaultFile || coreFiles[0] || null;
 	if (selectedVariant === "modern") {
 		return (
-			embeddedAddon.files.find(file => file.variant === "modern") ||
-			embeddedAddon.files.find(file => file.variant === "baseline") ||
+			coreFiles.find(file => file.variant === "modern") ||
+			coreFiles.find(file => file.variant === "baseline") ||
 			null
 		);
 	}
-	return embeddedAddon.files.find(file => file.variant === "baseline") || null;
+	return coreFiles.find(file => file.variant === "baseline") || null;
 }
 
 function readTarString(buffer, offset, length) {
@@ -746,6 +758,66 @@ function initLoaderContext() {
 		versionSentinelExport,
 		isWorkspaceLoad,
 		nativesDir,
+	};
+}
+
+let desktopNativeBindings;
+
+/** Load the feature-enabled Linux desktop addon only when DesktopSession is constructed. */
+export function loadDesktopNative() {
+	if (desktopNativeBindings) return desktopNativeBindings;
+	const ctx = initLoaderContext();
+	const addonFilenames = getDesktopAddonFilenames({
+		tag: ctx.platformTag,
+		arch: process.arch,
+		variant: ctx.selectedVariant,
+	});
+	if (addonFilenames.length === 0) return null;
+	const candidates = resolveLoaderCandidates({
+		addonFilenames,
+		isCompiledBinary: ctx.isCompiledBinary,
+		stageFromNodeModules: false,
+		nativeDir: ctx.nativeDir,
+		leafPackageDir: ctx.leafPackageDir,
+		execDir: path.dirname(process.execPath),
+		versionedDir: ctx.versionedDir,
+		userDataDir:
+			process.platform === "win32"
+				? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "omp")
+				: path.join(os.homedir(), ".local", "bin"),
+	});
+	const require_ = createRequire(import.meta.url);
+	const errors = [];
+	let packaged = false;
+	for (const candidate of candidates) {
+		if (!fs.existsSync(candidate)) continue;
+		packaged = true;
+		try {
+			startupMarker(`native:requireDesktop:${path.basename(candidate)}`);
+			const bindings = require_(candidate);
+			validateLoadedBindings(ctx, bindings, candidate);
+			installNativeTokioRuntime(bindings);
+			desktopNativeBindings = bindings;
+			return bindings;
+		} catch (err) {
+			errors.push(`${candidate}: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+	if (!packaged) return null;
+	throw new Error(`Failed to load packaged Linux desktop addon.\n${errors.map(error => `- ${error}`).join("\n")}`);
+}
+
+/**
+ * Preserve the generated class-shaped API while deferring Linux GUI dlopen
+ * until construction. Unsupported Linux artifacts retain core's typed stub.
+ */
+export function createDesktopSession(coreConstructor) {
+	return class DesktopSession {
+		constructor(options) {
+			const bindings = loadDesktopNative();
+			const Constructor = bindings?.DesktopSession ?? coreConstructor;
+			return new Constructor(options);
+		}
 	};
 }
 

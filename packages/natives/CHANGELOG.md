@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a genuine native desktop backend for computer use, including macOS Quartz/CGEvent support and a lazily loaded Linux x64 glibc addon with X11 capture and libei portal input. Unsupported Linux arm64/musl and currently unsupported pure-Wayland/multi-output cases fail closed.
+
 ## [17.0.8] - 2026-07-22
 
 ### Added
