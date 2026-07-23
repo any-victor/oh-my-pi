@@ -15920,7 +15920,7 @@ export class AgentSession {
 			// (e.g. suppressing a duplicate error toast) don't stay latched on
 			// an announcement that never resolves.
 			if (this.#retryAttempt > 1) {
-				await this.#persistRetryLifecycleErrorMessage(message);
+				await this.#persistTerminalEmptyErrorTurn(message);
 				await this.#emitSessionEvent({
 					type: "auto_retry_end",
 					success: false,
@@ -15945,7 +15945,7 @@ export class AgentSession {
 		) {
 			// Same auto_retry_end backstop as the classifier-refusal branch above.
 			if (this.#retryAttempt > 1) {
-				await this.#persistRetryLifecycleErrorMessage(message);
+				await this.#persistTerminalEmptyErrorTurn(message);
 				await this.#emitSessionEvent({
 					type: "auto_retry_end",
 					success: false,
