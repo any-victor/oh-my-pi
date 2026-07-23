@@ -2026,8 +2026,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// the background.
 		await modelRegistry.refreshRuntimeProviders("offline");
 		// Continue runtime discovery in the background (cache-aware) so startup is
-		// only blocked on local cache reads, not provider network fetches.
-		void modelRegistry.refreshRuntimeProviders().catch(error => {
+		// only blocked on local cache reads, not provider network fetches. Stash
+		// the promise so the deferred `--model` retry below can await it instead
+		// of starting a second concurrent discovery pass (the unfiltered
+		// `refresh()` also covers runtime model managers).
+		const runtimeDiscoveryPromise = modelRegistry.refreshRuntimeProviders().catch(error => {
 			logger.warn("runtime provider discovery failed", {
 				error: error instanceof Error ? error.message : String(error),
 			});
@@ -2076,6 +2079,29 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// registered. Use the same CLI resolver as the immediate path so bare role
 		// names, exact model names, and provider selectors keep one precedence rule.
 		if (!model && deferredModelPatterns.length > 0) {
+			// Deferred `--model` patterns almost always failed at the immediate
+			// path (main.ts:881) precisely because discovery-backed providers
+			// hadn't populated yet. Await the in-flight runtime discovery
+			// already kicked off above (stash + reuse avoids a second concurrent
+			// `#refreshRuntimeDiscoveries` pass for the same runtime model
+			// managers). `refreshRuntimeProviders()` only covers runtime model
+			// managers, not config-discovery providers (e.g. user-configured
+			// ollama); fall back to a full cache-aware refresh only when the
+			// runtime pass didn't surface a match. By then runtime managers
+			// short-circuit on the fresh cache written by the awaited pass,
+			// closing the double-fetch window.
+			if (modelRegistry.getDiscoverableProviders().length > 0) {
+				await logger.time("resolveModelDiscoveryDeferredRetry", () => runtimeDiscoveryPromise);
+				const availableModelsAfterRuntime = modelRegistry.getAll();
+				const runtimeResolved = deferredModelPatterns.some(pattern =>
+					availableModelsAfterRuntime.some(m => `${m.provider}/${m.id}` === pattern),
+				);
+				if (!runtimeResolved) {
+					await logger.time("resolveModelDiscoveryFallbackNonRuntime", () =>
+						modelRegistry.refresh("online-if-uncached"),
+					);
+				}
+			}
 			const availableModels = modelRegistry.getAll();
 			const matchPreferences = getModelMatchPreferences(settings);
 			const expandedModelPatterns = deferredModelPatterns.flatMap(pattern =>
