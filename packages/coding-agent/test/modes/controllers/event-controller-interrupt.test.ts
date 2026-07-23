@@ -22,6 +22,11 @@ function createContext() {
 		transcriptMessageComponents: new WeakMap(),
 		pendingTools,
 		hideThinkingBlock: false,
+		getUserMessageText: () => "new prompt",
+		locallySubmittedUserSignatures: new Set<string>(),
+		addMessageToChat: vi.fn(),
+		editor: { setText: vi.fn() },
+		updatePendingMessagesDisplay: vi.fn(),
 		setWorkingMessage,
 		clearPinnedError: vi.fn(),
 		ensureLoadingAnimation,
@@ -62,15 +67,24 @@ describe("EventController aborted-turn working messages", () => {
 		resetSettingsForTest();
 	});
 
-	it("preserves playback across internal turns and clears it for a new agent run", async () => {
+	it("preserves playback across internal continuations and clears it for a user message", async () => {
 		const clear = vi.spyOn(vocalizer, "clear").mockImplementation(() => {});
 		const { ctx } = createContext();
 		const controller = new EventController(ctx);
 
+		await controller.handleEvent(AGENT_START);
 		await controller.handleEvent({ type: "turn_start" });
 		expect(clear).not.toHaveBeenCalled();
 
-		await controller.handleEvent(AGENT_START);
+		await controller.handleEvent({
+			type: "message_start",
+			message: {
+				role: "user",
+				content: [{ type: "text", text: "new prompt" }],
+				attribution: "user",
+				timestamp: Date.now(),
+			},
+		});
 		expect(clear).toHaveBeenCalledTimes(1);
 	});
 

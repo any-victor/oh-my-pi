@@ -405,7 +405,6 @@ export class EventController {
 	}
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
-		vocalizer.clear();
 		this.#toolTimelineComponents.clear();
 		this.#postToolAssistantComponents.clear();
 		this.#lastIntent = undefined;
@@ -450,6 +449,7 @@ export class EventController {
 			}
 			this.ctx.ui.requestRender();
 		} else if (event.message.role === "user") {
+			vocalizer.clear();
 			const textContent = this.ctx.getUserMessageText(event.message);
 			const imageBlocks =
 				typeof event.message.content === "string"
