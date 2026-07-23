@@ -3150,8 +3150,9 @@ export class AuthStorage {
 		const parsedReport = parseHeaders(headers, now);
 		if (!parsedReport) return false;
 		// Throttled to one ingest per interval — except when a window reads
-		// exhausted: that snapshot must land immediately so the next getApiKey
-		// blocks the credential instead of burning a wire 429 on the wall.
+		// exhausted: persist that snapshot immediately. A full-backed cache can
+		// then block the next getApiKey; a cold header-only snapshot first probes
+		// the usage endpoint.
 		const exhausted = parsedReport.limits.some(limit => this.#isUsageLimitExhausted(limit));
 		const last = this.#usageHeaderIngestAt.get(cacheKey);
 		if (!exhausted && last !== undefined && now - last < USAGE_HEADER_INGEST_INTERVAL_MS) return false;
@@ -3195,12 +3196,17 @@ export class AuthStorage {
 				metadata: {
 					...(report.metadata ?? {}),
 					...(prior.metadata ?? {}),
+					source: prior.metadata?.source,
 					headersUpdatedAt: now,
 				},
 			};
 		}
 
-		this.#usageCache.set(cacheKey, { value: merged, expiresAt: now + USAGE_REPORT_TTL_MS });
+		// Header-only reports are last-good hints, not completed usage fetches.
+		// Keep them durable but stale so the next poll probes the provider; a
+		// failed probe still applies the normal short backoff in #fetchUsageCached.
+		const expiresAt = merged.metadata?.source === "ratelimit-headers" ? now - 1 : now + USAGE_REPORT_TTL_MS;
+		this.#usageCache.set(cacheKey, { value: merged, expiresAt });
 		this.#usageHeaderIngestAt.set(cacheKey, now);
 		return true;
 	}

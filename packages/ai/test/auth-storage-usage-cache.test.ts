@@ -382,28 +382,48 @@ describe("AuthStorage usage cache: header ingestion", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("writes the same per-credential cache key that fetchUsageReports reads", async () => {
+	it("does not let repeated cold header ingestion suppress the first full fetch", async () => {
+		const start = Date.now();
+		const now = vi.spyOn(Date, "now").mockReturnValue(start);
+		const baseReport = makeTieredReport("a@example.com");
+		const fullReport: UsageReport = {
+			...baseReport,
+			limits: [
+				...baseReport.limits,
+				{
+					id: "anthropic:extra",
+					label: "Claude Extra Usage",
+					scope: { provider: "anthropic", windowId: "extra" },
+					amount: { used: 12.34, limit: 100, usedFraction: 0.1234, unit: "usd" },
+					status: "ok",
+				},
+			],
+			raw: { extra_usage: { used: 1_234, limit: 10_000 } },
+		};
 		let calls = 0;
 		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => {
 			calls += 1;
-			throw new Error("usage endpoint should not be probed after header ingestion");
+			return fullReport;
 		});
 
 		expect(await storage.getApiKey("anthropic", "s")).toBe("oat-1");
 		expect(storage.ingestUsageHeaders("anthropic", usageHeaders("0.02", "0.3"), { sessionId: "s" })).toBe(true);
+		now.mockReturnValue(start + 60_001);
+		expect(storage.ingestUsageHeaders("anthropic", usageHeaders("0.05", "0.6"), { sessionId: "s" })).toBe(true);
 
 		const report = requireAnthropicReport(await storage.fetchUsageReports());
-		expect(calls).toBe(0);
-		expect(report.metadata?.source).toBe("ratelimit-headers");
+		expect(calls).toBe(1);
+		expect(report.metadata?.source).toBeUndefined();
 		expect(report.metadata?.email).toBe("a@example.com");
-		expect(report.metadata?.accountId).toBe("account-1");
-		expect(requireLimit(report, "anthropic:5h").amount.used).toBe(2);
-		expect(requireLimit(report, "anthropic:7d").amount.used).toBe(30);
+		expect(report.metadata?.accountId).toBe("account-a@example.com");
+		expect(requireLimit(report, "anthropic:7d:opus").amount.used).toBe(12);
+		expect(requireLimit(report, "anthropic:extra").amount.used).toBe(12.34);
 	});
 
 	it("merges active credential metadata into existing header cache entries", async () => {
 		const start = Date.now();
 		const now = vi.spyOn(Date, "now").mockReturnValue(start);
+		const fetchSpy = vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockResolvedValue(null);
 		expect(await storage.getApiKey("anthropic", "legacy-session")).toBe("oat-1");
 		expect(
 			storage.ingestUsageHeaders("anthropic", usageHeaders("0.02", "0.3"), { sessionId: "legacy-session" }),
@@ -425,6 +445,9 @@ describe("AuthStorage usage cache: header ingestion", () => {
 		).toBe(true);
 
 		const report = requireAnthropicReport(await storage.fetchUsageReports());
+		const cachedReport = requireAnthropicReport(await storage.fetchUsageReports());
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(requireLimit(cachedReport, "anthropic:5h").amount.used).toBe(5);
 		expect(report.metadata?.source).toBe("ratelimit-headers");
 		expect(report.metadata?.email).toBe("a@example.com");
 		expect(report.metadata?.accountId).toBe("account-1");
@@ -461,6 +484,7 @@ describe("AuthStorage usage cache: header ingestion", () => {
 		expect(mergedReport.metadata?.email).toBe("a@example.com");
 		expect(mergedReport.metadata?.accountId).toBe("account-a@example.com");
 		expect(mergedReport.metadata?.headersUpdatedAt).toBeGreaterThanOrEqual(beforeIngest);
+		expect(mergedReport.metadata?.source).toBeUndefined();
 		expect(requireLimit(mergedReport, "anthropic:5h").amount.used).toBe(5);
 		expect(requireLimit(mergedReport, "anthropic:7d").amount.used).toBe(90);
 		expect(requireLimit(mergedReport, "anthropic:7d:opus").amount.used).toBe(12);
