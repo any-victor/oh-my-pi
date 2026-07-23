@@ -29,6 +29,7 @@
 
 ### Fixed
 
+- Fixed `omp say` playing no audio for a short single-segment clip on hosts where the first streaming backend (the bundled ffmpeg built without pulse/alsa output) spawns then exits nonzero: the pipe write succeeds before that death and `player.end()` has already closed the input, so neither the broken-pipe replay nor the early-exit handler advanced to `paplay`/`aplay`. `StreamingAudioPlayer` now retains the utterance PCM and, when the streaming backend exits nonzero, replays it through per-file playback so short clips still reach the speakers ([#5875](https://github.com/can1357/oh-my-pi/issues/5875)).
 - Fixed `error.notify` raising a "Stopped with error" toast for provider failures while an auto-retry or async-delivery continuation was pending; the toast now waits for the true terminal settle.
 - Fixed terminal `yield` results racing post-turn maintenance, which could trigger an unnecessary automatic handoff or compaction.
 - Fixed credential-shaped tokens (GitHub/GitLab/OpenAI/Anthropic key patterns) being redacted from outbound provider requests even with `secrets.enabled` off; the pattern redaction now follows the `secrets.enabled` ("Hide Secrets") setting like the secret obfuscator.

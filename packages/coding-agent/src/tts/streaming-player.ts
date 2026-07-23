@@ -90,6 +90,18 @@ export function streamingPlayerCommandsFor(
 }
 
 /**
+ * Test seams for {@link StreamingAudioPlayer}: override backend discovery and
+ * the per-file fallback so playback logic can be exercised without a real audio
+ * device. Both default to the platform lookup and {@link playAudioFile}.
+ */
+export interface StreamingPlayerOptions {
+	/** Ordered backend commands for a sample rate; defaults to {@link streamingPlayerCommandsFor}. */
+	commandsFor?: (sampleRate: number) => PlayerCommand[];
+	/** Per-file fallback playback; defaults to {@link playAudioFile}. */
+	playAudio?: (wavPath: string, signal: AbortSignal) => Promise<void>;
+}
+
+/**
  * Single-session gapless player. Lifecycle: {@link start} once, {@link write}
  * chunks in order, then {@link end} to drain or {@link stop} to abort. Not
  * reusable after stop/end — create a new instance per utterance.
@@ -111,6 +123,15 @@ export class StreamingAudioPlayer {
 	#abortController = new AbortController();
 	#wake: (() => void) | null = null;
 	#drain: Promise<void> = Promise.resolve();
+	readonly #commandsFor: (sampleRate: number) => PlayerCommand[];
+	readonly #playAudio: (wavPath: string, signal: AbortSignal) => Promise<void>;
+	/** Streamed PCM retained for this utterance so a failed backend can be replayed via file playback. */
+	#played: Float32Array[] = [];
+
+	constructor(options: StreamingPlayerOptions = {}) {
+		this.#commandsFor = options.commandsFor ?? (rate => streamingPlayerCommandsFor(process.platform, rate));
+		this.#playAudio = options.playAudio ?? ((wavPath, signal) => playAudioFile(wavPath, { signal }));
+	}
 
 	/** Pick a backend and begin draining. Idempotent; the first call's rate wins. */
 	start(sampleRate: number): void {
@@ -146,6 +167,7 @@ export class StreamingAudioPlayer {
 		if (this.#stopped) return;
 		this.#stopped = true;
 		this.#queue.length = 0;
+		this.#played.length = 0;
 		this.#abortController.abort();
 		this.#signal();
 		try {
@@ -168,7 +190,7 @@ export class StreamingAudioPlayer {
 	 * in-flight chunk.
 	 */
 	#spawnStream(): boolean {
-		this.#candidates ??= streamingPlayerCommandsFor(process.platform, this.#sampleRate);
+		this.#candidates ??= this.#commandsFor(this.#sampleRate);
 		for (let command = this.#candidates.shift(); command; command = this.#candidates.shift()) {
 			const { cmd, args } = command;
 			try {
@@ -213,6 +235,7 @@ export class StreamingAudioPlayer {
 					continue;
 				}
 				if (this.#mode === "stream") {
+					this.#played.push(chunk);
 					// Pace writes so the player buffers ~LEAD_SECONDS, no more, keeping
 					// ducking and stop responsive instead of locked behind buffered audio.
 					const ahead = this.#writtenSec - (performance.now() - this.#startedAt) / 1000;
@@ -242,10 +265,26 @@ export class StreamingAudioPlayer {
 				try {
 					await this.#sink?.end();
 				} catch {}
-				if (this.#proc) {
+				const proc = this.#proc;
+				let exitCode: number | null = null;
+				if (proc) {
 					try {
-						await this.#proc.exited;
+						exitCode = await proc.exited;
 					} catch {}
+				}
+				// A streaming backend that exits nonzero never opened its audio
+				// device (e.g. the bundled ffmpeg built without pulse/alsa output).
+				// For a short single-segment clip the pipe write succeeds before
+				// that death and #inputClosed is already set, so neither the
+				// broken-pipe replay nor the early-exit handler advances backends.
+				// Replay the buffered utterance through per-file playback so it
+				// still reaches the speakers.
+				if (!this.#stopped && proc && exitCode !== 0) {
+					this.#mode = "file";
+					for (const chunk of this.#played) {
+						if (this.#stopped) break;
+						await this.#playFile(chunk);
+					}
 				}
 			}
 		} catch (error) {
@@ -291,7 +330,7 @@ export class StreamingAudioPlayer {
 		const wavPath = path.join(os.tmpdir(), `omp-speech-${Snowflake.next()}.wav`);
 		try {
 			await fs.writeFile(wavPath, encodeWav(this.#scaled(pcm), this.#sampleRate));
-			if (!this.#stopped) await playAudioFile(wavPath, { signal: this.#abortController.signal });
+			if (!this.#stopped) await this.#playAudio(wavPath, this.#abortController.signal);
 		} catch (error) {
 			logger.debug("tts: file playback failed", {
 				error: error instanceof Error ? error.message : String(error),
