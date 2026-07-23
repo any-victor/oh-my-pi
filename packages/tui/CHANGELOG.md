@@ -6,6 +6,10 @@
 
 - `Text.setStyleFn()` applies a foreground styler at render time, so a component re-resolves its color after `invalidate()` instead of baking the palette that was active when it was constructed.
 
+### Fixed
+
+- Fixed teardown leaving the terminal in cursor-key/keypad application mode (DECCKM), which broke arrow keys in the parent shell after exit; `stop()` and `emergencyTerminalRestore()` now emit the standard `rmkx` resets ([#6374](https://github.com/can1357/oh-my-pi/issues/6374)).
+
 ## [17.0.9] - 2026-07-23
 
 ### Added

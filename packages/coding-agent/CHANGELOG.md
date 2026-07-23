@@ -215,7 +215,6 @@
 - Changed every bundled TTSR rule to warn without interrupting generation.
 - Renamed the system prompt's project-context section wrapper from `<context>` to `<repo-rules>` to stop it colliding with the `task` tool's `context` parameter under in-band XML tool dialects: models were closing `<parameter name="context">` with a stray `</context>` (primed by the ambient section tag) and emitting sibling params as bare `<tasks>` elements, so `tasks` arrived missing.
 - Rendered `read xd://` calls in the compact grouped read view instead of a full tool-execution card; other internal URLs (`skill://`, `agent://`, …) still render full so their resolved content stays visible.
-- Changed `providers.webSearch` preferred provider failure handling to fall back and cascade through other configured/default search providers rather than stopping immediately.
 
 ### Fixed
 
@@ -311,6 +310,10 @@
 - Fixed custom `anthropic-messages` OAuth providers being unable to opt into configured Claude Code fingerprint header overrides. ([#5888](https://github.com/can1357/oh-my-pi/issues/5888))
 - Fixed authoritative providers (e.g. `openai-codex`) keeping unsupported bundled models selectable when a fresh model cache and an expired OAuth token coincided: built-in discovery now forces the OAuth refresh so the provider's model manager is constructed and prunes stale bundled entries (e.g. `gpt-5.4-nano`) instead of waiting out the cache TTL. ([#5364](https://github.com/can1357/oh-my-pi/issues/5364))
 - Added `providers.webSearchOrder` to prioritize web-search fallbacks while preserving the built-in order for unlisted providers; a failing preferred provider now continues through that fallback chain.
+
+### Changed
+
+- Changed `providers.webSearch` preferred provider failure handling to fall back and cascade through other configured/default search providers rather than stopping immediately.
 
 ## [17.0.5] - 2026-07-18
 
