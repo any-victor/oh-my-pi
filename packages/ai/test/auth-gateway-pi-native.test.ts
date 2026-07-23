@@ -107,6 +107,7 @@ describe("pi-native parseRequest", () => {
 			context: baseContext,
 			options: {
 				temperature: 0.2,
+				cachedContent: "cachedContents/caller-owned-corpus",
 				apiKey: "should-be-stripped",
 				signal: {},
 				fetch: () => {},
@@ -118,11 +119,13 @@ describe("pi-native parseRequest", () => {
 				notARealField: "ignored",
 			},
 		});
-		expect(parsed.options).toEqual({ temperature: 0.2 });
+		expect(parsed.options).toEqual({ temperature: 0.2, cachedContent: "cachedContents/caller-owned-corpus" });
 		expect("apiKey" in parsed.options).toBe(false);
 		expect("signal" in parsed.options).toBe(false);
 		expect("fetch" in parsed.options).toBe(false);
 		expect("onPayload" in parsed.options).toBe(false);
+		expect("onResponse" in parsed.options).toBe(false);
+		expect("onSseEvent" in parsed.options).toBe(false);
 		expect("notARealField" in parsed.options).toBe(false);
 	});
 

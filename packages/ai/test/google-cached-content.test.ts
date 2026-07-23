@@ -4,6 +4,7 @@ import { streamGoogle } from "@oh-my-pi/pi-ai/providers/google";
 import type { GoogleGeminiCliOptions } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import { buildGoogleGenerateContentParams } from "@oh-my-pi/pi-ai/providers/google-shared";
 import { streamGoogleVertex } from "@oh-my-pi/pi-ai/providers/google-vertex";
+import { parseRequest as parsePiNativeRequest } from "@oh-my-pi/pi-ai/providers/pi-native-server";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { ApiOptionsMap, AssistantMessageEvent, Context, FetchImpl, Model, Tool } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -82,6 +83,34 @@ function sseStop(usage?: Record<string, number>): Response {
 		status: 200,
 		headers: { "content-type": "text/event-stream" },
 	});
+}
+
+function piNativeSseStop(): Response {
+	const message = {
+		role: "assistant",
+		content: [],
+		api: "google-generative-ai",
+		provider: "google",
+		model: "gemini-2.5-flash",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: 0,
+	};
+	return new Response(`data: ${JSON.stringify({ type: "done", reason: "stop", message })}\n\ndata: [DONE]\n\n`, {
+		status: 200,
+		headers: { "content-type": "text/event-stream" },
+	});
+}
+
+function piNativeGatewayModel<T extends "google-generative-ai" | "google-vertex">(model: Model<T>): Model<T> {
+	return { ...model, baseUrl: "http://pi-native-gateway.test", transport: "pi-native" };
 }
 
 async function drain(stream: AsyncIterable<AssistantMessageEvent>): Promise<AssistantMessageEvent[]> {
@@ -199,6 +228,33 @@ describe("Google caller-owned cachedContent", () => {
 		);
 		expect(nonGoogle.calls()).toHaveLength(1);
 		expect(nonGoogle.calls()[0]?.body.cachedContent).toBeUndefined();
+	});
+
+	it("round-trips cachedContent through the pi-native gateway for Gemini and Vertex", async () => {
+		const requests: unknown[] = [];
+		const fetch: FetchImpl = async (_input, init) => {
+			requests.push(JSON.parse(String(init?.body ?? "{}")));
+			return piNativeSseStop();
+		};
+
+		for (const [model, cachedContent] of [
+			[piNativeGatewayModel(geminiModel), CACHE_NAME],
+			[piNativeGatewayModel(vertexModel), VERTEX_CACHE_NAME],
+		] as const) {
+			await drain(
+				streamSimple(model, cacheOnlyContext, {
+					apiKey: "gateway-bearer",
+					cachedContent,
+					fetch,
+				}),
+			);
+		}
+
+		expect(requests).toHaveLength(2);
+		expect(requests.map(request => parsePiNativeRequest(request).options.cachedContent)).toEqual([
+			CACHE_NAME,
+			VERTEX_CACHE_NAME,
+		]);
 	});
 
 	it("rejects blank cachedContent in the shared builder before transport", () => {
