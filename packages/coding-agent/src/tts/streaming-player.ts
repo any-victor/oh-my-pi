@@ -31,6 +31,15 @@ const DEFAULT_SAMPLE_RATE = 24_000;
 const LEAD_SECONDS = 0.6;
 /** Output gain applied while ducked (the user is speaking over the assistant). */
 export const DUCK_GAIN = 0.25;
+/**
+ * Cap on streamed PCM retained for the nonzero-exit replay. Past this the
+ * buffer is dropped: the failure being recovered is a short clip that fits the
+ * OS pipe buffer before a broken backend dies, while a backend that consumed
+ * minutes of realtime-paced audio was playing it — replaying a whole long
+ * utterance would duplicate audio, and unbounded retention (~5.8 MB/min at
+ * 24 kHz mono f32) would defeat streaming for long input.
+ */
+const REPLAY_RETENTION_SECONDS = 60;
 
 /** Injection seam for {@link streamingPlayerCommandsFor} — defaults to real PATH/tools lookups. */
 export interface StreamingPlayerLookup {
@@ -99,6 +108,8 @@ export interface StreamingPlayerOptions {
 	commandsFor?: (sampleRate: number) => PlayerCommand[];
 	/** Per-file fallback playback; defaults to {@link playAudioFile}. */
 	playAudio?: (wavPath: string, signal: AbortSignal) => Promise<void>;
+	/** Max seconds of streamed PCM retained for the nonzero-exit replay; defaults to {@link REPLAY_RETENTION_SECONDS}. */
+	replayRetentionSeconds?: number;
 }
 
 /**
@@ -125,12 +136,15 @@ export class StreamingAudioPlayer {
 	#drain: Promise<void> = Promise.resolve();
 	readonly #commandsFor: (sampleRate: number) => PlayerCommand[];
 	readonly #playAudio: (wavPath: string, signal: AbortSignal) => Promise<void>;
+	readonly #replayRetentionSec: number;
 	/** Streamed PCM retained for this utterance so a failed backend can be replayed via file playback. */
 	#played: Float32Array[] = [];
+	#playedSec = 0;
 
 	constructor(options: StreamingPlayerOptions = {}) {
 		this.#commandsFor = options.commandsFor ?? (rate => streamingPlayerCommandsFor(process.platform, rate));
 		this.#playAudio = options.playAudio ?? ((wavPath, signal) => playAudioFile(wavPath, { signal }));
+		this.#replayRetentionSec = options.replayRetentionSeconds ?? REPLAY_RETENTION_SECONDS;
 	}
 
 	/** Pick a backend and begin draining. Idempotent; the first call's rate wins. */
@@ -235,7 +249,12 @@ export class StreamingAudioPlayer {
 					continue;
 				}
 				if (this.#mode === "stream") {
-					this.#played.push(chunk);
+					if (this.#playedSec <= this.#replayRetentionSec) {
+						this.#played.push(chunk);
+						this.#playedSec += chunk.length / this.#sampleRate;
+						// Over the cap: drop retention for the rest of the utterance.
+						if (this.#playedSec > this.#replayRetentionSec) this.#played.length = 0;
+					}
 					// Pace writes so the player buffers ~LEAD_SECONDS, no more, keeping
 					// ducking and stop responsive instead of locked behind buffered audio.
 					const ahead = this.#writtenSec - (performance.now() - this.#startedAt) / 1000;

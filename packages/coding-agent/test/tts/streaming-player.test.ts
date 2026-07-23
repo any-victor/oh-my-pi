@@ -51,4 +51,22 @@ describe("StreamingAudioPlayer nonzero-exit fallback", () => {
 		await player.end();
 		expect(played.length).toBe(2);
 	});
+
+	it("drops the replay buffer once the utterance exceeds the retention cap", async () => {
+		// Long input must not accumulate unbounded PCM; past the cap the
+		// nonzero-exit replay is forfeited rather than duplicating audio the
+		// backend already played.
+		const played: string[] = [];
+		const player = new StreamingAudioPlayer({
+			commandsFor: (): PlayerCommand[] => [{ cmd: "sh", args: ["-c", "cat >/dev/null; exit 1"] }],
+			playAudio: async wavPath => {
+				played.push(wavPath);
+			},
+			replayRetentionSeconds: 0.25,
+		});
+		player.start(24_000);
+		player.write(clip());
+		await player.end();
+		expect(played.length).toBe(0);
+	});
 });
