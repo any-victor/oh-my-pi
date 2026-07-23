@@ -587,15 +587,23 @@ export class EditTool implements AgentTool<TInput> {
 					onUpdate?: (partialResult: AgentToolResult<EditToolDetails, TInput>) => void,
 				) => {
 					const entries = expandApplyPatchToEntries(params as ApplyPatchParams);
+					// Resolve each authored path once per patch so paired hunks (e.g. delete
+					// then re-add of the same file) share the same workspace target.
+					const resolvedTargets = new Map<string, Promise<string>>();
+					const resolveOnce = (path: string, mustExist: boolean): Promise<string> => {
+						let pending = resolvedTargets.get(path);
+						if (!pending) {
+							pending = resolveEditPath(tool.session, path, { mustExist, signal });
+							resolvedTargets.set(path, pending);
+						}
+						return pending;
+					};
 					const perFile = entries.map(entry => {
 						const { path, ...patchParams } = entry;
 						return {
 							path,
 							run: async (br: LspBatchRequest | undefined) => {
-								const targetPath = await resolveEditPath(tool.session, path, {
-									mustExist: patchParams.op !== "create",
-									signal,
-								});
+								const targetPath = await resolveOnce(path, patchParams.op !== "create");
 								return executePatchSingle({
 									session: tool.session,
 									path: targetPath,

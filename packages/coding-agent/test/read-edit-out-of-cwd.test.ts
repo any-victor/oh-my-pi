@@ -198,6 +198,30 @@ describe("read → edit round-trip for out-of-cwd files", () => {
 		}
 	});
 
+	it("keeps the resolved workspace target across delete/add hunks for the same authored path", async () => {
+		const fileName = "recreate.txt";
+		const workspaceFile = path.join(cwdDir, "src", fileName);
+		await Bun.write(workspaceFile, "alpha\nbeta\n");
+
+		const session = createSession(cwdDir);
+		session.settings.set("edit.mode", "apply_patch");
+		const readResult = await new ReadTool(session).execute("read-workspace-suffix-recreate", { path: fileName });
+		expect(textOutput(readResult)).toContain("alpha");
+
+		const input = [
+			"*** Begin Patch",
+			`*** Delete File: ${fileName}`,
+			`*** Add File: ${fileName}`,
+			"+rewritten",
+			"*** End Patch",
+			"",
+		].join("\n");
+		await new EditTool(session).execute("edit-workspace-suffix-recreate", { input });
+
+		expect(await Bun.file(workspaceFile).text()).toBe("rewritten\n");
+		expect(await Bun.file(path.join(cwdDir, fileName)).exists()).toBe(false);
+	});
+
 	it("prefers a unique workspace suffix match over the approved local plan alias", async () => {
 		const artifactsDir = path.join(outDir, "artifacts");
 		const planFilePath = "local://windows-packaging-plan.md";
