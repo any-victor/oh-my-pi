@@ -1036,13 +1036,8 @@ function parseUsageCacheEntry<T>(raw: string): UsageCacheEntry<T> | undefined {
 		const parsed = JSON.parse(raw) as { value?: T; expiresAt?: unknown; staleUntil?: unknown };
 		const expiresAt = typeof parsed.expiresAt === "number" ? parsed.expiresAt : undefined;
 		if (!expiresAt || !Number.isFinite(expiresAt)) return undefined;
-		const staleUntil =
-			typeof parsed.staleUntil === "number"
-				? parsed.staleUntil
-				: parsed.value === null
-					? expiresAt
-					: expiresAt + USAGE_LAST_GOOD_RETENTION_MS;
-		if (!Number.isFinite(staleUntil)) return undefined;
+		const staleUntil = typeof parsed.staleUntil === "number" ? parsed.staleUntil : undefined;
+		if (staleUntil !== undefined && !Number.isFinite(staleUntil)) return undefined;
 		return { value: parsed.value as T, expiresAt, staleUntil };
 	} catch {
 		return undefined;
@@ -1138,7 +1133,7 @@ class AuthStorageUsageCache implements UsageCache {
 		const raw = this.store.getCache(`${USAGE_CACHE_PREFIX}${key}`, { includeExpired: true });
 		if (!raw) return undefined;
 		const entry = parseUsageCacheEntry<T>(raw);
-		return entry && (entry.staleUntil ?? entry.expiresAt) > Date.now() ? entry : undefined;
+		return entry && (entry.staleUntil === undefined || entry.staleUntil > Date.now()) ? entry : undefined;
 	}
 
 	set<T>(key: string, entry: UsageCacheEntry<T>): void {
@@ -3121,22 +3116,13 @@ export class AuthStorage {
 				listUsageCosts: query => this.#store.listUsageCosts?.(query) ?? [],
 			});
 			if (!rawReport) return null;
-			const validatedReport = usageReportSchema(rawReport);
-			if (validatedReport instanceof type.errors) {
-				this.#usageLogger?.debug("Usage provider returned an invalid report", {
-					provider: request.provider,
-					error: validatedReport.summary,
-				});
-				return null;
-			}
-			if (validatedReport.provider !== request.provider) {
-				this.#usageLogger?.debug("Usage provider returned a report for a different provider", {
-					provider: request.provider,
-					reportProvider: validatedReport.provider,
-				});
-				return null;
-			}
-			const report = validatedReport;
+			const report = request.usageProviderExtensionOwned
+				? this.#validateUsageReport(rawReport, {
+						expectedProvider: request.provider,
+						source: "Usage provider",
+					})
+				: rawReport;
+			if (!report) return null;
 			// Attribute the report to the credential's organization. The orgId and
 			// orgName fallbacks apply independently: Claude's usage endpoint stamps
 			// orgId from the `anthropic-organization-id` response header but never
