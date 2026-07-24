@@ -39,6 +39,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { isInsideTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
+	$env,
 	APP_NAME,
 	adjustHsv,
 	formatNumber,
@@ -113,6 +114,7 @@ import { STTController, type SttState } from "../stt";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
 import { formatTaskId } from "../task/render";
 import type { ConfiguredThinkingLevel } from "../thinking";
+import { tinyTitleClient } from "../tiny/title-client";
 import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
@@ -1013,6 +1015,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncEditorMaxHeight();
 		this.isInitialized = true;
 		this.ui.requestRender(true);
+
+		// Prewarm the local tiny-title worker off the submit hot path: spawn it
+		// now, idle and unref'd, so the first submit reuses a live subprocess
+		// instead of paying spawn latency ahead of the first frame (issue #6462).
+		// No-ops for the online default and for already-named sessions that will
+		// not be titled.
+		if (!$env.PI_NO_TITLE && !this.sessionManager.getSessionName()) {
+			tinyTitleClient.prewarm(this.settings.get("providers.tinyModel"));
+		}
 
 		// Initialize hooks with TUI-based UI context
 		await this.initHooksAndCustomTools();
