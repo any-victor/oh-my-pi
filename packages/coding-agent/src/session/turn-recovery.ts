@@ -105,6 +105,7 @@ export interface TurnRecoveryHost {
 	streamingEditAbortTriggered(): boolean;
 	promptGeneration(): number;
 	sessionId(): string;
+	usageScopeId(): string;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
 	scheduleAgentContinue(options: { delayMs?: number; generation?: number }): void;
 	waitForSessionMessagePersistence(message: AssistantMessage): Promise<void>;
@@ -1298,6 +1299,7 @@ export class TurnRecovery {
 				activeModel.provider,
 				this.#host.sessionId(),
 				{
+					usageScopeId: this.#host.usageScopeId(),
 					retryAfterMs,
 					baseUrl: activeModel.baseUrl,
 					modelId: activeModel.id,

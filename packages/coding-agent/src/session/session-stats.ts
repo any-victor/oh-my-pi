@@ -27,6 +27,7 @@ export interface SessionStatsTrackerHost {
 	modelRegistry: ModelRegistry;
 	model(): Model | undefined;
 	sessionId(): string;
+	usageScopeId(): string;
 }
 
 /** Computes session totals and tracks the in-flight context estimate. */
@@ -269,6 +270,7 @@ export class SessionStatsTracker {
 		if (!provider) return;
 		this.#host.modelRegistry.authStorage.ingestUsageHeaders(provider, response.headers, {
 			sessionId: this.#host.agent.sessionId,
+			usageScopeId: this.#host.usageScopeId(),
 			baseUrl: this.#host.modelRegistry.getProviderBaseUrl?.(provider),
 		});
 	}

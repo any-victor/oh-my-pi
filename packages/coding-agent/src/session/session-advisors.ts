@@ -227,6 +227,7 @@ export interface SessionAdvisorsHost {
 	onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
 	agentKind(): "main" | "sub";
+	usageScopeId(): string;
 	isDisposed(): boolean;
 	abortInProgress(): boolean;
 	allowAgentInitiatedTurns(): boolean;
@@ -1042,6 +1043,7 @@ export class SessionAdvisors {
 				currentModel.provider,
 				advisor.providerSessionId,
 				{
+					usageScopeId: this.#host.usageScopeId(),
 					retryAfterMs: extractRetryHint(undefined, message),
 					baseUrl: currentModel.baseUrl,
 					modelId: currentModel.id,
@@ -1073,6 +1075,7 @@ export class SessionAdvisors {
 				currentModel.provider,
 				advisor.providerSessionId,
 				{
+					usageScopeId: this.#host.usageScopeId(),
 					retryAfterMs,
 					baseUrl: currentModel.baseUrl,
 					modelId: currentModel.id,

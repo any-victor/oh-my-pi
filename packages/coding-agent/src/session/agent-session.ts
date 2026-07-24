@@ -1008,6 +1008,7 @@ export class AgentSession {
 			streamingEditAbortTriggered: () => this.#streamingEditGuard.abortTriggered,
 			promptGeneration: () => this.#promptGeneration,
 			sessionId: () => this.sessionId,
+			usageScopeId: () => this.#usageProviderScopeId,
 			emitSessionEvent: event => this.#emitSessionEvent(event),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			waitForSessionMessagePersistence: message => this.#waitForSessionMessagePersistence(message),
@@ -1027,6 +1028,7 @@ export class AgentSession {
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#modelRegistry,
 			model: () => this.model,
+			usageScopeId: () => this.#usageProviderScopeId,
 			sessionId: () => this.sessionId,
 		};
 		this.#stats = new SessionStatsTracker(statsHost);
@@ -1334,6 +1336,7 @@ export class AgentSession {
 				this.#recovery.noteRetryFallbackCooldown(selector, retryAfterMs, errorMessage),
 			createCodexCompactionContext: createMaintenanceCodexCompactionContext,
 			sessionId: () => this.sessionId,
+			usageScopeId: () => this.#usageProviderScopeId,
 		};
 		this.#advisors = new SessionAdvisors(advisorsHost, {
 			enabled: this.settings.get("advisor.enabled"),
@@ -2432,6 +2435,7 @@ export class AgentSession {
 				if (assistantMsg.provider === "opencode-go") {
 					this.#modelRegistry.authStorage.recordUsageCost(assistantMsg.provider, assistantMsg.usage.cost.total, {
 						sessionId: this.#activeProviderSessionId(),
+						usageScopeId: this.#usageProviderScopeId,
 						recordedAt: assistantMsg.timestamp,
 						baseUrl: this.#modelRegistry.getProviderBaseUrl?.(assistantMsg.provider),
 					});
