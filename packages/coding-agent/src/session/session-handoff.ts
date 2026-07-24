@@ -41,6 +41,7 @@ export interface SessionHandoffHost {
 	model(): Model | undefined;
 	thinkingLevel(): ThinkingLevel | undefined;
 	sessionId(): string;
+	usageScopeId(): string;
 	sessionFile(): string | undefined;
 	baseSystemPrompt(): string[];
 	assertVibeSessionTransitionAllowed(action: string): void;
@@ -133,7 +134,9 @@ export class SessionHandoff {
 			if (!model) {
 				throw new Error("No model selected for handoff");
 			}
-			const apiKey = await this.#host.modelRegistry.getApiKey(model, this.#host.sessionId());
+			const apiKey = await this.#host.modelRegistry.getApiKey(model, this.#host.sessionId(), {
+				usageScopeId: this.#host.usageScopeId(),
+			});
 			if (!apiKey) {
 				throw new Error(`No API key for ${model.provider}`);
 			}
@@ -172,7 +175,10 @@ export class SessionHandoff {
 			);
 			const handoffStreamOptions = this.#host.prepareSimpleStreamOptions(
 				{
-					apiKey: this.#host.modelRegistry.resolver(model, cacheSessionId),
+					apiKey: this.#host.modelRegistry.resolver(model, {
+						sessionId: cacheSessionId,
+						usageScopeId: this.#host.usageScopeId(),
+					}),
 					sessionId: `${cacheSessionId}:side:${Snowflake.next()}`,
 					promptCacheKey: handoffPromptCacheKey,
 					preferWebsockets: false,

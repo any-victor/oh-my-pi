@@ -185,6 +185,7 @@ export interface SessionMaintenanceHost {
 	isGeneratingHandoff(): boolean;
 	promptGeneration(): number;
 	sessionId(): string;
+	usageScopeId(): string;
 	messages(): AgentMessage[];
 	baseSystemPrompt(): string[];
 	goalModeState(): GoalModeState | undefined;

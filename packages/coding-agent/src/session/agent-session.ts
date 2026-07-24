@@ -944,6 +944,7 @@ export class AgentSession {
 			agent: this.agent,
 			settings: this.settings,
 			modelRegistry: this.#modelRegistry,
+			usageScopeId: () => this.#usageProviderScopeId,
 			sessionManager: this.sessionManager,
 			providerSessionState: this.#providerSessionState,
 			model: () => this.model,
@@ -1335,8 +1336,8 @@ export class AgentSession {
 			noteRetryFallbackCooldown: (selector, retryAfterMs, errorMessage) =>
 				this.#recovery.noteRetryFallbackCooldown(selector, retryAfterMs, errorMessage),
 			createCodexCompactionContext: createMaintenanceCodexCompactionContext,
-			sessionId: () => this.sessionId,
 			usageScopeId: () => this.#usageProviderScopeId,
+			sessionId: () => this.sessionId,
 		};
 		this.#advisors = new SessionAdvisors(advisorsHost, {
 			enabled: this.settings.get("advisor.enabled"),
@@ -1391,6 +1392,7 @@ export class AgentSession {
 			},
 			syncTodoPhasesFromBranch: () => this.#todo.syncFromBranch(),
 			resetAdvisorRuntimes: () => this.#advisors.resetAllRuntimes(),
+			usageScopeId: () => this.#usageProviderScopeId,
 			rebaseAfterCompaction: () => this.#stats.rebaseAfterCompaction(),
 			getContextBreakdown: options => this.getContextBreakdown(options),
 			getContextUsage: options => this.getContextUsage(options),
@@ -1420,6 +1422,7 @@ export class AgentSession {
 			model: () => this.model,
 			thinkingLevel: () => this.thinkingLevel,
 			sessionId: () => this.sessionId,
+			usageScopeId: () => this.#usageProviderScopeId,
 			sessionFile: () => this.sessionFile,
 			baseSystemPrompt: () => this.#tools.baseSystemPrompt,
 			assertVibeSessionTransitionAllowed: action => this.#assertVibeSessionTransitionAllowed(action),

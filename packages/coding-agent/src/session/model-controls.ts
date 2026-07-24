@@ -48,6 +48,7 @@ export interface ModelControlsHost {
 	providerSessionState: Map<string, ProviderSessionState>;
 	model(): Model | undefined;
 	sessionId(): string;
+	usageScopeId(): string;
 	promptGeneration(): number;
 	resolveActiveEditMode(): EditMode;
 	syncAfterModelChange(previousEditMode: EditMode): Promise<void>;
@@ -424,7 +425,9 @@ export class ModelControls {
 		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
 		const nextModel = availableModels[nextIndex];
 
-		const apiKey = await this.#host.modelRegistry.getApiKey(nextModel, this.#host.sessionId());
+		const apiKey = await this.#host.modelRegistry.getApiKey(nextModel, this.#host.sessionId(), {
+			usageScopeId: this.#host.usageScopeId(),
+		});
 		if (!apiKey) {
 			throw new Error(`No API key for ${nextModel.provider}/${nextModel.id}`);
 		}
