@@ -130,7 +130,7 @@ describe("describeAttachedImagesForTextModel", () => {
 
 		await describeAttachedImagesForTextModel([{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }], deps);
 
-		expect(getApiKeyCalls).toEqual([[visionModel, "provider-session", "usage-scope"]]);
+		expect(getApiKeyCalls).toEqual([[visionModel, "provider-session", { usageScopeId: "usage-scope" }]]);
 		expect(resolverCalls).toEqual([[visionModel, { sessionId: "provider-session", usageScopeId: "usage-scope" }]]);
 	});
 

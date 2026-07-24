@@ -102,7 +102,13 @@ export const mnemopiBackend: MemoryBackend = {
 		}
 
 		try {
-			const config = await loadMnemopiConfigWithProviders(settings, agentDir, modelRegistry, sessionId);
+			const config = await loadMnemopiConfigWithProviders(
+				settings,
+				agentDir,
+				modelRegistry,
+				sessionId,
+				session.usageProviderScopeId,
+			);
 			await Promise.all([loadMnemopi(), loadMnemopiCore()]);
 			await installMnemopiState(session, config);
 		} catch (error) {
@@ -158,6 +164,7 @@ export const mnemopiBackend: MemoryBackend = {
 					agentDir,
 					session.modelRegistry,
 					session.sessionId,
+					session.usageProviderScopeId,
 				);
 				await Promise.all([loadMnemopi(), loadMnemopiCore()]);
 				state = await installMnemopiState(session, config);
@@ -454,9 +461,16 @@ async function loadMnemopiConfigWithProviders(
 	agentDir: string,
 	modelRegistry: ModelRegistry,
 	sessionId: string,
+	usageScopeId?: string,
 ): Promise<MnemopiBackendConfig> {
 	const config = loadMnemopiConfig(settings, agentDir);
-	config.providerOptions = await resolveMnemopiProviderOptions(config, settings, modelRegistry, sessionId);
+	config.providerOptions = await resolveMnemopiProviderOptions(
+		config,
+		settings,
+		modelRegistry,
+		sessionId,
+		usageScopeId,
+	);
 	return config;
 }
 
@@ -472,11 +486,12 @@ async function openrouterKeyResolver(
 	modelRegistry: ModelRegistry,
 	sessionId: string,
 	baseUrl: string | undefined,
+	usageScopeId?: string,
 ): Promise<ApiKeyResolver | undefined> {
 	if (baseUrl !== undefined && !hostMatchesUrl(baseUrl, "openrouter")) return undefined;
-	const key = await modelRegistry.getApiKeyForProvider("openrouter", sessionId);
+	const key = await modelRegistry.getApiKeyForProvider("openrouter", sessionId, { usageScopeId });
 	if (key === undefined || key === "") return undefined;
-	return modelRegistry.resolver("openrouter", { sessionId });
+	return modelRegistry.resolver("openrouter", { sessionId, usageScopeId });
 }
 
 async function resolveMnemopiProviderOptions(
@@ -484,6 +499,7 @@ async function resolveMnemopiProviderOptions(
 	settings: MemoryBackendStartOptions["settings"],
 	modelRegistry: ModelRegistry,
 	sessionId: string,
+	usageScopeId?: string,
 ): Promise<MnemopiProviderOptions> {
 	const base: MnemopiProviderOptions = {
 		noEmbeddings: config.providerOptions.noEmbeddings,
@@ -491,7 +507,7 @@ async function resolveMnemopiProviderOptions(
 		embeddingApiUrl: config.providerOptions.embeddingApiUrl,
 		embeddingApiKey:
 			config.providerOptions.embeddingApiKey ??
-			(await openrouterKeyResolver(modelRegistry, sessionId, config.providerOptions.embeddingApiUrl)),
+			(await openrouterKeyResolver(modelRegistry, sessionId, config.providerOptions.embeddingApiUrl, usageScopeId)),
 		llm: false,
 	};
 
@@ -521,7 +537,7 @@ async function resolveMnemopiProviderOptions(
 					config.llmApiKey ??
 					(config.llmBaseUrl === undefined
 						? undefined
-						: await openrouterKeyResolver(modelRegistry, sessionId, config.llmBaseUrl)),
+						: await openrouterKeyResolver(modelRegistry, sessionId, config.llmBaseUrl, usageScopeId)),
 				model: config.llmModel,
 			},
 		};
@@ -537,7 +553,7 @@ async function resolveMnemopiProviderOptions(
 		return {
 			...base,
 			llm: async (prompt, opts) => {
-				const hasApiKey = await modelRegistry.getApiKey(model, sessionId);
+				const hasApiKey = await modelRegistry.getApiKey(model, sessionId, usageScopeId);
 				if (!hasApiKey) {
 					logger.warn("Mnemopi: smol completion requested but no current API key is available.", {
 						provider: model.provider,
@@ -551,7 +567,7 @@ async function resolveMnemopiProviderOptions(
 						messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 					},
 					{
-						apiKey: modelRegistry.resolver(model, sessionId),
+						apiKey: modelRegistry.resolver(model, { sessionId, usageScopeId }),
 						maxTokens: opts?.maxTokens,
 						temperature: opts?.temperature,
 					},

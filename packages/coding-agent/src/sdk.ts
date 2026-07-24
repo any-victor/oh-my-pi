@@ -9,14 +9,15 @@ import {
 	filterProviderReplayMessages,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
-import type {
-	Context,
-	CredentialDisabledEvent,
-	Message,
-	Model,
-	ModelUsageHealth,
-	ProviderSessionState,
-	SimpleStreamOptions,
+import {
+	type Context,
+	type CredentialDisabledEvent,
+	type Message,
+	type Model,
+	type ModelUsageHealth,
+	type ProviderSessionState,
+	type SimpleStreamOptions,
+	UsageProviderRegistry,
 } from "@oh-my-pi/pi-ai";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import {
@@ -74,6 +75,7 @@ import {
 import { discoverCustomToolPaths, loadCustomTools, type ToolPathWithSource } from "./extensibility/custom-tools";
 import type { CustomTool, CustomToolContext, CustomToolSessionEvent } from "./extensibility/custom-tools/types";
 import {
+	collectExtensionUsageProviderRegistrations,
 	discoverAndLoadExtensions,
 	discoverExtensionPaths,
 	type ExtensionContext,
@@ -710,6 +712,11 @@ export async function loadCliExtensionProviders(
 	const eventBus = new EventBus();
 	const extensionsResult = await loadSessionExtensions(options, cwd, settings, eventBus);
 	const activeSources = extensionsResult.extensions.map(extension => extension.path);
+	const usageRegistrations = collectExtensionUsageProviderRegistrations(extensionsResult.extensions);
+	new UsageProviderRegistry().syncRegistrations(activeSources, usageRegistrations);
+	for (const { name, config } of extensionsResult.runtime.pendingProviderRegistrations) {
+		modelRegistry.validateProviderRegistration(name, config);
+	}
 	modelRegistry.syncExtensionSources(activeSources);
 	for (const sourceId of new Set(activeSources)) {
 		modelRegistry.clearSourceRegistrations(sourceId);
@@ -718,6 +725,7 @@ export async function loadCliExtensionProviders(
 		modelRegistry.registerProvider(name, config, sourceId);
 	}
 	extensionsResult.runtime.pendingProviderRegistrations = [];
+	modelRegistry.authStorage.syncExtensionUsageProviders(activeSources, usageRegistrations);
 	await modelRegistry.refreshRuntimeProviders();
 }
 

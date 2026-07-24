@@ -3430,12 +3430,11 @@ export class AuthStorage {
 			};
 		}
 
-		// Header ingestion merges values but never extends a cache entry's lifetime.
-		// Preserve the existing expiry (including active failure cooldowns) so full
-		// reports refetch on their original 5-minute schedule and full-payload-only
-		// rows such as extra usage stay current; headers only refresh window rows
-		// between fetches. A newly minted header-only report is durable but stale.
-		const expiresAt = Math.max(priorEntry?.expiresAt ?? now - 1, now - 1);
+		// A header-only extension report uses the same durable cache as a fetched
+		// report. Built-ins retain their existing stale-header refresh behavior.
+		const expiresAt = request.usageProviderExtensionOwned
+			? now + USAGE_REPORT_TTL_MS
+			: Math.max(priorEntry?.expiresAt ?? now - 1, now - 1);
 		this.#usageCache.set(cacheKey, { value: merged, expiresAt });
 		this.#usageHeaderIngestAt.set(cacheKey, now);
 		return true;

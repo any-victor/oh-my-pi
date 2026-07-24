@@ -976,8 +976,20 @@ export class AgentSession {
 		);
 		this.#unregisterUsageProviderScope = this.#modelRegistry.authStorage.registerSessionUsageProviders(
 			this.#usageProviderScopeId,
-			usageRegistry,
+			{
+				resolve: provider => usageRegistry.resolve(provider),
+				cacheKeyVersion: provider => {
+					const version = usageRegistry.cacheKeyVersion(provider);
+					return version === null ? null : `${this.#usageProviderScopeId}:${version}`;
+				},
+				providerIds: () => usageRegistry.providerIds(),
+			},
 		);
+		this.agent.getApiKey = model =>
+			this.#modelRegistry.resolver(model, {
+				sessionId: this.sessionId,
+				usageScopeId: this.#usageProviderScopeId,
+			});
 		this.#customCommands = config.customCommands ?? [];
 		const recoveryHost: TurnRecoveryHost = {
 			agent: this.agent,
