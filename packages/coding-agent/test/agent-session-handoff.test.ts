@@ -1297,20 +1297,23 @@ describe("AgentSession handoff", () => {
 		};
 		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(fixedPreparation);
 		let archiveSource = "";
-		vi.spyOn(snapcompact, "compact").mockImplementation(async (preparation, archiveOptions) => {
-			const convertToLlm = archiveOptions?.convertToLlm;
-			if (!convertToLlm) throw new Error("Expected snapcompact archive converter");
-			archiveSource = snapcompact.serializeConversation(convertToLlm(preparation.messagesToSummarize));
-			return {
-				summary: "snapcompact summary",
-				shortSummary: undefined,
-				firstKeptEntryId: lastEntryId,
-				tokensBefore: 100,
-				details: { readFiles: [], modifiedFiles: [] },
-			};
-		});
+		const snapcompactSpy = vi
+			.spyOn(snapcompact, "compact")
+			.mockImplementation(async (preparation, archiveOptions) => {
+				const convertToLlm = archiveOptions?.convertToLlm;
+				if (!convertToLlm) throw new Error("Expected snapcompact archive converter");
+				archiveSource = snapcompact.serializeConversation(convertToLlm(preparation.messagesToSummarize));
+				return {
+					summary: "snapcompact summary",
+					shortSummary: undefined,
+					firstKeptEntryId: lastEntryId,
+					tokensBefore: 100,
+					details: { readFiles: [], modifiedFiles: [] },
+				};
+			});
 
 		await session.compact(undefined, { mode: "snapcompact" });
+		expect(snapcompactSpy).toHaveBeenCalledTimes(1);
 
 		expect(archiveSource).toContain("FROZEN_ARCHIVE_WRAP_7303057 archive source");
 		expect(archiveSource).not.toContain("<summary>\narchive source\n</summary>");
