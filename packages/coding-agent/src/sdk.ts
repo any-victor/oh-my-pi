@@ -3094,6 +3094,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Owned only when this session created the manager; subagents receive a
 		// parent's manager via `options.mcpManager` and MUST NOT disconnect it.
 		const ownedMcpManager = options.mcpManager ? undefined : mcpManager;
+		// Snapshot the runner's extension usage-provider registrations once at
+		// construction; AgentSession receives them instead of introspecting the runner.
+		const usageProviderRegistrations = collectExtensionUsageProviderRegistrations(extensionRunner.getExtensions());
 		session = new AgentSession({
 			advisorWatchdogPrompt,
 			advisorContextPrompt,
@@ -3120,6 +3123,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			promptTemplates,
 			slashCommands,
 			extensionRunner,
+			usageProviderRegistrations,
 			customCommands: customCommandsResult.commands,
 			skills,
 			skillWarnings,

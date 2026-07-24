@@ -1,12 +1,16 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type StreamFn } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { Model, UsageProviderRegistration } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import {
+	collectExtensionUsageProviderRegistrations,
+	ExtensionRuntime,
+	loadExtensionFromFactory,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -38,6 +42,18 @@ async function scopedExtensionRunner(providerId: string, cwd: string): Promise<E
 		emit: async () => undefined,
 		emitBeforeAgentStart: async () => undefined,
 	} as unknown as ExtensionRunner;
+}
+
+/** Runner plus the registrations the SDK would collect from it, matching production DI. */
+async function scopedExtensionConfig(
+	providerId: string,
+	cwd: string,
+): Promise<{ extensionRunner: ExtensionRunner; usageProviderRegistrations: UsageProviderRegistration[] }> {
+	const extensionRunner = await scopedExtensionRunner(providerId, cwd);
+	return {
+		extensionRunner,
+		usageProviderRegistrations: collectExtensionUsageProviderRegistrations(extensionRunner.getExtensions()),
+	};
 }
 
 function createAgent(model: Model, streamFn?: StreamFn): Agent {
@@ -101,7 +117,7 @@ describe("AgentSession extension usage-provider attribution", () => {
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry,
-			extensionRunner: await scopedExtensionRunner(model.provider, tempDir.path()),
+			...(await scopedExtensionConfig(model.provider, tempDir.path())),
 		});
 		const ingestUsageHeaders = vi.spyOn(authStorage, "ingestUsageHeaders");
 
@@ -129,7 +145,7 @@ describe("AgentSession extension usage-provider attribution", () => {
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.baseDelayMs": 0, "retry.maxRetries": 1 }),
 			modelRegistry,
-			extensionRunner: await scopedExtensionRunner(model.provider, tempDir.path()),
+			...(await scopedExtensionConfig(model.provider, tempDir.path())),
 		});
 		const markUsageLimitReached = vi
 			.spyOn(authStorage, "markUsageLimitReached")
@@ -166,7 +182,7 @@ describe("AgentSession extension usage-provider attribution", () => {
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry,
-			extensionRunner: await scopedExtensionRunner(model.provider, tempDir.path()),
+			...(await scopedExtensionConfig(model.provider, tempDir.path())),
 		});
 		const recordUsageCost = vi.spyOn(authStorage, "recordUsageCost");
 
@@ -180,5 +196,40 @@ describe("AgentSession extension usage-provider attribution", () => {
 			recordedAt: expect.any(Number),
 			baseUrl: modelRegistry.getProviderBaseUrl?.("opencode-go"),
 		});
+	});
+
+	it("skips scope registration and preserves credential resolution when no providers are registered", () => {
+		const model = requiredModel();
+		const agent = createAgent(model);
+		const originalGetApiKey = agent.getApiKey;
+		const register = vi.spyOn(authStorage, "registerSessionUsageProviders");
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+		});
+		expect(register).not.toHaveBeenCalled();
+		expect(agent.getApiKey).toBe(originalGetApiKey);
+	});
+
+	it("registers a disposable scope and scopes credential resolution when providers exist", async () => {
+		const model = requiredModel();
+		const agent = createAgent(model);
+		const originalGetApiKey = agent.getApiKey;
+		const unregister = vi.fn();
+		const register = vi.spyOn(authStorage, "registerSessionUsageProviders").mockReturnValue(unregister);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+			...(await scopedExtensionConfig(model.provider, tempDir.path())),
+		});
+		expect(register).toHaveBeenCalledWith(session.usageProviderScopeId, expect.any(Object));
+		expect(agent.getApiKey).not.toBe(originalGetApiKey);
+		await session.dispose();
+		session = undefined;
+		expect(unregister).toHaveBeenCalledTimes(1);
 	});
 });

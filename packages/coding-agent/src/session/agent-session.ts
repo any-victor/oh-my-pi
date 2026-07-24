@@ -128,7 +128,6 @@ import type {
 	TurnStartEvent,
 } from "../extensibility/extensions";
 import { emitSessionShutdownEvent } from "../extensibility/extensions";
-import { collectExtensionUsageProviderRegistrations } from "../extensibility/extensions/loader";
 import { ManagedTimers } from "../extensibility/extensions/managed-timers";
 import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
@@ -969,28 +968,33 @@ export class AgentSession {
 		this.#promptTemplates = config.promptTemplates ?? [];
 		this.#slashCommands = config.slashCommands ?? [];
 		this.#extensionRunner = config.extensionRunner;
-		const usageProviders = collectExtensionUsageProviderRegistrations(this.#extensionRunner?.getExtensions() ?? []);
-		const usageRegistry = new UsageProviderRegistry();
-		usageRegistry.syncRegistrations(
-			[...new Set(usageProviders.map(registration => registration.sourceId))],
-			usageProviders,
-		);
-		this.#unregisterUsageProviderScope = this.#modelRegistry.authStorage.registerSessionUsageProviders(
-			this.#usageProviderScopeId,
-			{
-				resolve: provider => usageRegistry.resolve(provider),
-				cacheKeyVersion: provider => {
-					const version = usageRegistry.cacheKeyVersion(provider);
-					return version === null ? null : `${this.#usageProviderScopeId}:${version}`;
+		const usageProviders = config.usageProviderRegistrations ?? [];
+		// Only stand up the transient usage-provider scope when extensions actually
+		// registered providers; with none, builtin usage behaviour is unchanged and
+		// the session needs no scope registration or scoped credential override.
+		if (usageProviders.length > 0) {
+			const usageRegistry = new UsageProviderRegistry();
+			usageRegistry.syncRegistrations(
+				[...new Set(usageProviders.map(registration => registration.sourceId))],
+				usageProviders,
+			);
+			this.#unregisterUsageProviderScope = this.#modelRegistry.authStorage.registerSessionUsageProviders(
+				this.#usageProviderScopeId,
+				{
+					resolve: provider => usageRegistry.resolve(provider),
+					cacheKeyVersion: provider => {
+						const version = usageRegistry.cacheKeyVersion(provider);
+						return version === null ? null : `${this.#usageProviderScopeId}:${version}`;
+					},
+					providerIds: () => usageRegistry.providerIds(),
 				},
-				providerIds: () => usageRegistry.providerIds(),
-			},
-		);
-		this.agent.getApiKey = model =>
-			this.#modelRegistry.resolver(model, {
-				sessionId: this.sessionId,
-				usageScopeId: this.#usageProviderScopeId,
-			});
+			);
+			this.agent.getApiKey = model =>
+				this.#modelRegistry.resolver(model, {
+					sessionId: this.sessionId,
+					usageScopeId: this.#usageProviderScopeId,
+				});
+		}
 		this.#customCommands = config.customCommands ?? [];
 		const recoveryHost: TurnRecoveryHost = {
 			agent: this.agent,

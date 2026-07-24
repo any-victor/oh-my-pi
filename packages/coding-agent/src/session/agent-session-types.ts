@@ -9,6 +9,7 @@ import type {
 	ServiceTierByFamily,
 	SimpleStreamOptions,
 	ToolChoice,
+	UsageProviderRegistration,
 } from "@oh-my-pi/pi-ai";
 import type { postmortem } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "../advisor";
@@ -121,6 +122,12 @@ export interface AgentSessionConfig {
 	slashCommands?: FileSlashCommand[];
 	/** Extension runner created with wrapped tools. */
 	extensionRunner?: ExtensionRunner;
+	/**
+	 * Extension usage-provider registrations for this session's transient scope,
+	 * collected once by the SDK from the runner's loaded extensions. Defaults to
+	 * empty so AgentSession never introspects the runner for extensions.
+	 */
+	usageProviderRegistrations?: readonly UsageProviderRegistration[];
 	/** Loaded skills already discovered by the SDK. */
 	skills?: Skill[];
 	/** Skill loading warnings already captured by the SDK. */
