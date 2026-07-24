@@ -565,6 +565,80 @@ describe("AgentSession handoff", () => {
 		expect(captured.join("\n")).not.toContain("STALE_SUMMARY_4076");
 	});
 
+	it("renders freshly resolved branch-summary templates into the navigateTree summary request", async () => {
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			obfuscator,
+			compactionPromptTemplates: { branchSummary: "STALE_BRANCH_4076 {{conversation}}" },
+			resolveCompactionPromptTemplates: async () => ({
+				branchSummary: "FRESH_BRANCH_4076 {{conversation}}",
+			}),
+		});
+		sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "branch seed" }],
+			timestamp: Date.now() - 3,
+		});
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "branch seed response" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 8,
+				output: 4,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 12,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now() - 2,
+		});
+		const captured: string[] = [];
+		const originalGenerate = compactionModule.generateBranchSummary;
+		vi.spyOn(compactionModule, "generateBranchSummary").mockImplementation((entries, opts) =>
+			originalGenerate(entries, {
+				...opts,
+				completeImpl: async (_model, context) => {
+					captured.push(JSON.stringify(context));
+					const message: AssistantMessage = {
+						role: "assistant",
+						content: [{ type: "text", text: "branch summary text" }],
+						api: model.api,
+						provider: model.provider,
+						model: model.id,
+						stopReason: "stop",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						timestamp: Date.now(),
+					};
+					return message;
+				},
+			}),
+		);
+
+		const tree = sessionManager.getTree();
+		const rootId = tree[0]?.entry.id;
+		expect(rootId).toBeDefined();
+		const result = await session.navigateTree(rootId!, { summarize: true });
+
+		expect(result.cancelled).toBe(false);
+		expect(captured.join("\n")).toContain("FRESH_BRANCH_4076");
+		expect(captured.join("\n")).not.toContain("STALE_BRANCH_4076");
+	});
+
 	it("keeps conversion templates session-frozen when the resolver changes them", async () => {
 		await session.dispose();
 		session = new AgentSession({

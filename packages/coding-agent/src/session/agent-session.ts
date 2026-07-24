@@ -7512,6 +7512,7 @@ export class AgentSession {
 				throw new Error(`No API key for ${model.provider}`);
 			}
 			const branchSummarySettings = this.settings.getGroup("branchSummary");
+			const branchPromptTemplates = await this.#resolveOperationPromptTemplates();
 			const result = await generateBranchSummary(entriesToSummarize, {
 				model,
 				apiKey: this.#modelRegistry.resolver(model, this.sessionId),
@@ -7519,7 +7520,8 @@ export class AgentSession {
 				customInstructions: this.#obfuscateTextForProvider(options.customInstructions),
 				reserveTokens: branchSummarySettings.reserveTokens,
 				metadata: this.agent.metadataForProvider(model.provider),
-				convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+				promptTemplates: branchPromptTemplates,
+				convertToLlm: (messages, promptTemplates) => this.#convertToLlmForSideRequest(messages, promptTemplates),
 				telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
 				// Same per-provider concurrency cap rationale as the compaction
 				// path above (chatgpt-codex review on #3751).
