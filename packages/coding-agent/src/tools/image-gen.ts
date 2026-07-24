@@ -479,9 +479,11 @@ function parseAntigravityCredentials(raw: string): ParsedAntigravityCredentials 
 async function findAntigravityCredentials(
 	modelRegistry: ModelRegistry,
 	sessionId?: string,
+	usageScopeId?: string,
 ): Promise<ImageApiKey | null> {
 	const apiKey = await modelRegistry.getApiKeyForProvider("google-antigravity", sessionId, {
 		modelId: DEFAULT_ANTIGRAVITY_MODEL,
+		usageScopeId,
 	});
 	if (!apiKey) return null;
 
@@ -495,9 +497,13 @@ async function findAntigravityCredentials(
 	};
 }
 
-async function findXAIImageCredentials(modelRegistry?: ModelRegistry): Promise<ImageApiKey | null> {
+async function findXAIImageCredentials(
+	modelRegistry?: ModelRegistry,
+	sessionId?: string,
+	usageScopeId?: string,
+): Promise<ImageApiKey | null> {
 	if (modelRegistry) {
-		const creds = await resolveXAIHttpCredentials(modelRegistry);
+		const creds = await resolveXAIHttpCredentials(modelRegistry, { sessionId, usageScopeId });
 		if (creds) return { provider: "xai", apiKey: creds.apiKey };
 		return null;
 	}
@@ -509,11 +515,13 @@ async function findXAIImageCredentials(modelRegistry?: ModelRegistry): Promise<I
 async function findOpenRouterImageCredentials(
 	modelRegistry?: ModelRegistry,
 	sessionId?: string,
+	usageScopeId?: string,
 ): Promise<ImageApiKey | null> {
 	if (modelRegistry) {
 		// AuthStorage.getApiKey already falls back to env keys, so this covers OPENROUTER_API_KEY too.
-		const apiKey = await modelRegistry.getApiKeyForProvider("openrouter", sessionId);
-		if (apiKey) return { provider: "openrouter", apiKey: modelRegistry.resolver("openrouter", { sessionId }) };
+		const apiKey = await modelRegistry.getApiKeyForProvider("openrouter", sessionId, { usageScopeId });
+		if (apiKey)
+			return { provider: "openrouter", apiKey: modelRegistry.resolver("openrouter", { sessionId, usageScopeId }) };
 		return null;
 	}
 	const apiKey = getEnvApiKey("openrouter");
@@ -524,12 +532,13 @@ async function findOpenRouterImageCredentials(
 async function findGeminiImageCredentials(
 	modelRegistry?: ModelRegistry,
 	sessionId?: string,
+	usageScopeId?: string,
 ): Promise<ImageApiKey | null> {
 	if (modelRegistry) {
 		// AuthStorage.getApiKey already falls back to env keys (GEMINI_API_KEY), so only
 		// GOOGLE_API_KEY needs the explicit check below.
-		const apiKey = await modelRegistry.getApiKeyForProvider("google", sessionId);
-		if (apiKey) return { provider: "gemini", apiKey: modelRegistry.resolver("google", { sessionId }) };
+		const apiKey = await modelRegistry.getApiKeyForProvider("google", sessionId, { usageScopeId });
+		if (apiKey) return { provider: "gemini", apiKey: modelRegistry.resolver("google", { sessionId, usageScopeId }) };
 	} else {
 		const envKey = getEnvApiKey("google");
 		if (envKey) return { provider: "gemini", apiKey: envKey };
@@ -543,9 +552,10 @@ async function findOpenAIHostedImageCredentials(
 	modelRegistry: ModelRegistry | undefined,
 	activeModel: Model | undefined,
 	sessionId?: string,
+	usageScopeId?: string,
 ): Promise<ImageApiKey | null> {
 	if (!modelRegistry || !isOpenAIHostedImageModel(activeModel)) return null;
-	const apiKey = await modelRegistry.getApiKey(activeModel, sessionId);
+	const apiKey = await modelRegistry.getApiKey(activeModel, sessionId, { usageScopeId });
 	if (!isAuthenticated(apiKey)) return null;
 	return {
 		provider: getOpenAIHostedImageProvider(activeModel),
@@ -580,6 +590,7 @@ async function findCodexSubscriptionImageCredentials(
 	modelRegistry: ModelRegistry | undefined,
 	activeModel: Model | undefined,
 	sessionId?: string,
+	usageScopeId?: string,
 ): Promise<ImageApiKey | null> {
 	if (!modelRegistry) return null;
 	if (isOpenAIHostedImageModel(activeModel) && getOpenAIHostedImageProvider(activeModel) === "openai-codex") {
@@ -588,11 +599,11 @@ async function findCodexSubscriptionImageCredentials(
 	// A Codex subscription credential is an OAuth JWT with an account claim. API
 	// keys stored under this provider cannot use the ChatGPT backend and must not
 	// prevent fallback providers from being selected.
-	const token = await modelRegistry.getApiKeyForProvider("openai-codex", sessionId);
+	const token = await modelRegistry.getApiKeyForProvider("openai-codex", sessionId, { usageScopeId });
 	if (!token || !getCodexAccountId(token)) return null;
 	const model = resolveDefaultCodexImageModel(modelRegistry);
 	if (!model) return null;
-	const apiKey = await modelRegistry.getApiKey(model, sessionId);
+	const apiKey = await modelRegistry.getApiKey(model, sessionId, { usageScopeId });
 	if (!isAuthenticated(apiKey) || !getCodexAccountId(apiKey)) return null;
 	return { provider: "openai-codex", apiKey, model };
 }
@@ -639,20 +650,21 @@ async function findImageApiKey(
 	modelRegistry?: ModelRegistry,
 	activeModel?: Model,
 	sessionId?: string,
+	usageScopeId?: string,
 ): Promise<ImageApiKey | null> {
 	switch (provider) {
 		case "openai":
-			return findOpenAIHostedImageCredentials(modelRegistry, activeModel, sessionId);
+			return findOpenAIHostedImageCredentials(modelRegistry, activeModel, sessionId, usageScopeId);
 		case "openai-codex":
-			return findCodexSubscriptionImageCredentials(modelRegistry, activeModel, sessionId);
+			return findCodexSubscriptionImageCredentials(modelRegistry, activeModel, sessionId, usageScopeId);
 		case "antigravity":
-			return modelRegistry ? findAntigravityCredentials(modelRegistry, sessionId) : null;
+			return modelRegistry ? findAntigravityCredentials(modelRegistry, sessionId, usageScopeId) : null;
 		case "xai":
-			return findXAIImageCredentials(modelRegistry);
+			return findXAIImageCredentials(modelRegistry, sessionId, usageScopeId);
 		case "openrouter":
-			return findOpenRouterImageCredentials(modelRegistry, sessionId);
+			return findOpenRouterImageCredentials(modelRegistry, sessionId, usageScopeId);
 		case "gemini":
-			return findGeminiImageCredentials(modelRegistry, sessionId);
+			return findGeminiImageCredentials(modelRegistry, sessionId, usageScopeId);
 	}
 }
 
@@ -1100,7 +1112,8 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 	parameters: imageGenSchema,
 	async execute(_toolCallId, params, _onUpdate, ctx, signal) {
 		return untilAborted(signal, async () => {
-			const sessionId = ctx.sessionManager.getSessionId();
+			const sessionId = ctx.providerSessionId ?? ctx.sessionManager.getSessionId();
+			const usageScopeId = ctx.usageProviderScopeId;
 			const providerOrder = imageProviderOrder(ctx.model, params.provider);
 			const cwd = ctx.sessionManager.getCwd();
 			const requestSignal = ptree.combineSignals(signal, IMAGE_TIMEOUT);
@@ -1111,7 +1124,13 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 			let resolvedImageCache: InlineImageData[] | undefined;
 
 			for (const preferredProvider of providerOrder) {
-				const apiKey = await findImageApiKey(preferredProvider, ctx.modelRegistry, ctx.model, sessionId);
+				const apiKey = await findImageApiKey(
+					preferredProvider,
+					ctx.modelRegistry,
+					ctx.model,
+					sessionId,
+					usageScopeId,
+				);
 				if (!apiKey) continue;
 				foundCredentials = true;
 				if (!resolvedImageCache) {
@@ -1345,7 +1364,11 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 						if (!ctx.modelRegistry) {
 							throw new Error("Missing modelRegistry for xAI image generation");
 						}
-						const xaiCreds = await resolveXAIHttpCredentials(ctx.modelRegistry, resolvedModel);
+						const xaiCreds = await resolveXAIHttpCredentials(ctx.modelRegistry, {
+							modelId: resolvedModel,
+							sessionId,
+							usageScopeId,
+						});
 						if (!xaiCreds) {
 							throw new Error(
 								"No xAI credentials. Run /login → xAI Grok OAuth (SuperGrok or X Premium+) or set XAI_API_KEY.",

@@ -2501,6 +2501,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const getSessionContext = () => ({
 			sessionManager,
 			modelRegistry,
+			providerSessionId: session.sessionId,
+			usageProviderScopeId: session.usageProviderScopeId,
 			model: agent.state.model,
 			isIdle: () => !session.isStreaming,
 			hasQueuedMessages: () => session.queuedMessageCount > 0,

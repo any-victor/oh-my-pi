@@ -128,19 +128,20 @@ export function resolveXAIHttpTransport(
  */
 export async function resolveXAIHttpCredentials(
 	modelRegistry: ModelRegistry,
-	modelId?: string,
+	options?: { modelId?: string; sessionId?: string; usageScopeId?: string },
 ): Promise<XAICredentials | null> {
+	const { modelId, sessionId, usageScopeId } = options ?? {};
 	const hasDedicatedXaiOAuth =
 		modelRegistry.authStorage.hasNonEnvCredential("xai-oauth") || Boolean($env.XAI_OAUTH_TOKEN);
 	if (hasDedicatedXaiOAuth) {
-		const oauthKey = await modelRegistry.getApiKeyForProvider("xai-oauth");
+		const oauthKey = await modelRegistry.getApiKeyForProvider("xai-oauth", sessionId, { usageScopeId });
 		if (oauthKey) {
 			const baseURL = resolveXAIBaseURL(modelRegistry, "xai-oauth", modelId);
 			return { provider: "xai-oauth", apiKey: oauthKey, baseURL };
 		}
 	}
 
-	const apiKey = await modelRegistry.getApiKeyForProvider("xai");
+	const apiKey = await modelRegistry.getApiKeyForProvider("xai", sessionId, { usageScopeId });
 	if (apiKey) {
 		const baseURL = resolveXAIBaseURL(modelRegistry, "xai", modelId);
 		return { provider: "xai", apiKey, baseURL };

@@ -95,6 +95,31 @@ describe("imageGenTool", () => {
 		);
 	});
 
+	it("attributes direct provider credential resolution to the tool's provider session and usage scope", async () => {
+		setImageProviderOrder(["antigravity"]);
+		const ctx = createAntigravityXAIContext(undefined, (async () => {
+			throw new Error("stop after credential resolution");
+		}) as unknown as typeof fetch);
+		ctx.providerSessionId = "provider-session";
+		ctx.usageProviderScopeId = "usage-scope";
+		const calls: unknown[][] = [];
+		const getApiKeyForProvider = ctx.modelRegistry.getApiKeyForProvider.bind(ctx.modelRegistry);
+		ctx.modelRegistry.getApiKeyForProvider = async (...args) => {
+			calls.push(args);
+			return await getApiKeyForProvider(...args);
+		};
+
+		await expect(
+			imageGenTool.execute("call-scoped-credentials", { subject: "a cat" }, undefined, ctx),
+		).rejects.toThrow("stop after credential resolution");
+
+		expect(calls[0]).toEqual([
+			"google-antigravity",
+			"provider-session",
+			expect.objectContaining({ usageScopeId: "usage-scope" }),
+		]);
+	});
+
 	it("e2e writes OpenAI Responses image_generation WebP output to a temp file", async () => {
 		let requestUrl: string | undefined;
 		let requestBody: unknown;
