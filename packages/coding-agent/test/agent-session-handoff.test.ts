@@ -1268,6 +1268,54 @@ describe("AgentSession handoff", () => {
 		expect(preserve.openaiRemoteCompaction).toBe(replaySlot);
 	});
 
+	it("renders the frozen conversion wrapper into manual snapcompact archive source", async () => {
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": true,
+				"compaction.autoContinue": false,
+			}),
+			modelRegistry,
+			obfuscator,
+			compactionPromptTemplates: { compactionSummaryContext: "FROZEN_ARCHIVE_WRAP_7303057 {{summary}}" },
+		});
+		const lastEntryId = sessionManager.getBranch().at(-1)?.id;
+		if (!lastEntryId) throw new Error("Expected a seeded entry id");
+		const fixedPreparation: compactionModule.CompactionPreparation = {
+			firstKeptEntryId: lastEntryId,
+			messagesToSummarize: [
+				{ role: "compactionSummary", summary: "archive source", tokensBefore: 100, timestamp: 1 },
+			],
+			turnPrefixMessages: [],
+			recentMessages: [],
+			isSplitTurn: false,
+			tokensBefore: 100,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { ...compactionModule.DEFAULT_COMPACTION_SETTINGS, strategy: "snapcompact" },
+		};
+		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(fixedPreparation);
+		let archiveSource = "";
+		vi.spyOn(snapcompact, "compact").mockImplementation(async (preparation, archiveOptions) => {
+			const convertToLlm = archiveOptions?.convertToLlm;
+			if (!convertToLlm) throw new Error("Expected snapcompact archive converter");
+			archiveSource = snapcompact.serializeConversation(convertToLlm(preparation.messagesToSummarize));
+			return {
+				summary: "snapcompact summary",
+				shortSummary: undefined,
+				firstKeptEntryId: lastEntryId,
+				tokensBefore: 100,
+				details: { readFiles: [], modifiedFiles: [] },
+			};
+		});
+
+		await session.compact(undefined, { mode: "snapcompact" });
+
+		expect(archiveSource).toContain("FROZEN_ARCHIVE_WRAP_7303057 archive source");
+		expect(archiveSource).not.toContain("<summary>\narchive source\n</summary>");
+	});
+
 	it("does not call the LLM summarizer when manual snapcompact preflight fails", async () => {
 		const entries = sessionManager.getBranch();
 		const lastEntryId = entries[entries.length - 1]?.id;
