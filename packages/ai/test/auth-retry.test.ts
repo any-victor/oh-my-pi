@@ -398,20 +398,24 @@ describe("withAuth", () => {
 describe("withOAuthAccess", () => {
 	type FakeStorage = OAuthAccessSource & {
 		calls: Array<{ forceRefresh: boolean | undefined } | "rotate">;
+		usageScopes: Array<string | undefined>;
 	};
 
 	function fakeStorage(tokens: { initial?: OAuthAccess; forced?: OAuthAccess; rotated?: OAuthAccess }): FakeStorage {
 		const storage: FakeStorage = {
 			calls: [],
+			usageScopes: [],
 			async getOAuthAccess(_provider, _sessionId, options) {
 				storage.calls.push({ forceRefresh: options?.forceRefresh });
+				storage.usageScopes.push(options?.usageScopeId);
 				if (options?.forceRefresh) return tokens.forced;
 				// After a rotate, the next plain resolve yields the sibling.
 				if (storage.calls.includes("rotate")) return tokens.rotated;
 				return tokens.initial;
 			},
-			async rotateSessionCredential() {
+			async rotateSessionCredential(_provider, _sessionId, options) {
 				storage.calls.push("rotate");
+				storage.usageScopes.push(options?.usageScopeId);
 				return tokens.rotated !== undefined;
 			},
 		};
@@ -428,6 +432,14 @@ describe("withOAuthAccess", () => {
 		const result = await withOAuthAccess(storage, "prov", async a => `ok:${a.accessToken}`);
 		expect(result).toBe("ok:t1");
 		expect(storage.calls).toEqual([{ forceRefresh: undefined }]);
+	});
+
+	it("forwards the session-local usage scope to OAuth resolution", async () => {
+		const storage = fakeStorage({ initial: access("t1") });
+		await withOAuthAccess(storage, "prov", async a => a.accessToken, {
+			usageScopeId: "usage-scope",
+		});
+		expect(storage.usageScopes).toEqual(["usage-scope"]);
 	});
 
 	it("uses the seed for the initial attempt and skips the initial resolve", async () => {

@@ -25,11 +25,13 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 let tmp: TempDir;
 let extPath: string;
+let invalidExtPath: string;
 let dbPath: string;
 
 beforeAll(async () => {
 	tmp = await TempDir.create("@cli-ext-providers-");
 	extPath = tmp.join("ext.ts");
+	invalidExtPath = tmp.join("invalid-ext.ts");
 	dbPath = tmp.join("auth.db");
 	await fs.writeFile(
 		extPath,
@@ -47,6 +49,44 @@ beforeAll(async () => {
 			contextWindow: 128000,
 			maxTokens: 4096,
 		}],
+	});
+	pi.registerUsageProvider({
+		id: "bench-gw",
+		async fetchUsage() {
+			return { provider: "bench-gw", fetchedAt: 1, limits: [] };
+		},
+	});
+}
+`,
+	);
+	await fs.writeFile(
+		invalidExtPath,
+		`export default function (pi) {
+	pi.registerProvider("valid-before-invalid", {
+		baseUrl: "https://example.com/v1",
+		apiKey: "literal-test-key",
+		api: "openai-completions",
+		models: [{
+			id: "would-be-model",
+			name: "Would-be Model",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 4096,
+		}],
+	});
+	pi.registerUsageProvider({
+		id: "invalid-gw",
+		async fetchUsage() {
+			return { provider: "invalid-gw", fetchedAt: 1, limits: [] };
+		},
+	});
+	pi.registerProvider("invalid-gw", {
+		api: "openai-completions",
+		streamSimple() {
+			throw new Error("unused");
+		},
 	});
 }
 `,
@@ -83,6 +123,30 @@ test("loadCliExtensionProviders makes extension providers resolvable by selector
 		expect(after.error).toBeUndefined();
 		expect(after.model?.provider).toBe("bench-gw");
 		expect(after.model?.id).toBe("bench-model");
+		const usageProvider = authStorage.usageProviderFor("bench-gw");
+		if (!usageProvider) throw new Error("extension usage provider was not registered");
+		const report = await usageProvider.fetchUsage(
+			{ provider: "bench-gw", credential: { type: "api_key", apiKey: "test-key" } },
+			{ fetch },
+		);
+		expect(report).toEqual({ provider: "bench-gw", fetchedAt: 1, limits: [] });
+
+		await expect(
+			loadCliExtensionProviders(modelRegistry, settings, tmp.path(), {
+				disableExtensionDiscovery: true,
+				additionalExtensionPaths: [invalidExtPath],
+			}),
+		).rejects.toThrow("built-in API names are reserved");
+		expect(modelRegistry.find("bench-gw", "bench-model")).toBeDefined();
+		expect(authStorage.usageProviderFor("bench-gw")).toBe(usageProvider);
+		expect(authStorage.usageProviderFor("invalid-gw")).toBeUndefined();
+		expect(modelRegistry.find("valid-before-invalid", "would-be-model")).toBeUndefined();
+
+		await loadCliExtensionProviders(modelRegistry, settings, tmp.path(), {
+			disableExtensionDiscovery: true,
+			additionalExtensionPaths: [],
+		});
+		expect(authStorage.usageProviderFor("bench-gw")).toBeUndefined();
 	} finally {
 		authStorage.close();
 	}

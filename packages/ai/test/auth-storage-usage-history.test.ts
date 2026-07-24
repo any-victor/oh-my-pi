@@ -234,6 +234,31 @@ describe("OpenCode Go usage from observed request costs", () => {
 		expect(refreshed?.limits.find(limit => limit.id === "rolling-5h")?.amount.used).toBe(3);
 	});
 
+	it("refreshes session-scoped usage after recording new observed spend", async () => {
+		const nowMs = Date.parse("2026-06-18T12:00:00Z");
+		const usageScopeId = "observed-cost-session";
+		setSystemTime(new Date(nowMs));
+		const unregister = storage.registerSessionUsageProviders(usageScopeId, {
+			resolve: provider => (provider === "opencode-go" ? opencodeGoUsage.opencodeGoUsageProvider : undefined),
+			cacheKeyVersion: () => "session:1",
+			providerIds: () => [],
+		});
+
+		try {
+			const initialReports = await storage.fetchUsageReports({ usageScopeId });
+			const initial = initialReports?.find(candidate => candidate.provider === "opencode-go");
+			expect(initial?.limits.find(limit => limit.id === "rolling-5h")?.amount.used).toBe(0);
+
+			storage.recordUsageCost("opencode-go", 3, { usageScopeId, recordedAt: nowMs });
+
+			const refreshedReports = await storage.fetchUsageReports({ usageScopeId });
+			const refreshed = refreshedReports?.find(candidate => candidate.provider === "opencode-go");
+			expect(refreshed?.limits.find(limit => limit.id === "rolling-5h")?.amount.used).toBe(3);
+		} finally {
+			unregister();
+		}
+	});
+
 	it("aggregates one key's observed spend into OpenCode Go cap windows", async () => {
 		const nowMs = Date.parse("2026-06-18T12:00:00Z");
 		setSystemTime(new Date(nowMs));

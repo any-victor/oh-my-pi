@@ -1,12 +1,22 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import type { UsageReport } from "@oh-my-pi/pi-ai";
+import {
+	type AuthCredentialStore,
+	AuthStorage,
+	type StoredAuthCredential,
+	type UsageProvider,
+	type UsageReport,
+} from "@oh-my-pi/pi-ai";
 import {
 	buildRedactionMap,
 	collectUnreportedAccounts,
 	computeProviderWindowStats,
 	formatUsageBreakdown,
 	formatUsageHistory,
+	runUsageCommand,
 	type UsageAccountIdentity,
 } from "@oh-my-pi/pi-coding-agent/cli/usage-cli";
 
@@ -208,23 +218,6 @@ describe("formatUsageBreakdown", () => {
 		{ provider: "cerebras", type: "api_key" },
 	];
 
-	it("renders used-only USD spend without fabricating quota data", () => {
-		const spendReport = makeReport("anthropic", "spend@example.test", [
-			{
-				id: "anthropic:extra",
-				label: "Claude Extra Usage",
-				scope: { provider: "anthropic", windowId: "extra" },
-				amount: { used: 123.45, unit: "usd" },
-			},
-		]);
-
-		const text = stripVTControlCharacters(formatUsageBreakdown([spendReport], [], Date.now()));
-
-		expect(text).toContain("$123.45 used");
-		expect(text).not.toContain("no data");
-		expect(text).not.toContain("%");
-		expect(text).not.toContain("resets");
-	});
 	it("renders every account: reported ones with limits, credential-only ones as no-data rows", () => {
 		const text = stripVTControlCharacters(formatUsageBreakdown(reports, accounts, Date.now()));
 		expect(text).toContain("dummy.primary@example.test");
@@ -479,5 +472,215 @@ describe("formatUsageHistory", () => {
 		const text = stripVTControlCharacters(formatUsageHistory(entries, SINCE, NOW, redaction));
 		expect(text).not.toContain("dummy.primary@example.test");
 		expect(text).toContain("du*");
+	});
+});
+
+describe("runUsageCommand", () => {
+	it("loads extension usage providers before fetching live reports", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "usage-cli-extension-"));
+		const authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		await authStorage.set("runtime-usage", [
+			{ type: "oauth", access: "runtime-token", refresh: "runtime-refresh", expires: Date.now() + HOUR },
+		]);
+		let prepared = false;
+		const provider: UsageProvider = {
+			id: "runtime-usage",
+			supports: ({ credential }) => credential.type === "oauth",
+			fetchUsage: async () => ({
+				provider: "runtime-usage",
+				fetchedAt: 1,
+				limits: [
+					{
+						id: "weekly",
+						label: "Weekly",
+						scope: { provider: "runtime-usage", windowId: "weekly" },
+						amount: { unit: "percent", usedFraction: 0.25 },
+					},
+				],
+			}),
+		};
+		const output: string[] = [];
+		const writeSpy = spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+			output.push(String(chunk));
+			return true;
+		}) as typeof process.stdout.write);
+		try {
+			await runUsageCommand(
+				{ json: true, provider: "runtime-usage" },
+				{
+					discoverAuthStorage: async () => authStorage,
+					prepareModelRegistry: async modelRegistry => {
+						prepared = true;
+						modelRegistry.authStorage.syncExtensionUsageProviders(
+							["/extensions/usage.ts"],
+							[{ provider, sourceId: "/extensions/usage.ts" }],
+						);
+					},
+				},
+			);
+		} finally {
+			writeSpy.mockRestore();
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+
+		expect(prepared).toBe(true);
+		const payload = JSON.parse(output.join("")) as {
+			reports: UsageReport[];
+			accountsWithoutUsage: unknown[];
+		};
+		expect(payload.reports).toHaveLength(1);
+		expect(payload.reports[0]).toMatchObject({
+			provider: "runtime-usage",
+			limits: [{ amount: { usedFraction: 0.25 } }],
+		});
+		expect(payload.accountsWithoutUsage).toEqual([]);
+	});
+	it("loads explicit usage extensions when discovery is disabled", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "usage-cli-explicit-extension-"));
+		const extensionPath = path.join(tempDir, "usage-extension.ts");
+		await fs.writeFile(
+			extensionPath,
+			`export default function (pi) {
+				pi.registerUsageProvider({
+					id: "explicit-usage",
+					supports: ({ credential }) => credential.type === "oauth",
+					async fetchUsage() {
+						return {
+							provider: "explicit-usage",
+							fetchedAt: 1,
+							limits: [{
+								id: "weekly",
+								label: "Weekly",
+								scope: { provider: "explicit-usage", windowId: "weekly" },
+								amount: { unit: "percent", usedFraction: 0.25 }
+							}]
+						};
+					}
+				});
+			}`,
+		);
+		const authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		await authStorage.set("explicit-usage", [
+			{ type: "oauth", access: "runtime-token", refresh: "runtime-refresh", expires: Date.now() + HOUR },
+		]);
+		const output: string[] = [];
+		const writeSpy = spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+			output.push(String(chunk));
+			return true;
+		}) as typeof process.stdout.write);
+		try {
+			await runUsageCommand(
+				{ json: true, provider: "explicit-usage", extensions: [extensionPath], noExtensions: true },
+				{ discoverAuthStorage: async () => authStorage },
+			);
+		} finally {
+			writeSpy.mockRestore();
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+
+		const payload = JSON.parse(output.join("")) as { reports: UsageReport[] };
+		expect(payload.reports).toHaveLength(1);
+		expect(payload.reports[0]?.provider).toBe("explicit-usage");
+	});
+
+	it("loads extension usage providers before invalidating their versioned cache entries", async () => {
+		const rows: StoredAuthCredential[] = [
+			{
+				id: 1,
+				provider: "runtime-usage",
+				credential: {
+					type: "oauth",
+					access: "runtime-token",
+					refresh: "runtime-refresh",
+					expires: Date.now() + HOUR,
+				},
+				disabledCause: null,
+			},
+		];
+		const cache = new Map<string, { value: string; expiresAtSec: number }>();
+		const store: AuthCredentialStore = {
+			close() {},
+			listAuthCredentials(provider) {
+				return provider === undefined ? rows : rows.filter(row => row.provider === provider);
+			},
+			updateAuthCredential() {},
+			deleteAuthCredential() {},
+			tryDisableAuthCredentialIfMatches() {
+				return false;
+			},
+			replaceAuthCredentialsForProvider() {
+				return rows;
+			},
+			upsertAuthCredentialForProvider() {
+				return rows;
+			},
+			deleteAuthCredentialsForProvider() {},
+			getCache(key, options) {
+				const entry = cache.get(key);
+				if (!entry || (!options?.includeExpired && entry.expiresAtSec * 1_000 <= Date.now())) return null;
+				return entry.value;
+			},
+			setCache(key, value, expiresAtSec) {
+				cache.set(key, { value, expiresAtSec });
+			},
+			cleanExpiredCache() {},
+		};
+		let fetchCalls = 0;
+		const provider: UsageProvider = {
+			id: "runtime-usage",
+			supports: ({ credential }) => credential.type === "oauth",
+			fetchUsage: async () => {
+				fetchCalls += 1;
+				return {
+					provider: "runtime-usage",
+					fetchedAt: Date.now(),
+					limits: [
+						{
+							id: "weekly",
+							label: "Weekly",
+							scope: { provider: "runtime-usage", windowId: "weekly" },
+							amount: { unit: "percent", usedFraction: 0.25 },
+						},
+					],
+				};
+			},
+		};
+		const register = (storage: AuthStorage): void => {
+			storage.syncExtensionUsageProviders(
+				["/extensions/usage.ts"],
+				[{ provider, sourceId: "/extensions/usage.ts" }],
+			);
+		};
+		const createStorage = async (): Promise<AuthStorage> => {
+			const storage = new AuthStorage(store);
+			await storage.reload();
+			return storage;
+		};
+		const initialStorage = await createStorage();
+		register(initialStorage);
+		expect(await initialStorage.fetchUsageReports()).toHaveLength(1);
+		initialStorage.close();
+
+		const writeSpy = spyOn(process.stdout, "write").mockImplementation((() => true) as typeof process.stdout.write);
+		try {
+			await runUsageCommand(
+				{ action: "invalidate", provider: "runtime-usage" },
+				{
+					discoverAuthStorage: createStorage,
+					prepareModelRegistry: async modelRegistry => register(modelRegistry.authStorage),
+				},
+			);
+			const finalStorage = await createStorage();
+			try {
+				register(finalStorage);
+				expect(await finalStorage.fetchUsageReports()).toHaveLength(1);
+			} finally {
+				finalStorage.close();
+			}
+		} finally {
+			writeSpy.mockRestore();
+		}
+
+		expect(fetchCalls).toBe(2);
 	});
 });

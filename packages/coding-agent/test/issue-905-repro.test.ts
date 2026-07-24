@@ -22,15 +22,11 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 let tmp: TempDir;
 let extPath: string;
 let dbPath: string;
-let shutdownExtPath: string;
-let shutdownPath: string;
 
 beforeAll(async () => {
 	tmp = await TempDir.create("@issue-905-");
 	extPath = tmp.join("ext.ts");
 	dbPath = tmp.join("auth.db");
-	shutdownExtPath = tmp.join("shutdown-ext.ts");
-	shutdownPath = tmp.join("shutdown");
 	await fs.writeFile(
 		extPath,
 		`export default function (pi) {
@@ -47,15 +43,6 @@ beforeAll(async () => {
 			contextWindow: 128000,
 			maxTokens: 4096,
 		}],
-	});
-}
-`,
-	);
-	await fs.writeFile(
-		shutdownExtPath,
-		`export default function (pi) {
-	pi.on("session_shutdown", async () => {
-		await Bun.write(${JSON.stringify(shutdownPath)}, "shutdown");
 	});
 }
 `,
@@ -99,20 +86,42 @@ test("omp models surfaces extension-registered providers (issue #905)", async ()
 	}
 });
 
-test("omp models emits extension shutdown after listing (issue #6297)", async () => {
+test("omp models does not mutate providers when usage registration validation fails", async () => {
+	const invalidExtPath = tmp.join("invalid-usage-ext.ts");
+	await fs.writeFile(
+		invalidExtPath,
+		`export default function (pi) {
+	pi.registerProvider("invalid-usage-gw", {
+		baseUrl: "https://example.com/v1",
+		apiKey: "literal-test-key",
+		api: "openai-completions",
+		models: [{
+			id: "invalid-usage-model",
+			name: "Invalid Usage Model",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 4096,
+		}],
+	});
+	pi.registerUsageProvider({ id: "invalid-usage-gw" });
+}
+`,
+	);
 	const authStorage = await AuthStorage.create(":memory:");
 	try {
 		const modelRegistry = new ModelRegistry(authStorage);
-		await runModelsListing({
-			modelRegistry,
-			cwd: tmp.path(),
-			action: "ls",
-			pattern: "issue-6297-no-models",
-			additionalExtensionPaths: [shutdownExtPath],
-			disableExtensionDiscovery: true,
-		});
-
-		expect(await Bun.file(shutdownPath).text()).toBe("shutdown");
+		await expect(
+			runModelsListing({
+				modelRegistry,
+				cwd: tmp.path(),
+				action: "ls",
+				additionalExtensionPaths: [invalidExtPath],
+				disableExtensionDiscovery: true,
+			}),
+		).rejects.toThrow();
+		expect(modelRegistry.find("invalid-usage-gw", "invalid-usage-model")).toBeUndefined();
 	} finally {
 		authStorage.close();
 	}

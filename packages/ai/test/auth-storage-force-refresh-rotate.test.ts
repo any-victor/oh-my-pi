@@ -642,6 +642,56 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 		expect(await authStorage.rotateSessionCredential(PROVIDER, "sess", { error: authError() })).toBe(false);
 	});
 
+	test("hard-auth rotation ignores siblings blocked only in the session usage scope", async () => {
+		store?.close();
+		store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
+		const strategy: CredentialRankingStrategy = {
+			findWindowLimits: () => ({}),
+			windowDefaults: { primaryMs: 60_000, secondaryMs: 60_000 },
+		};
+		authStorage = new AuthStorage(store, {
+			rankingStrategyResolver: provider => (provider === PROVIDER ? strategy : undefined),
+		});
+		registerProvider();
+		await authStorage.set(PROVIDER, [
+			{ type: "oauth", access: "acc-A", refresh: "ref-A", expires: farExpiry() },
+			{ type: "oauth", access: "acc-B", refresh: "ref-B", expires: farExpiry() },
+		]);
+		const usageProvider: UsageProvider = {
+			id: PROVIDER,
+			fetchUsage: async () => ({ provider: PROVIDER, fetchedAt: Date.now(), limits: [] }),
+		};
+		const unregister = authStorage.registerSessionUsageProviders("usage-scope", {
+			resolve: provider => (provider === PROVIDER ? usageProvider : undefined),
+			cacheKeyVersion: () => "test:1",
+			providerIds: () => [],
+		});
+
+		try {
+			const first = await authStorage.getApiKey(PROVIDER, "sess", { usageScopeId: "usage-scope" });
+			expect(first).toBeDefined();
+			expect(
+				(
+					await authStorage.markUsageLimitReached(PROVIDER, "sess", {
+						retryAfterMs: 30_000,
+						usageScopeId: "usage-scope",
+					})
+				).switched,
+			).toBe(true);
+			const second = await authStorage.getApiKey(PROVIDER, "sess", { usageScopeId: "usage-scope" });
+			expect(second).toBeDefined();
+			expect(second).not.toBe(first);
+			expect(
+				await authStorage.rotateSessionCredential(PROVIDER, "sess", {
+					error: authError(),
+					usageScopeId: "usage-scope",
+				}),
+			).toBe(false);
+		} finally {
+			unregister();
+		}
+	});
+
 	test("rotateSessionCredential returns false when the session has no sticky credential", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		registerProvider();

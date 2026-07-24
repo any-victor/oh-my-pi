@@ -109,6 +109,31 @@ describe("describeAttachedImagesForTextModel", () => {
 		expect(saved.toString("base64")).toBe(TINY_PNG_BASE64);
 	});
 
+	it("uses both provider session and usage-provider scope for vision credentials", async () => {
+		const stub = makeCompleteStub("A scoped description.");
+		const getApiKeyCalls: unknown[][] = [];
+		const resolverCalls: unknown[][] = [];
+		const deps = makeDeps(testDir, [textModel, visionModel], stub.fn);
+		deps.sessionId = "provider-session";
+		deps.usageProviderScopeId = "usage-scope";
+		deps.modelRegistry = {
+			getAvailable: () => [textModel, visionModel],
+			getApiKey: async (...args: unknown[]) => {
+				getApiKeyCalls.push(args);
+				return "test-key";
+			},
+			resolver: (...args: unknown[]) => {
+				resolverCalls.push(args);
+				return async () => "test-key";
+			},
+		} as never;
+
+		await describeAttachedImagesForTextModel([{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }], deps);
+
+		expect(getApiKeyCalls).toEqual([[visionModel, "provider-session", "usage-scope"]]);
+		expect(resolverCalls).toEqual([[visionModel, { sessionId: "provider-session", usageScopeId: "usage-scope" }]]);
+	});
+
 	it("saves the image but emits a no-vision note when no vision model is available", async () => {
 		const stub = makeCompleteStub("should not be used");
 		const blocks = await describeAttachedImagesForTextModel(
