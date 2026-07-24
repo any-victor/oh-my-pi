@@ -88,6 +88,26 @@ function formatFastModeStatus(session: AgentSession): string {
 	return session.isFastModeEnabled() ? "on" : "off";
 }
 
+/** `/computer status` label for the session-effective `computer.enabled` value. */
+function formatComputerUseStatus(session: AgentSession): string {
+	return session.settings.get("computer.enabled") ? "on" : "off";
+}
+
+/**
+ * Apply a session-scoped computer-use toggle: flip the active tool slate first
+ * (so a failed enable never leaves a stale settings override), then record the
+ * runtime override — never `settings.set`, which would persist to settings.json.
+ * Returns the operator feedback line.
+ */
+async function applyComputerUseToggle(session: AgentSession, enable: boolean): Promise<string> {
+	const applied = await session.setComputerToolEnabled(enable);
+	if (enable && !applied) {
+		return "Computer use is unavailable in this session.";
+	}
+	session.settings.override("computer.enabled", enable);
+	return `Computer use ${enable ? "enabled" : "disabled"} for this session.`;
+}
+
 const AUTOCOMPLETE_DETAIL_LIMIT = 48;
 
 function shortDetail(value: string, limit = AUTOCOMPLETE_DETAIL_LIMIT): string {
@@ -469,6 +489,49 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			runtime.ctx.showStatus("Usage: /fast [on|off|status]");
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "computer",
+		description: "Toggle the native computer-use tool for this session",
+		acpDescription: "Toggle computer use",
+		acpInputHint: "[on|off|status]",
+		subcommands: [
+			{ name: "on", description: "Enable computer use for this session" },
+			{ name: "off", description: "Disable computer use for this session" },
+			{ name: "status", description: "Show computer use status" },
+		],
+		allowArgs: true,
+		getTuiAutocompleteDescription: runtime => `Computer: ${formatComputerUseStatus(runtime.ctx.session)}`,
+		handle: async (command, runtime) => {
+			const arg = command.args.trim().toLowerCase();
+			if (arg === "status") {
+				await runtime.output(`Computer use is ${formatComputerUseStatus(runtime.session)}.`);
+				return commandConsumed();
+			}
+			if (!arg || arg === "toggle" || arg === "on" || arg === "off") {
+				const enable = arg === "off" ? false : arg === "on" || !runtime.session.settings.get("computer.enabled");
+				await runtime.output(await applyComputerUseToggle(runtime.session, enable));
+				return commandConsumed();
+			}
+			return usage("Usage: /computer [on|off|status]", runtime);
+		},
+		handleTui: async (command, runtime) => {
+			const arg = command.args.trim().toLowerCase();
+			if (arg === "status") {
+				runtime.ctx.showStatus(`Computer use is ${formatComputerUseStatus(runtime.ctx.session)}.`);
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			if (!arg || arg === "toggle" || arg === "on" || arg === "off") {
+				const enable =
+					arg === "off" ? false : arg === "on" || !runtime.ctx.session.settings.get("computer.enabled");
+				runtime.ctx.showStatus(await applyComputerUseToggle(runtime.ctx.session, enable));
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			runtime.ctx.showStatus("Usage: /computer [on|off|status]");
 			runtime.ctx.editor.setText("");
 		},
 	},

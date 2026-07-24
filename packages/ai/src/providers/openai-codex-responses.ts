@@ -75,6 +75,7 @@ import {
 } from "./openai-codex/request-transformer";
 import { CodexApiError } from "./openai-codex/response-handler";
 import type {
+	ResponseComputerToolCall,
 	ResponseCustomToolCall,
 	ResponseFunctionToolCall,
 	ResponseInput,
@@ -95,6 +96,7 @@ import {
 	applyOpenAIServiceTier,
 	applyReasoningSummaryDone,
 	buildResponsesDeltaInput,
+	computerCallMetadata,
 	convertResponsesAssistantMessage,
 	convertResponsesInputContent,
 	createSequentialCutoffSummaryState,
@@ -105,6 +107,7 @@ import {
 	finalizePendingResponsesToolCalls,
 	finalizeReasoningThinking,
 	finalizeToolCallArgumentsDone,
+	hasExecutableIncompleteResponsesToolCalls,
 	isOpenAIResponsesProgressEvent,
 	mapOpenAIResponsesStopReason,
 	normalizeOpenAIPromptCacheKey,
@@ -120,7 +123,6 @@ export interface OpenAICodexResponsesOptions extends StreamOptions {
 	/** `reasoning.context` replay scope; defaults to `all_turns` when unset. The `all_turns` value is gated to gpt-5.4+ Codex models — older ids reject it, so it is suppressed and `context` omitted. */
 	reasoningContext?: CodexReasoningContext;
 	textVerbosity?: "low" | "medium" | "high";
-	include?: string[];
 	codexMode?: boolean;
 	toolChoice?: ToolChoice;
 	preferWebsockets?: boolean;
@@ -295,7 +297,12 @@ function createCodexWebSocketTimeoutMessage(reason: string, details: CodexWebSoc
 }
 
 type CodexTransport = "sse" | "websocket";
-type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
+type CodexEventItem =
+	| ResponseReasoningItem
+	| ResponseOutputMessage
+	| ResponseFunctionToolCall
+	| ResponseCustomToolCall
+	| ResponseComputerToolCall;
 type CodexOutputBlock =
 	| ThinkingContent
 	| TextContent
@@ -1088,6 +1095,11 @@ export function normalizeCodexToolChoice(
 ): string | Record<string, unknown> | undefined {
 	if (!choice) return undefined;
 	if (typeof choice === "string") return choice;
+	if (choice.type === "computer") {
+		return model?.supportsComputerUse === true && tools.some(tool => tool.native?.type === "computer")
+			? { type: "computer" }
+			: undefined;
+	}
 	const allowFreeform = model ? model.applyPatchToolType === "freeform" : false;
 	const mapName = (name: string): Record<string, string> | undefined => {
 		const directTool = tools.find(tool => tool.name === name);
@@ -1597,6 +1609,16 @@ function createOutputBlockForItem(item: CodexEventItem): CodexOutputBlock | null
 			[kStreamingPartialJson]: item.arguments || "",
 		};
 	}
+	if (item.type === "computer_call") {
+		return {
+			type: "toolCall",
+			id: encodeResponsesToolCallId(item.call_id, item.id),
+			name: "computer",
+			arguments: {},
+			providerMetadata: computerCallMetadata(item),
+			[kStreamingPartialJson]: "",
+		};
+	}
 	if (item.type === "custom_tool_call") {
 		// Wire name flows through unchanged; the agent-loop dispatcher also
 		// matches `Tool.customWireName`. Reuse `partialJson` as the
@@ -1782,9 +1804,10 @@ class CodexStreamProcessor {
 
 		if (eventType === "response.reasoning_summary_part.added") {
 			if (this.#sequentialCutoffSummaries) return firstTokenTime;
-			if (this.runtime.currentItem?.type === "reasoning") {
+			const entry = this.runtime.openItemForEvent(rawEvent);
+			if (entry?.item.type === "reasoning") {
 				appendReasoningSummaryPart(
-					this.runtime.currentItem,
+					entry.item,
 					(rawEvent as { part: ResponseReasoningItem["summary"][number] }).part,
 				);
 			}
@@ -1859,9 +1882,10 @@ class CodexStreamProcessor {
 		}
 
 		if (eventType === "response.content_part.added") {
-			if (this.runtime.currentItem?.type === "message") {
+			const entry = this.runtime.openItemForEvent(rawEvent);
+			if (entry?.item.type === "message") {
 				appendMessageContentPart(
-					this.runtime.currentItem,
+					entry.item,
 					(rawEvent as { part?: ResponseOutputMessage["content"][number] }).part,
 				);
 			}
@@ -1869,14 +1893,15 @@ class CodexStreamProcessor {
 		}
 
 		if (eventType === "response.output_text.delta" || eventType === "response.refusal.delta") {
-			if (this.runtime.currentItem?.type === "message" && this.runtime.currentBlock?.type === "text") {
+			const entry = this.runtime.openItemForEvent(rawEvent);
+			if (entry?.item.type === "message" && entry.block?.type === "text") {
 				appendMessageTextDelta(
-					this.runtime.currentItem,
-					this.runtime.currentBlock,
+					entry.item,
+					entry.block,
 					(rawEvent as { delta?: string }).delta || "",
 					stream,
 					output,
-					output.content.length - 1,
+					entry.contentIndex,
 					eventType === "response.refusal.delta" ? "refusal" : "output_text",
 				);
 			}
@@ -2030,6 +2055,29 @@ class CodexStreamProcessor {
 			return;
 		}
 
+		if (item.type === "computer_call") {
+			const toolCall: ToolCall = {
+				type: "toolCall",
+				id: encodeResponsesToolCallId(item.call_id, item.id),
+				name: "computer",
+				arguments: {},
+				providerMetadata: computerCallMetadata(item),
+			};
+			let resolvedContentIndex = contentIndex;
+			if (block?.type === "toolCall") {
+				block.id = toolCall.id;
+				block.providerMetadata = toolCall.providerMetadata;
+				clearStreamingPartialJson(block);
+			} else {
+				output.content.push(toolCall);
+				resolvedContentIndex = output.content.length - 1;
+			}
+			runtime.closeOpenItem(entry);
+			runtime.canSafelyReplayWebsocketOverSse = false;
+			stream.push({ type: "toolcall_end", contentIndex: resolvedContentIndex, toolCall, partial: output });
+			return;
+		}
+
 		if (item.type === "custom_tool_call") {
 			const partial = block?.type === "toolCall" ? block[kStreamingPartialJson] : undefined;
 			const rawInput = partial && partial.length > 0 ? partial : (item.input ?? "");
@@ -2089,12 +2137,29 @@ class CodexStreamProcessor {
 			}
 		}
 
+		const incompleteDetails =
+			response &&
+			"incomplete_details" in response &&
+			response.incomplete_details &&
+			typeof response.incomplete_details === "object"
+				? response.incomplete_details
+				: undefined;
+		const shouldPromoteIncompleteToolUse =
+			status === "incomplete" &&
+			incompleteDetails !== undefined &&
+			"reason" in incompleteDetails &&
+			incompleteDetails.reason === "max_output_tokens" &&
+			hasExecutableIncompleteResponsesToolCalls(output);
 		finalizePendingResponsesToolCalls(output);
 
 		calculateCost(model, output.usage);
 		applyCodexServiceTierPricing(model, output.usage, serviceTier, runtime.requestBodyForState.service_tier);
 		output.stopReason = mapOpenAIResponsesStopReason(status);
-		promoteResponsesToolUseStopReason(output, endTurn === true ? true : endTurn === false ? false : undefined);
+		promoteResponsesToolUseStopReason(
+			output,
+			endTurn === true ? true : endTurn === false ? false : undefined,
+			shouldPromoteIncompleteToolUse,
+		);
 	}
 
 	async #recoverStreamError(error: unknown): Promise<boolean> {
@@ -3946,6 +4011,7 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 	// messages can be replayed as `custom_tool_call_output` rather than
 	// `function_call_output` (OpenAI rejects mismatched pairs).
 	const customCallIds = new Set<string>();
+	const computerCallIds = new Set<string>();
 	const knownCallIds = new Set<string>();
 
 	for (const msg of transformedMessages) {
@@ -3961,6 +4027,16 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 					if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {
 						customCallIds.add(maybe.call_id);
 					}
+					if (maybe.type === "computer_call" && typeof maybe.call_id === "string") {
+						computerCallIds.add(maybe.call_id);
+					}
+					if (
+						(maybe.type === "function_call" ||
+							maybe.type === "custom_tool_call" ||
+							maybe.type === "computer_call") &&
+						typeof maybe.call_id === "string"
+					)
+						knownCallIds.add(maybe.call_id);
 				}
 				messages.push(...redactedHistoryItems);
 				msgIndex += 1;
@@ -3993,6 +4069,16 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 						if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {
 							customCallIds.add(maybe.call_id);
 						}
+						if (maybe.type === "computer_call" && typeof maybe.call_id === "string") {
+							computerCallIds.add(maybe.call_id);
+						}
+						if (
+							(maybe.type === "function_call" ||
+								maybe.type === "custom_tool_call" ||
+								maybe.type === "computer_call") &&
+							typeof maybe.call_id === "string"
+						)
+							knownCallIds.add(maybe.call_id);
 					}
 					if (providerPayload?.dt) {
 						messages.push(...sanitizedHistoryItems);
@@ -4013,6 +4099,10 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				knownCallIds,
 				!suppressHiddenEmptyFallback,
 				customCallIds,
+				false,
+				true,
+				undefined,
+				computerCallIds,
 			);
 			const outputItems = suppressHiddenEmptyFallback
 				? sanitizeOpenAIResponsesAssistantFallbackItemsForReplay(convertedOutputItems)
@@ -4033,6 +4123,8 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				model.compat.supportsImageDetailOriginal,
 				knownCallIds,
 				customCallIds,
+				true,
+				computerCallIds,
 			);
 		}
 
@@ -4073,17 +4165,24 @@ type CodexToolPayload =
 			name: string;
 			description: string;
 			format: { type: "grammar"; syntax: "lark" | "regex"; definition: string };
-	  };
-
+	  }
+	| { type: "computer"; name?: never };
 /** @internal Exported for tests. */
 export function convertOpenAICodexResponsesTools(
 	tools: Tool[],
 	model: Model<"openai-codex-responses">,
 ): CodexToolPayload[] {
 	const allowFreeform = model.applyPatchToolType === "freeform";
-	return tools.map((tool): CodexToolPayload => {
+	const payloads: CodexToolPayload[] = [];
+	for (const tool of tools) {
+		if (tool.native?.type === "computer" && model.supportsComputerUse === true) {
+			payloads.push({ type: "computer" });
+			continue;
+		}
+		// Models without native computer support fall through and receive the
+		// tool as a plain function tool so function-calling models can drive it.
 		if (allowFreeform && tool.customFormat) {
-			return {
+			payloads.push({
 				type: "custom",
 				name: tool.customWireName ?? tool.name,
 				description: tool.description || "",
@@ -4092,24 +4191,21 @@ export function convertOpenAICodexResponsesTools(
 					syntax: tool.customFormat.syntax,
 					definition: compactGrammarDefinition(tool.customFormat.syntax, tool.customFormat.definition),
 				},
-			};
+			});
+			continue;
 		}
 		const strict = !!(!NO_STRICT && tool.strict);
 		const baseParameters = sanitizeSchemaForOpenAIResponses(toolWireSchema(tool));
 		const { schema: parameters, strict: effectiveStrict } = adaptSchemaForStrict(baseParameters, strict);
-		return {
+		payloads.push({
 			type: "function",
 			name: tool.name,
 			description: tool.description || "",
 			parameters,
-			// See openai-responses.ts::convertTools — explicit `strict: false` is
-			// preserved on the wire because some backends distinguish it from
-			// omitted (#4336). `strict: true` still requires enforcement success,
-			// and the `PI_NO_STRICT` global bypass MUST suppress the flag entirely
-			// so Codex proxies that reject the `strict` key stay silent.
 			...(effectiveStrict ? { strict: true } : !NO_STRICT && tool.strict === false ? { strict: false } : {}),
-		};
-	});
+		});
+	}
+	return payloads;
 }
 
 export class CodexWebSocketTransportError extends Error {
