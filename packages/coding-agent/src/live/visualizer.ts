@@ -138,7 +138,7 @@ export class LiveVisualizer implements Component {
 	}
 
 	#renderLines(maxWidth: number): readonly string[] {
-		const width = Math.max(2, Math.min(maxWidth, 120));
+		const width = Math.max(2, maxWidth);
 		const innerWidth = width - 2;
 		const border = (content: string): string =>
 			theme.fg("border", "│") + content + (width > 1 ? theme.fg("border", "│") : "");
