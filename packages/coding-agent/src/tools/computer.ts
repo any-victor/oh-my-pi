@@ -32,6 +32,7 @@ const scrollDeltaSchema = type("-2147483648 <= number.integer <= 2147483647");
 const pointSchema = type({
 	x: coordinateSchema.describe("x pixel coordinate"),
 	y: coordinateSchema.describe("y pixel coordinate"),
+	"+": "reject",
 });
 
 const computerActionSchema = type({
@@ -45,8 +46,8 @@ const computerActionSchema = type({
 		"y pixel coordinate in the most recent screenshot (click, double_click, move, scroll)",
 	),
 	"button?": type("'left' | 'right' | 'wheel' | 'back' | 'forward'").describe("mouse button; required for click"),
-	"path?": pointSchema.array().atLeastLength(1).describe("waypoints from press to release; required for drag"),
-	"keys?": type("string[]").describe(
+	"path?": pointSchema.array().atLeastLength(2).describe("waypoints from press to release; required for drag"),
+	"keys?": type("string[] | null").describe(
 		"key names (e.g. CTRL, SHIFT, ENTER, A); required chord for keypress, optional held modifiers for pointer actions",
 	),
 	"scroll_x?": scrollDeltaSchema.describe("horizontal scroll delta in pixels; required for scroll"),
@@ -54,12 +55,14 @@ const computerActionSchema = type({
 		"vertical scroll delta in pixels, positive scrolls content down; required for scroll",
 	),
 	"text?": type("string").describe("literal text to type; required for type"),
+	"+": "reject",
 });
 
 const computerSchema = type({
 	"actions?": computerActionSchema
 		.array()
 		.describe("ordered actions executed as one batch; omit or pass [] to just capture a screenshot"),
+	"+": "reject",
 });
 
 export type ComputerParams = typeof computerSchema.infer;
@@ -86,44 +89,136 @@ function isCoordinate(value: unknown): value is number {
 	return isInt32(value) && value >= 0;
 }
 
+type AllowedFields = Record<string, true>;
+
+const POINT_FIELDS: AllowedFields = { x: true, y: true };
+const MOUSE_BUTTONS: AllowedFields = { left: true, right: true, wheel: true, back: true, forward: true };
+const ACTION_FIELDS: Record<ComputerAction["type"], AllowedFields> = {
+	click: { type: true, button: true, x: true, y: true, keys: true },
+	double_click: { type: true, x: true, y: true, keys: true },
+	drag: { type: true, path: true, keys: true },
+	keypress: { type: true, keys: true },
+	move: { type: true, x: true, y: true, keys: true },
+	screenshot: { type: true },
+	scroll: { type: true, x: true, y: true, scroll_x: true, scroll_y: true, keys: true },
+	type: { type: true, text: true },
+	wait: { type: true },
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function fieldsForAction(actionType: string): AllowedFields | undefined {
+	switch (actionType) {
+		case "click":
+		case "double_click":
+		case "drag":
+		case "keypress":
+		case "move":
+		case "screenshot":
+		case "scroll":
+		case "type":
+		case "wait":
+			return ACTION_FIELDS[actionType];
+		default:
+			return undefined;
+	}
+}
+
+function hasOnlyFields(value: Record<string, unknown>, allowed: AllowedFields): boolean {
+	return Object.keys(value).every(key => allowed[key] === true);
+}
+
 function isPoint(value: unknown): value is { x: number; y: number } {
-	return (
-		!!value &&
-		typeof value === "object" &&
-		isCoordinate((value as { x?: unknown }).x) &&
-		isCoordinate((value as { y?: unknown }).y)
-	);
+	return isRecord(value) && hasOnlyFields(value, POINT_FIELDS) && isCoordinate(value.x) && isCoordinate(value.y);
 }
 
 function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every(item => typeof item === "string");
 }
 
+function modifierBit(value: string): number {
+	switch (value.trim().toUpperCase()) {
+		case "CTRL":
+		case "CONTROL":
+			return 1;
+		case "SHIFT":
+			return 2;
+		case "ALT":
+		case "OPTION":
+			return 4;
+		case "META":
+		case "CMD":
+		case "COMMAND":
+		case "SUPER":
+		case "WINDOWS":
+			return 8;
+		default:
+			return 0;
+	}
+}
+
+function isModifierArray(value: unknown): value is string[] | null | undefined {
+	if (value == null) return true;
+	if (!isStringArray(value)) return false;
+	let seen = 0;
+	for (const entry of value) {
+		for (const component of entry.split("+")) {
+			const bit = modifierBit(component);
+			if (bit === 0 || (seen & bit) !== 0) return false;
+			seen |= bit;
+		}
+	}
+	return true;
+}
+
+function isKeypressArray(value: unknown): value is string[] {
+	return (
+		isStringArray(value) &&
+		value.length > 0 &&
+		value.every(key => key.split("+").every(component => component.trim().length > 0))
+	);
+}
+
 function isComputerAction(value: unknown): value is ComputerAction {
-	if (!value || typeof value !== "object" || typeof (value as { type?: unknown }).type !== "string") return false;
-	const action = value as Record<string, unknown>;
-	switch (action.type) {
+	if (!isRecord(value) || typeof value.type !== "string") return false;
+	const action = value;
+	const actionType = value.type;
+	const allowed = fieldsForAction(actionType);
+	if (!allowed || !hasOnlyFields(action, allowed)) return false;
+	switch (actionType) {
 		case "click":
 			return (
 				isCoordinate(action.x) &&
 				isCoordinate(action.y) &&
-				["left", "right", "wheel", "back", "forward"].includes(String(action.button))
+				typeof action.button === "string" &&
+				MOUSE_BUTTONS[action.button] === true &&
+				isModifierArray(action.keys)
 			);
 		case "double_click":
-			// Function-calling models omit `keys`; the GA wire shape sends null.
-			return isCoordinate(action.x) && isCoordinate(action.y) && (action.keys == null || isStringArray(action.keys));
+			return isCoordinate(action.x) && isCoordinate(action.y) && isModifierArray(action.keys);
 		case "drag":
-			return Array.isArray(action.path) && action.path.length > 0 && action.path.every(isPoint);
+			return (
+				Array.isArray(action.path) &&
+				action.path.length >= 2 &&
+				action.path.every(isPoint) &&
+				isModifierArray(action.keys)
+			);
 		case "keypress":
-			return isStringArray(action.keys) && action.keys.length > 0;
+			return isKeypressArray(action.keys);
 		case "move":
-			return isCoordinate(action.x) && isCoordinate(action.y);
+			return isCoordinate(action.x) && isCoordinate(action.y) && isModifierArray(action.keys);
 		case "screenshot":
 		case "wait":
 			return true;
 		case "scroll":
 			return (
-				isCoordinate(action.x) && isCoordinate(action.y) && isInt32(action.scroll_x) && isInt32(action.scroll_y)
+				isCoordinate(action.x) &&
+				isCoordinate(action.y) &&
+				isInt32(action.scroll_x) &&
+				isInt32(action.scroll_y) &&
+				isModifierArray(action.keys)
 			);
 		case "type":
 			return typeof action.text === "string";
@@ -135,7 +230,7 @@ function isComputerAction(value: unknown): value is ComputerAction {
 function parseActions(value: unknown): ComputerAction[] {
 	// Missing or empty action batches degrade to a plain screenshot so a
 	// function-calling model can observe the screen before acting.
-	if (value === undefined || value === null) return [{ type: "screenshot" }];
+	if (value === undefined) return [{ type: "screenshot" }];
 	if (!Array.isArray(value)) throw new ToolError("Computer call requires an array of actions");
 	if (value.length === 0) return [{ type: "screenshot" }];
 	if (!value.every(isComputerAction)) throw new ToolError("Computer call contains an invalid action");
@@ -255,7 +350,7 @@ export class ComputerTool implements AgentTool<typeof computerSchema, ComputerTo
 	readonly concurrency = "exclusive" as const;
 	readonly summary = "Capture and control the host desktop through native OS APIs";
 	readonly parameters = computerSchema;
-	readonly strict = true;
+	readonly strict = false;
 	readonly approval = computerApproval;
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const actions = args && typeof args === "object" ? (args as { actions?: unknown }).actions : undefined;
@@ -317,11 +412,15 @@ export class ComputerTool implements AgentTool<typeof computerSchema, ComputerTo
 				capabilities: this.#controller.capabilities,
 				actions: actions.map(action => action.type),
 			},
-			providerMetadata: {
-				type: "computer",
-				screenshot: { type: "computer_screenshot", image_url: `data:image/png;base64,${data}` },
-				acknowledgedSafetyChecks: pendingSafetyChecks,
-			},
+			...(metadata
+				? {
+						providerMetadata: {
+							type: "computer" as const,
+							screenshot: { type: "computer_screenshot" as const, image_url: `data:image/png;base64,${data}` },
+							acknowledgedSafetyChecks: pendingSafetyChecks,
+						},
+					}
+				: {}),
 		};
 	}
 

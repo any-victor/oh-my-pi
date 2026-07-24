@@ -78,7 +78,7 @@ OMP marks a model natively capable when either:
 
 An explicit `supportsComputerUse: false` disables automatic derivation and routes the model through the function-tool form.
 
-Natively capable models may receive a forced `{ "type": "computer" }` tool choice; other models are forced through an ordinary named function choice. If a session containing native computer history switches to a model without native support, OMP converts prior `computer_call` and `computer_call_output` items into stable text notes rather than sending invalid native items; new calls continue through the function tool.
+Natively capable OpenAI Responses routes may receive a forced `{ "type": "computer" }` choice. Function-tool fallback forcing is provider-specific: OpenAI/Ollama use a named function, Anthropic/Bedrock use a named tool, Google uses required-tool mode, and adapters without a forcing form keep provider-default selection. When native computer history is replayed to a non-native OpenAI Responses-family model, that adapter converts prior `computer_call` and `computer_call_output` items into stable text notes rather than sending invalid native items. Other provider adapters serialize the generic call and result through their ordinary tool format.
 
 If the tool never appears:
 
@@ -87,16 +87,16 @@ If the tool never appears:
 
 ## Actions
 
-The provider may send one GA action or an ordered `actions` batch. OMP normalizes both forms to an ordered batch, executes it serially, then returns one fresh PNG of the final state.
+The provider may send one GA action or an ordered `actions` batch. OMP normalizes both forms and executes the batch serially. A successful call returns exactly one fresh PNG after the entire batch. `screenshot` markers are deferred: they emit no input, produce no intermediate image, and do not rebase later coordinates in the same batch.
 
 | Action | Required fields | Behavior |
 |---|---|---|
 | `click` | `button`, `x`, `y` | Click once. Buttons: `left`, `right`, `wheel`, `back`, `forward`. Optional `keys` holds modifiers. |
-| `double_click` | `x`, `y`, `keys` | Double-click the left button. GA `keys` is an array or `null`. |
+| `double_click` | `x`, `y` | Double-click the left button. Native GA calls supply `keys` as an array or `null`; function calls may omit it. |
 | `drag` | `path` | Hold left at the first point, visit the remaining points, release at the last. At least two points. Optional modifier `keys`. |
 | `keypress` | `keys` | Press one key or chord. The array must contain at least one non-empty key. |
 | `move` | `x`, `y` | Move the pointer. Optional modifier `keys`. |
-| `screenshot` | none | Capture without input. |
+| `screenshot` | none | Request the batch's final capture without input. |
 | `scroll` | `x`, `y`, `scroll_x`, `scroll_y` | Move to the point, then scroll horizontally and/or vertically. Optional modifier `keys`. Deltas are converted to native wheel steps. |
 | `type` | `text` | Type Unicode text through the native input backend. |
 | `wait` | none | Wait two seconds before continuing. |
@@ -107,7 +107,7 @@ A batch containing only `screenshot` and `wait` is observation-only. Any click, 
 
 ## Screenshot coordinates and image mapping
 
-Always choose coordinates from the immediately preceding computer result. Do not use OS logical coordinates, CSS pixels, terminal cell positions, or coordinates copied from another screenshot.
+Always choose coordinates from the immediately preceding successful computer result. Every coordinate action in one batch maps through that same prior frame. Do not use OS logical coordinates, CSS pixels, terminal cell positions, coordinates copied from another screenshot, or an in-batch `screenshot` marker as a new frame.
 
 For each capture, OMP:
 
@@ -129,7 +129,7 @@ The composite preserves gaps between monitor rectangles as black pixels. A point
 
 If monitor membership, rectangle, or scale changes between the reference frame and a coordinate action, OMP clears the frame and returns `DESKTOP_LAYOUT_CHANGED`. Capture again before retrying. Moving a display, changing resolution/scaling, docking, undocking, or changing the selected display can trigger this guard.
 
-The worker rejects a coordinate action until a screenshot has been returned to the provider. Begin with `screenshot`, then capture again after any visual transition whose target may have moved.
+The worker rejects a coordinate action until a screenshot has been returned to the provider. Begin with a screenshot-only call. After any visual transition whose target may have moved, finish the current call and use its returned image for coordinates in the next call.
 
 ## Multiple displays
 
@@ -229,7 +229,7 @@ computer tool
   → capture/input APIs
 ```
 
-The Bun worker starts on the first computer call, not at OMP startup. Startup has a 10-second deadline. The desktop session and last screenshot geometry remain alive across calls, so later coordinates can be checked against the preceding frame. Each action batch is ordered and always ends with a new capture.
+The Bun worker starts on the first computer call, not at OMP startup. Startup has a 10-second deadline. The desktop session and last screenshot geometry remain alive across calls, so later coordinates can be checked against the preceding frame. Each successful ordered action batch ends with one new capture.
 
 Closing the agent/eval owner closes all owned controllers. Normal close asks the Bun worker to close, waits up to 1.5 seconds, then terminates it if needed. Native close is idempotent and bounded. Aborting a call terminates that worker and rejects pending requests; a later call may start a fresh worker and must establish a new screenshot frame.
 
@@ -243,7 +243,7 @@ OMP preserves the GA wire contract exactly:
 
 Native OMP execution returns the PNG inline as a `data:image/png;base64,...` `image_url`. It does **not** upload the capture to the OpenAI Files API and does not mint a `file_id`.
 
-If an OpenAI-compatible gateway or restored Responses history supplies a `file_id`, OMP preserves and replays that exact reference as provider metadata. It does not download, validate, refresh, or delete the provider file. File availability, retention, authorization, and expiry remain the provider/client's responsibility. Both `image_url` and `file_id` history are preserved for capable models and converted to text notes when moving to a model without computer support.
+If an OpenAI-compatible gateway or restored Responses history supplies a `file_id`, OMP preserves and replays that exact reference as provider metadata. It does not download, validate, refresh, or delete the provider file. File availability, retention, authorization, and expiry remain the provider/client's responsibility. Both `image_url` and `file_id` history are preserved for capable models; replay to a non-native OpenAI Responses-family model converts the native items to text notes.
 
 ## Troubleshooting
 

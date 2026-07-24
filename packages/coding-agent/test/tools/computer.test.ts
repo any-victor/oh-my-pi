@@ -383,16 +383,17 @@ describe("computer tool", () => {
 		expect(disabled).toHaveLength(0);
 		const enabled = await createTools(toolSession(Settings.isolated({ "computer.enabled": true })), ["computer"]);
 		expect(enabled.map(tool => [tool.name, tool.loadMode])).toEqual([["computer", "essential"]]);
+		expect(enabled[0]?.strict).toBe(false);
 	});
 
-	it("accepts each GA action shape through the params schema and rejects malformed coordinates", () => {
+	it("accepts each GA action shape through the params schema and rejects malformed shapes", () => {
 		const tool = new ComputerTool(
 			toolSession(Settings.isolated({ "computer.enabled": true })),
 			() => new FakeController(),
 		);
 		const ok = tool.parameters({
 			actions: [
-				{ type: "click", x: 1, y: 2, button: "left" },
+				{ type: "click", x: 1, y: 2, button: "left", keys: null },
 				{ type: "double_click", x: 3, y: 4 },
 				{
 					type: "drag",
@@ -414,9 +415,20 @@ describe("computer tool", () => {
 			[{ type: "click", x: -1, y: 2, button: "left" }],
 			[{ type: "move", x: 0.5, y: 0 }],
 			[{ type: "scroll", x: 0, y: 0, scroll_x: 2 ** 31, scroll_y: 0 }],
+			[{ type: "drag", path: [{ x: 0, y: 0 }] }],
+			[
+				{
+					type: "drag",
+					path: [
+						{ x: 0, y: 0, label: "unexpected" },
+						{ x: 1, y: 1 },
+					],
+				},
+			],
 		]) {
 			expect(tool.parameters({ actions }) instanceof arkType.errors).toBe(true);
 		}
+		expect(tool.parameters({ actions: [], unexpected: true }) instanceof arkType.errors).toBe(true);
 	});
 
 	it("executes function-call params.actions and defaults empty batches to a screenshot", async () => {
@@ -424,6 +436,7 @@ describe("computer tool", () => {
 		const tool = new ComputerTool(toolSession(Settings.isolated({ "computer.enabled": true })), () => controller);
 		const result = await tool.execute("call", { actions: [{ type: "click", x: 5, y: 6, button: "left" }] });
 		expect(result.content).toEqual([{ type: "image", data: "AQ==", mimeType: "image/png", detail: "original" }]);
+		expect(result.providerMetadata).toBeUndefined();
 		await tool.execute("call", {});
 		await tool.execute("call", { actions: [] });
 		expect(controller.batches).toEqual([
@@ -434,7 +447,7 @@ describe("computer tool", () => {
 		await tool.close();
 	});
 
-	it("fails closed on non-integer, negative, or out-of-int32-range coordinates", async () => {
+	it("fails closed on malformed action fields before native dispatch", async () => {
 		const controller = new FakeController();
 		const tool = new ComputerTool(toolSession(Settings.isolated({ "computer.enabled": true })), () => controller);
 		const invalidBatches = [
@@ -442,11 +455,29 @@ describe("computer tool", () => {
 			[{ type: "move", x: -1, y: 2 }],
 			[{ type: "move", x: 2 ** 31, y: 0 }],
 			[{ type: "scroll", x: 0, y: 0, scroll_x: 0, scroll_y: -(2 ** 31) - 1 }],
-			[{ type: "drag", path: [{ x: 0, y: -3 }] }],
+			[{ type: "drag", path: [{ x: 0, y: 0 }] }],
+			[
+				{
+					type: "drag",
+					path: [
+						{ x: 0, y: 0 },
+						{ x: 3, y: 4, extra: true },
+					],
+				},
+			],
+			[{ type: "click", x: 1, y: 2, button: "left", keys: ["ENTER"] }],
+			[{ type: "click", x: 1, y: 2, button: "left", keys: ["CTRL", "CONTROL"] }],
+			[{ type: "keypress", keys: [] }],
+			[{ type: "keypress", keys: ["CTRL+"] }],
+			[{ type: "screenshot", x: 1 }],
+			[{ type: "type", text: "hello", y: 2 }],
 		] as unknown as ComputerParams["actions"][];
 		for (const actions of invalidBatches) {
 			await expect(tool.execute("call", { actions })).rejects.toThrow("Computer call contains an invalid action");
 		}
+		await expect(tool.execute("call", { actions: null } as unknown as ComputerParams)).rejects.toThrow(
+			"Computer call requires an array of actions",
+		);
 		expect(controller.batches).toHaveLength(0);
 		await tool.execute("call", {
 			actions: [{ type: "scroll", x: 0, y: 0, scroll_x: -2_147_483_648, scroll_y: 2_147_483_647 }],

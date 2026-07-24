@@ -756,7 +756,7 @@ fn same_layout(frame: &FrameGeometry, current: &[LayoutDisplay]) -> bool {
 		})
 	})
 }
-/// XTest `FakeInput` root coordinates are i16. Reject frame layouts the wire
+/// `XTest` `FakeInput` root coordinates are i16. Reject frame layouts the wire
 /// protocol cannot address before any input is synthesized, so coordinates
 /// fail closed instead of truncating.
 #[cfg(any(target_os = "linux", test))]
@@ -785,8 +785,8 @@ fn validate_xtest_frame(frame: &FrameGeometry) -> CoreResult<()> {
 	Ok(())
 }
 
-/// Every Linux input path (plain X11 and XWayland alike) synthesizes through
-/// XTest, so the XTest coordinate limits apply regardless of the detected
+/// Every Linux input path (plain X11 and `XWayland` alike) synthesizes through
+/// `XTest`, so the `XTest` coordinate limits apply regardless of the detected
 /// backend.
 #[cfg(target_os = "linux")]
 fn validate_coordinate_backend(frame: &FrameGeometry) -> CoreResult<()> {
@@ -1574,10 +1574,21 @@ fn parse_keypress(keys: &[String]) -> CoreResult<Vec<Key>> {
 					format!("invalid empty component in keypress `{key}`"),
 				));
 			}
-			parsed.push(parse_key(component)?);
+			parsed.push(normalize_keypress_key(parse_key(component)?));
 		}
 	}
 	Ok(parsed)
+}
+
+fn normalize_keypress_key(key: Key) -> Key {
+	let Key::Unicode(character) = key else {
+		return key;
+	};
+	let mut lowercase = character.to_lowercase();
+	match (lowercase.next(), lowercase.next()) {
+		(Some(character), None) => Key::Unicode(character),
+		_ => key,
+	}
 }
 
 fn parse_key(value: &str) -> CoreResult<Key> {
@@ -2151,6 +2162,16 @@ mod tests {
 			(Key::Shift, Direction::Release),
 			(Key::Control, Direction::Release),
 		]);
+	}
+
+	#[test]
+	fn keypress_letters_are_case_insensitive_without_implicit_shift() {
+		assert_eq!(parse_keypress(&["CTRL+L".to_string()]).unwrap(), vec![
+			Key::Control,
+			Key::Unicode('l')
+		]);
+		assert_eq!(normalize_keypress_key(Key::Unicode('A')), Key::Unicode('a'));
+		assert_eq!(parse_key("A").unwrap(), Key::Unicode('A'));
 	}
 	#[test]
 	fn cancellation_is_permission_denied() {

@@ -239,12 +239,63 @@ fn spare_keycode(view: &KeymapView<'_>) -> Option<u8> {
 	})
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ColorMasks {
+	red:   u32,
+	green: u32,
+	blue:  u32,
+}
+
+#[derive(Clone, Copy)]
+struct ComponentMask {
+	mask:  u32,
+	shift: u32,
+	max:   u32,
+}
+
+impl ComponentMask {
+	fn new(name: &str, mask: u32) -> Result<Self, String> {
+		if mask == 0 {
+			return Err(format!("X11 TrueColor {name} mask is zero"));
+		}
+		let shift = mask.trailing_zeros();
+		let max = mask >> shift;
+		if max & max.wrapping_add(1) != 0 {
+			return Err(format!("X11 TrueColor {name} mask {mask:#x} is not contiguous"));
+		}
+		Ok(Self { mask, shift, max })
+	}
+
+	fn decode(self, pixel: u32) -> u8 {
+		let component = (pixel & self.mask) >> self.shift;
+		((u64::from(component) * 255 + u64::from(self.max) / 2) / u64::from(self.max)) as u8
+	}
+}
+
+fn color_components(masks: ColorMasks, bits_per_pixel: u8) -> Result<[ComponentMask; 3], String> {
+	if masks.red & masks.green != 0 || masks.red & masks.blue != 0 || masks.green & masks.blue != 0 {
+		return Err(format!(
+			"X11 TrueColor masks overlap: red {:#x}, green {:#x}, blue {:#x}",
+			masks.red, masks.green, masks.blue
+		));
+	}
+	let combined = masks.red | masks.green | masks.blue;
+	if bits_per_pixel < 32 && combined >= (1u32 << bits_per_pixel) {
+		return Err(format!(
+			"X11 TrueColor masks {combined:#x} exceed {bits_per_pixel} bits per pixel"
+		));
+	}
+	Ok([
+		ComponentMask::new("red", masks.red)?,
+		ComponentMask::new("green", masks.green)?,
+		ComponentMask::new("blue", masks.blue)?,
+	])
+}
+
 /// Convert a `GetImage` `ZPixmap` reply into RGBA with alpha forced to 255.
-///
-/// Assumes the ubiquitous `TrueColor` channel masks (red `0xff0000`, green
-/// `0xff00`, blue `0xff`); handles 24- and 32-bit pixel units in either image
-/// byte order and scanline padding. Depths below 24 (pseudo-color/high-color
-/// visuals) are rejected.
+/// Uses the root `TrueColor` visual's channel masks, including RGB/BGR layouts
+/// and depths such as 30-bit color, and honors image byte order and scanline
+/// padding.
 fn zpixmap_to_rgba(
 	data: &[u8],
 	width: u32,
@@ -253,10 +304,12 @@ fn zpixmap_to_rgba(
 	bits_per_pixel: u8,
 	scanline_pad: u8,
 	lsb_first: bool,
+	masks: ColorMasks,
 ) -> Result<RgbaImage, String> {
-	if depth < 24 {
+	if !(24..=32).contains(&depth) {
 		return Err(format!(
-			"unsupported X11 image depth {depth}; a 24- or 32-bit TrueColor visual is required"
+			"unsupported X11 image depth {depth}; a depth from 24 through 32 with a TrueColor visual \
+			 is required"
 		));
 	}
 	let bytes_per_pixel = match bits_per_pixel {
@@ -264,6 +317,7 @@ fn zpixmap_to_rgba(
 		32 => 4usize,
 		other => return Err(format!("unsupported X11 pixel size of {other} bits per pixel")),
 	};
+	let [red, green, blue] = color_components(masks, bits_per_pixel)?;
 	let width_usize = width as usize;
 	let height_usize = height as usize;
 	let pad_bits = usize::from(scanline_pad).max(8);
@@ -291,12 +345,30 @@ fn zpixmap_to_rgba(
 					.iter()
 					.fold(0u32, |acc, &byte| acc << 8 | u32::from(byte))
 			};
-			rgba.extend_from_slice(&[(value >> 16) as u8, (value >> 8) as u8, value as u8, 255]);
+			rgba.extend_from_slice(&[red.decode(value), green.decode(value), blue.decode(value), 255]);
 		}
 	}
 	RgbaImage::from_raw(width, height, rgba)
 		.ok_or_else(|| "X11 image dimensions are inconsistent".to_string())
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeldTempReleaseOperation {
+	Release(u8),
+	Restore(u8),
+}
+
+fn finish_held_temp_release<E>(
+	held_temp: &mut Vec<(u32, u8)>,
+	index: usize,
+	mut perform: impl FnMut(HeldTempReleaseOperation) -> Result<(), E>,
+) -> Result<(), E> {
+	let keycode = held_temp[index].1;
+	perform(HeldTempReleaseOperation::Release(keycode))?;
+	perform(HeldTempReleaseOperation::Restore(keycode))?;
+	held_temp.remove(index);
+	Ok(())
+}
+
 /// One step of last-resort keyboard cleanup when the input connection drops.
 enum X11CleanupOperation<'a> {
 	/// Release a keycode a `Press` left held.
@@ -306,25 +378,27 @@ enum X11CleanupOperation<'a> {
 	Restore(u8, &'a [u32]),
 }
 
-/// Release every held keycode in reverse order, then restore every listed
-/// keycode row. A failed step never stops the remaining cleanup; the first
-/// error is surfaced after everything has been attempted.
+/// Release every held keycode in reverse order, then restore the rows whose
+/// checked release succeeded. Failures never stop cleanup of later keys; the
+/// first error is surfaced after all safe work has been attempted.
 fn cleanup_x11_keyboard_state<E>(
 	held_keycodes: &[u8],
-	mapped_keycodes: &[u8],
 	keysyms_per_code: u8,
 	mut perform: impl FnMut(X11CleanupOperation<'_>) -> Result<(), E>,
 ) -> Result<(), E> {
 	let mut first_error = None;
+	let mut released = Vec::with_capacity(held_keycodes.len());
 	for &keycode in held_keycodes.iter().rev() {
-		if let Err(error) = perform(X11CleanupOperation::Release(keycode))
-			&& first_error.is_none()
-		{
-			first_error = Some(error);
+		match perform(X11CleanupOperation::Release(keycode)) {
+			Ok(()) => released.push(keycode),
+			Err(error) if first_error.is_none() => first_error = Some(error),
+			Err(_) => {},
 		}
 	}
+	released.sort_unstable();
+	released.dedup();
 	let empty_row = vec![0; usize::from(keysyms_per_code)];
-	for &keycode in mapped_keycodes {
+	for keycode in released {
 		if let Err(error) = perform(X11CleanupOperation::Restore(keycode, &empty_row))
 			&& first_error.is_none()
 		{
@@ -348,18 +422,18 @@ mod x11 {
 			randr::ConnectionExt as _,
 			xproto::{
 				BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ConnectionExt as _, ImageFormat, ImageOrder,
-				KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT, Window,
+				KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT, VisualClass, Window,
 			},
 			xtest::ConnectionExt as _,
 		},
 		rust_connection::RustConnection,
-		wrapper::ConnectionExt as _,
 	};
 	use xkeysym::Keysym;
 
 	use super::{
-		Axis, Button, Coordinate, Direction, Key, KeymapView, X11CleanupOperation, button_detail,
-		cleanup_x11_keyboard_state, keysym_for_char, keysym_for_key, keysym_position, scroll_button,
+		Axis, Button, ColorMasks, Coordinate, Direction, HeldTempReleaseOperation, Key, KeymapView,
+		X11CleanupOperation, button_detail, cleanup_x11_keyboard_state, color_components,
+		finish_held_temp_release, keysym_for_char, keysym_for_key, keysym_position, scroll_button,
 		spare_keycode, zpixmap_to_rgba,
 	};
 
@@ -407,15 +481,16 @@ mod x11 {
 	/// `Result` accessors exist purely for that signature parity.
 	#[derive(Debug)]
 	pub struct Monitor {
-		conn:    Arc<RustConnection>,
-		root:    Window,
-		id:      u32,
-		name:    String,
-		x:       i32,
-		y:       i32,
-		width:   u32,
-		height:  u32,
-		primary: bool,
+		conn:        Arc<RustConnection>,
+		root:        Window,
+		color_masks: ColorMasks,
+		id:          u32,
+		name:        String,
+		x:           i32,
+		y:           i32,
+		width:       u32,
+		height:      u32,
+		primary:     bool,
 	}
 
 	#[allow(
@@ -435,6 +510,29 @@ mod x11 {
 				.get(screen_num)
 				.ok_or_else(|| X11Error("X11 setup reported no default screen".to_string()))?;
 			let root = screen.root;
+			let root_visual = screen
+				.allowed_depths
+				.iter()
+				.flat_map(|depth| &depth.visuals)
+				.find(|visual| visual.visual_id == screen.root_visual)
+				.ok_or_else(|| {
+					X11Error(format!(
+						"X server setup does not describe root visual {}",
+						screen.root_visual
+					))
+				})?;
+			if root_visual.class != VisualClass::TRUE_COLOR {
+				return Err(X11Error(format!(
+					"unsupported X11 root visual class {:?}; TrueColor is required",
+					root_visual.class
+				)));
+			}
+			let color_masks = ColorMasks {
+				red:   root_visual.red_mask,
+				green: root_visual.green_mask,
+				blue:  root_visual.blue_mask,
+			};
+			color_components(color_masks, 32).map_err(X11Error)?;
 			let reply = conn
 				.randr_get_monitors(root, true)
 				.map_err(capture_error)?
@@ -455,6 +553,7 @@ mod x11 {
 				monitors.push(Self {
 					conn: Arc::clone(&conn),
 					root,
+					color_masks,
 					id: info.name,
 					name,
 					x: i32::from(info.x),
@@ -470,6 +569,7 @@ mod x11 {
 				monitors.push(Self {
 					conn: Arc::clone(&conn),
 					root,
+					color_masks,
 					id: 0,
 					name: "Screen".to_string(),
 					x: 0,
@@ -553,6 +653,7 @@ mod x11 {
 				format.bits_per_pixel,
 				format.scanline_pad,
 				setup.image_byte_order == ImageOrder::LSB_FIRST,
+				self.color_masks,
 			)
 			.map_err(X11Error)
 		}
@@ -679,8 +780,9 @@ mod x11 {
 			self
 				.conn
 				.xtest_fake_input(event_type, detail, x11rb::CURRENT_TIME, self.root, x, y, 0)
-				.map_err(input_request_error)?;
-			self.conn.flush().map_err(input_request_error)
+				.map_err(input_request_error)?
+				.check()
+				.map_err(input_request_error)
 		}
 
 		fn send_keysym(&mut self, keysym: u32, direction: Direction) -> Result<(), X11InputError> {
@@ -689,14 +791,12 @@ mod x11 {
 					"character cannot be represented as an X11 keysym".to_string(),
 				));
 			}
-			// A release must reuse the temporary keycode its press bound.
+			// A release must reuse the temporary keycode its press bound. The
+			// record remains until both checked release and restoration succeed.
 			if matches!(direction, Direction::Release)
 				&& let Some(index) = self.held_temp.iter().position(|&(held, _)| held == keysym)
 			{
-				let (_, keycode) = self.held_temp.remove(index);
-				let released = self.fake_input(KEY_RELEASE_EVENT, keycode, 0, 0);
-				let restored = self.write_keycode_row(keycode, 0);
-				released.and(restored)
+				self.finish_temp_release(index)
 			} else {
 				match keysym_position(&self.view(), keysym) {
 					Some((keycode, false)) => self.send_key_transition(keycode, direction),
@@ -744,34 +844,40 @@ mod x11 {
 				)
 			})?;
 			self.write_keycode_row(keycode, keysym)?;
+			let index = self.held_temp.len();
+			self.held_temp.push((keysym, keycode));
 			match direction {
 				Direction::Click => {
-					let pressed = self
-						.fake_input(KEY_PRESS_EVENT, keycode, 0, 0)
-						.and_then(|()| self.fake_input(KEY_RELEASE_EVENT, keycode, 0, 0));
-					let restored = self.write_keycode_row(keycode, 0);
-					pressed.and(restored)
+					self.fake_input(KEY_PRESS_EVENT, keycode, 0, 0)?;
+					self.finish_temp_release(index)
 				},
-				Direction::Press => {
-					self.held_temp.push((keysym, keycode));
-					self.fake_input(KEY_PRESS_EVENT, keycode, 0, 0)
-				},
-				Direction::Release => {
-					let released = self.fake_input(KEY_RELEASE_EVENT, keycode, 0, 0);
-					let restored = self.write_keycode_row(keycode, 0);
-					released.and(restored)
-				},
+				Direction::Press => self.fake_input(KEY_PRESS_EVENT, keycode, 0, 0),
+				Direction::Release => self.finish_temp_release(index),
 			}
 		}
 
-		/// Write one keycode's keysym row verbatim and synchronize so the
-		/// server observes the mapping before any following fake event.
+		fn finish_temp_release(&mut self, index: usize) -> Result<(), X11InputError> {
+			let mut held_temp = std::mem::take(&mut self.held_temp);
+			let result =
+				finish_held_temp_release(&mut held_temp, index, |operation| match operation {
+					HeldTempReleaseOperation::Release(keycode) => {
+						self.fake_input(KEY_RELEASE_EVENT, keycode, 0, 0)
+					},
+					HeldTempReleaseOperation::Restore(keycode) => self.write_keycode_row(keycode, 0),
+				});
+			self.held_temp = held_temp;
+			result
+		}
+
+		/// Write one keycode's keysym row verbatim and synchronously check the
+		/// server's protocol response before any following fake event.
 		fn write_row(&self, keycode: u8, row: &[u32]) -> Result<(), X11InputError> {
 			self
 				.conn
 				.change_keyboard_mapping(1, keycode, self.keysyms_per_keycode, row)
-				.map_err(input_request_error)?;
-			self.conn.sync().map_err(input_request_error)
+				.map_err(input_request_error)?
+				.check()
+				.map_err(input_request_error)
 		}
 
 		/// Rewrite one keycode's keysym row (all columns) to a single keysym
@@ -787,27 +893,20 @@ mod x11 {
 
 	impl Drop for Input {
 		fn drop(&mut self) {
-			// Release anything a Press left held, then restore its temporary
-			// binding — continuing past failures so one broken step cannot
-			// leave later keys stuck or rows rebound. A dead connection makes
-			// these no-ops, which is fine: the bindings die with the session's
-			// X server resources anyway.
+			// Release every held temporary key in reverse order. Restore only
+			// bindings whose checked release succeeded, so a failed release never
+			// turns a still-held keycode back into an unrelated row.
 			let held = std::mem::take(&mut self.held_temp);
 			let held_keycodes: Vec<u8> = held.iter().map(|&(_, keycode)| keycode).collect();
-			let mut mapped = held_keycodes.clone();
-			mapped.sort_unstable();
-			mapped.dedup();
-			let _ = cleanup_x11_keyboard_state(
-				&held_keycodes,
-				&mapped,
-				self.keysyms_per_keycode,
-				|operation| match operation {
-					X11CleanupOperation::Release(keycode) => {
-						self.fake_input(KEY_RELEASE_EVENT, keycode, 0, 0)
-					},
-					X11CleanupOperation::Restore(keycode, row) => self.write_row(keycode, row),
-				},
-			);
+			let _ =
+				cleanup_x11_keyboard_state(&held_keycodes, self.keysyms_per_keycode, |operation| {
+					match operation {
+						X11CleanupOperation::Release(keycode) => {
+							self.fake_input(KEY_RELEASE_EVENT, keycode, 0, 0)
+						},
+						X11CleanupOperation::Restore(keycode, row) => self.write_row(keycode, row),
+					}
+				});
 		}
 	}
 }
@@ -818,6 +917,9 @@ pub use x11::{Input, Monitor, X11Error, X11InputError};
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	const RGB_MASKS: ColorMasks =
+		ColorMasks { red: 0x00ff_0000, green: 0x0000_ff00, blue: 0x0000_00ff };
 
 	#[test]
 	fn scroll_steps_map_to_x11_wheel_buttons() {
@@ -841,11 +943,9 @@ mod tests {
 		assert_eq!(keysym_for_char('a'), 0x61);
 		assert_eq!(keysym_for_char('A'), 0x41);
 		assert_eq!(keysym_for_char('é'), 0xe9);
-		// Enter must type Return, not the historical Linefeed keysym.
 		assert_eq!(keysym_for_char('\n'), 0xff0d);
 		assert_eq!(keysym_for_char('\r'), 0xff0d);
 		assert_eq!(keysym_for_char('\t'), 0xff09);
-		// Codepoints outside the legacy tables use the Unicode keysym offset.
 		assert_eq!(keysym_for_char('あ'), 0x0100_0000 + 0x3042);
 	}
 
@@ -866,14 +966,12 @@ mod tests {
 
 	#[test]
 	fn keysym_lookup_prefers_unshifted_bindings_and_reports_shift_levels() {
-		// keycode 8: (a, A); keycode 9: (b, a); keycode 10: (0, 0)
 		let keysyms = [0x61, 0x41, 0x62, 0x61, 0, 0];
 		let view = KeymapView {
 			min_keycode:         8,
 			keysyms_per_keycode: 2,
 			keysyms:             &keysyms,
 		};
-		// 'a' is shifted on keycode 9 but unshifted on keycode 8; unshifted wins.
 		assert_eq!(keysym_position(&view, 0x61), Some((8, false)));
 		assert_eq!(keysym_position(&view, 0x41), Some((8, true)));
 		assert_eq!(keysym_position(&view, 0x62), Some((9, false)));
@@ -898,9 +996,8 @@ mod tests {
 
 	#[test]
 	fn depth24_lsb_bgrx_converts_to_rgba() {
-		// Two pixels: pure red and pure blue, BGRX byte order (LSB-first).
 		let data = [0x00, 0x00, 0xff, 0x00, 0xff, 0x00, 0x00, 0x00];
-		let image = zpixmap_to_rgba(&data, 2, 1, 24, 32, 32, true).unwrap();
+		let image = zpixmap_to_rgba(&data, 2, 1, 24, 32, 32, true, RGB_MASKS).unwrap();
 		assert_eq!(image.get_pixel(0, 0).0, [0xff, 0x00, 0x00, 0xff]);
 		assert_eq!(image.get_pixel(1, 0).0, [0x00, 0x00, 0xff, 0xff]);
 	}
@@ -908,24 +1005,22 @@ mod tests {
 	#[test]
 	fn depth24_msb_xrgb_converts_to_rgba() {
 		let data = [0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
-		let image = zpixmap_to_rgba(&data, 2, 1, 24, 32, 32, false).unwrap();
+		let image = zpixmap_to_rgba(&data, 2, 1, 24, 32, 32, false, RGB_MASKS).unwrap();
 		assert_eq!(image.get_pixel(0, 0).0, [0xff, 0x00, 0x00, 0xff]);
 		assert_eq!(image.get_pixel(1, 0).0, [0x00, 0x00, 0xff, 0xff]);
 	}
 
 	#[test]
 	fn depth32_alpha_is_forced_opaque() {
-		// BGRA with a transparent alpha byte that must be overridden.
 		let data = [0x10, 0x20, 0x30, 0x00];
-		let image = zpixmap_to_rgba(&data, 1, 1, 32, 32, 32, true).unwrap();
+		let image = zpixmap_to_rgba(&data, 1, 1, 32, 32, 32, true, RGB_MASKS).unwrap();
 		assert_eq!(image.get_pixel(0, 0).0, [0x30, 0x20, 0x10, 0xff]);
 	}
 
 	#[test]
 	fn packed_24bpp_rows_honor_scanline_padding() {
-		// Width 1 at 24 bpp pads each row to 4 bytes (scanline_pad 32).
 		let data = [0x01, 0x02, 0x03, 0x00, 0x04, 0x05, 0x06, 0x00];
-		let image = zpixmap_to_rgba(&data, 1, 2, 24, 24, 32, true).unwrap();
+		let image = zpixmap_to_rgba(&data, 1, 2, 24, 24, 32, true, RGB_MASKS).unwrap();
 		assert_eq!(image.get_pixel(0, 0).0, [0x03, 0x02, 0x01, 0xff]);
 		assert_eq!(image.get_pixel(0, 1).0, [0x06, 0x05, 0x04, 0xff]);
 	}
@@ -933,16 +1028,89 @@ mod tests {
 	#[test]
 	fn shallow_depths_and_short_buffers_are_rejected() {
 		assert!(
-			zpixmap_to_rgba(&[0; 8], 2, 1, 16, 16, 16, true)
+			zpixmap_to_rgba(&[0; 8], 2, 1, 16, 16, 16, true, RGB_MASKS)
 				.unwrap_err()
 				.contains("depth 16")
 		);
 		assert!(
-			zpixmap_to_rgba(&[0; 4], 2, 1, 24, 32, 32, true)
+			zpixmap_to_rgba(&[0; 4], 2, 1, 24, 32, 32, true, RGB_MASKS)
 				.unwrap_err()
 				.contains("truncated")
 		);
 	}
+
+	#[test]
+	fn visual_masks_decode_bgr_and_depth30_components() {
+		let bgr_masks = ColorMasks { red: 0x0000_00ff, green: 0x0000_ff00, blue: 0x00ff_0000 };
+		let bgr =
+			zpixmap_to_rgba(&[0xff, 0x00, 0x00, 0x00], 1, 1, 24, 32, 32, true, bgr_masks).unwrap();
+		assert_eq!(bgr.get_pixel(0, 0).0, [0xff, 0x00, 0x00, 0xff]);
+
+		let depth30_masks = ColorMasks { red: 0x3ff0_0000, green: 0x000f_fc00, blue: 0x0000_03ff };
+		let depth30 =
+			zpixmap_to_rgba(&0x3ff8_0000u32.to_le_bytes(), 1, 1, 30, 32, 32, true, depth30_masks)
+				.unwrap();
+		assert_eq!(depth30.get_pixel(0, 0).0, [0xff, 0x80, 0x00, 0xff]);
+	}
+
+	#[test]
+	fn invalid_visual_masks_are_rejected_explicitly() {
+		let zero = ColorMasks { red: 0, green: 0xff00, blue: 0xff };
+		assert!(
+			zpixmap_to_rgba(&[0; 4], 1, 1, 24, 32, 32, true, zero)
+				.unwrap_err()
+				.contains("red mask is zero")
+		);
+		let overlap = ColorMasks { red: 0xff, green: 0xff, blue: 0xff00 };
+		assert!(
+			zpixmap_to_rgba(&[0; 4], 1, 1, 24, 32, 32, true, overlap)
+				.unwrap_err()
+				.contains("masks overlap")
+		);
+		let noncontiguous = ColorMasks { red: 0x5, green: 0x70, blue: 0x380 };
+		assert!(
+			zpixmap_to_rgba(&[0; 4], 1, 1, 24, 32, 32, true, noncontiguous)
+				.unwrap_err()
+				.contains("not contiguous")
+		);
+	}
+
+	#[test]
+	fn temp_release_record_survives_until_release_and_restore_both_succeed() {
+		let mut held = vec![(0x0100_3042, 42)];
+		let mut observed = Vec::new();
+		let error = finish_held_temp_release(&mut held, 0, |operation| {
+			observed.push(operation);
+			match operation {
+				HeldTempReleaseOperation::Release(_) => Err("release failed"),
+				HeldTempReleaseOperation::Restore(_) => Ok(()),
+			}
+		})
+		.unwrap_err();
+		assert_eq!(error, "release failed");
+		assert_eq!(held, vec![(0x0100_3042, 42)]);
+		assert_eq!(observed, vec![HeldTempReleaseOperation::Release(42)]);
+
+		observed.clear();
+		let error = finish_held_temp_release(&mut held, 0, |operation| {
+			observed.push(operation);
+			match operation {
+				HeldTempReleaseOperation::Release(_) => Ok(()),
+				HeldTempReleaseOperation::Restore(_) => Err("restore failed"),
+			}
+		})
+		.unwrap_err();
+		assert_eq!(error, "restore failed");
+		assert_eq!(held, vec![(0x0100_3042, 42)]);
+		assert_eq!(observed, vec![
+			HeldTempReleaseOperation::Release(42),
+			HeldTempReleaseOperation::Restore(42),
+		]);
+
+		finish_held_temp_release(&mut held, 0, |_| Ok::<(), &str>(())).unwrap();
+		assert!(held.is_empty());
+	}
+
 	#[test]
 	fn x11_cleanup_continues_after_errors_and_restores_exact_row_width() {
 		#[derive(Debug, PartialEq, Eq)]
@@ -950,9 +1118,8 @@ mod tests {
 			Release(u8),
 			Restore(u8, Vec<u32>),
 		}
-
 		let mut observed = Vec::new();
-		let error = cleanup_x11_keyboard_state(&[1, 2, 3], &[8, 9], 4, |operation| {
+		let error = cleanup_x11_keyboard_state(&[1, 2, 3], 4, |operation| {
 			match operation {
 				X11CleanupOperation::Release(keycode) => {
 					observed.push(Observed::Release(keycode));
@@ -962,7 +1129,7 @@ mod tests {
 				},
 				X11CleanupOperation::Restore(keycode, row) => {
 					observed.push(Observed::Restore(keycode, row.to_vec()));
-					if keycode == 8 {
+					if keycode == 2 {
 						return Err("later cleanup failure");
 					}
 				},
@@ -970,14 +1137,35 @@ mod tests {
 			Ok(())
 		})
 		.unwrap_err();
-
 		assert_eq!(error, "first cleanup failure");
 		assert_eq!(observed, vec![
 			Observed::Release(3),
 			Observed::Release(2),
 			Observed::Release(1),
-			Observed::Restore(8, vec![0, 0, 0, 0]),
-			Observed::Restore(9, vec![0, 0, 0, 0]),
+			Observed::Restore(1, vec![0, 0, 0, 0]),
+			Observed::Restore(2, vec![0, 0, 0, 0]),
 		]);
+	}
+
+	#[cfg(target_os = "linux")]
+	#[test]
+	fn opt_in_x11_capture_and_checked_input_smoke() {
+		if std::env::var_os("OMP_NATIVE_DESKTOP_X11_TEST").is_none() {
+			return;
+		}
+		let monitor = Monitor::all()
+			.expect("X11 monitor enumeration should succeed")
+			.into_iter()
+			.next()
+			.expect("X11 should report a screen");
+		let image = monitor
+			.capture_image()
+			.expect("X11 root capture should succeed");
+		assert!(image.width() > 0 && image.height() > 0);
+
+		let mut input = Input::new().expect("XTest input should initialize without a portal");
+		input.move_mouse(20, 20, Coordinate::Abs).unwrap();
+		input.key(Key::Unicode('x'), Direction::Click).unwrap();
+		input.text("あ").unwrap();
 	}
 }

@@ -27,7 +27,7 @@ User setup, safety guidance, platform permissions, and verified limitations: [Na
 - Native descriptor: `{ type: "computer" }`.
 - Providers serialize the native descriptor only when `model.supportsComputerUse === true`; every other function-calling model receives `computer` as a regular function tool with the typed action schema below.
 - Automatic capability derivation covers GA `gpt-5.4+` IDs on OpenAI Responses, OpenAI Codex Responses, and Azure OpenAI Responses; explicit model metadata overrides derivation.
-- Unsupported-model history conversion replaces native call/output items with stable assistant text notes; new calls on such models flow as ordinary function calls.
+- When OpenAI Responses-family history is replayed to a model without native support, native call/output items become stable assistant text notes. Other provider adapters serialize the generic call/result in their ordinary tool format.
 
 Unlike `browser`, `computer` operates the entire visible host session. It can act in IDEs, terminals, native applications, browser windows, and system dialogs, but has no structured application/DOM inspection.
 
@@ -61,7 +61,7 @@ Public schema (arktype; also serialized as the function-tool JSON schema):
 }
 ```
 
-Provider-native `computer_call` metadata stays authoritative: `execute()` chooses `context.toolCall.providerMetadata.actions` when metadata type is `computer`; otherwise it uses `params.actions`. Both paths run the same per-type validator. An omitted or empty `actions` array degrades to a screenshot-only batch; a non-array or invalid entry fails before worker dispatch.
+Provider-native `computer_call` metadata stays authoritative: `execute()` chooses `context.toolCall.providerMetadata.actions` when metadata type is `computer`; otherwise it uses `params.actions`. Both paths run the same exact per-type validator. An omitted or empty `actions` array degrades to a screenshot-only batch; a non-array, unexpected field, or invalid entry fails before worker dispatch.
 
 ### GA action shapes
 
@@ -69,7 +69,7 @@ Provider-native `computer_call` metadata stays authoritative: `execute()` choose
 |---|---|
 | `click` | `{ type, button: "left" \| "right" \| "wheel" \| "back" \| "forward", x, y, keys? }` |
 | `double_click` | `{ type, x, y, keys?: string[] \| null }` |
-| `drag` | `{ type, path: Array<{x,y}>, keys? }`; native minimum two points |
+| `drag` | `{ type, path: Array<{x,y}>, keys? }`; minimum two points |
 | `keypress` | `{ type, keys: string[] }`; non-empty array and entries |
 | `move` | `{ type, x, y, keys? }` |
 | `screenshot` | `{ type }` |
@@ -77,7 +77,7 @@ Provider-native `computer_call` metadata stays authoritative: `execute()` choose
 | `type` | `{ type, text: string }` |
 | `wait` | `{ type }`; fixed two-second sleep |
 
-Validation rejects missing and unexpected fields before emitting input, at both the JS ingress and the native layer. Coordinates, drag points, and scroll deltas must be integers in signed 32-bit range (coordinates additionally non-negative); out-of-range JS numbers fail closed instead of truncating in the N-API `i32` conversion. Mouse `keys` accept unique modifier keys only. Keypress strings are case-insensitive, accept aliases and `+`-separated chords, and fall back to one Unicode character. `wheel` is the GA middle-button spelling; `middle` is invalid.
+Validation rejects missing, unexpected, and action-inapplicable fields before emitting input, at both the JS ingress and native layer. Coordinates, drag points, and scroll deltas must be integers in signed 32-bit range (coordinates additionally non-negative); out-of-range JS numbers fail closed instead of truncating in the N-API `i32` conversion. Mouse `keys` accept unique modifier keys only. Keypress strings are case-insensitive, accept aliases and `+`-separated chords, and fall back to one Unicode character. `wheel` is the GA middle-button spelling; `middle` is invalid.
 
 Scroll conversion: nonzero provider delta `d` becomes `sign(d) × max(1, floor((abs(d)+50)/100))` native steps.
 
@@ -114,9 +114,14 @@ One successful call returns:
 - `details.displays`: selected display geometry in global logical and screenshot-pixel spaces;
 - `details.capabilities`: current native backend/capture/input status;
 - `details.actions`: executed action type names;
+
+For a provider-native call, the result also includes:
+
 - `providerMetadata.type`: `computer`;
 - `providerMetadata.screenshot`: inline `computer_screenshot.image_url` data URI;
 - `providerMetadata.acknowledgedSafetyChecks`: exact approved provider checks.
+
+Regular function calls omit this native metadata so every provider serializes the PNG through its ordinary image-tool-result path.
 
 The renderer merges call and result. Expanded output shows every display; collapsed output shows at most three. Each row includes native ID/name, logical rectangle, PNG pixel rectangle, scale, and primary flag.
 
@@ -133,7 +138,7 @@ OMP native execution never creates a provider Files upload. The provider contrac
 7. Supervisor serializes execution behind a promise tail and lazily starts one Bun worker.
 8. Worker constructs one native `DesktopSession` and reports capabilities.
 9. Worker rejects coordinate input until it has returned a screenshot to the provider.
-10. Native session validates all actions, executes them in order, and captures one fresh final PNG.
+10. Native session validates all actions, executes them in order, defers any `screenshot` markers, and captures one fresh PNG after the entire successful batch.
 11. Worker transfers the PNG buffer to the parent and preserves session/frame state for the next call.
 12. Tool returns image content, display/capability details, and exact GA result metadata.
 
@@ -157,6 +162,8 @@ Every `DesktopDisplay` carries:
 Coordinate mapping finds the containing PNG display rectangle, scales locally to logical width/height, then adds global origin. Quartz and Win32 accept negative global origins; Linux input rejects them before emitting events. Negative screenshot points, image bounds, and layout-gap points fail closed.
 
 Before each coordinate action, native code re-enumerates displays and compares ID, logical rectangle, and scale against the stored frame. Difference clears the stored frame and returns `DESKTOP_LAYOUT_CHANGED`; caller must capture again.
+
+Every coordinate action in a batch maps through the same frame returned by the prior successful call. A `screenshot` marker emits no input and creates no intermediate result, so it does not rebase later coordinates in that batch. After the UI changes, finish the call and use its final returned PNG for coordinates in the next call.
 
 ## Platform variants
 
