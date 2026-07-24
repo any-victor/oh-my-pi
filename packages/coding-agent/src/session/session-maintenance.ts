@@ -708,7 +708,7 @@ export class SessionMaintenance {
 						throw new Error("snapcompact shape was not resolved before rendering.");
 					}
 					snapcompactResult = await snapcompact.compact(preparation, {
-						convertToLlm,
+						convertToLlm: messages => convertToLlm(messages, promptTemplates),
 						model: this.#model,
 						...(snapcompactShapeSetting === "auto" ? {} : { shape }),
 						maxFrames,
