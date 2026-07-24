@@ -97,7 +97,7 @@ import type { AdvisorConfig, AdvisorRuntimeStatus } from "../advisor";
 import { type AsyncJob, AsyncJobManager } from "../async";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
-import { resolveModelOverride, type ResolvedModelRoleValue } from "../config/model-resolver";
+import { type ResolvedModelRoleValue, resolveModelOverride } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";

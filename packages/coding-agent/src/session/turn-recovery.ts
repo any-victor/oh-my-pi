@@ -39,11 +39,11 @@ import {
 	getRetryFallbackChains,
 	getRetryFallbackRevertPolicy,
 	parseRetryFallbackSelector,
-	resolveRetryFallbackChainKey,
 	type RetryFallbackChains,
 	type RetryFallbackResolutionContext,
 	type RetryFallbackRevertPolicy,
 	type RetryFallbackSelector,
+	resolveRetryFallbackChainKey,
 	validateRetryFallbackChains,
 } from "./retry-fallback-chains";
 import { getLatestCompactionEntry } from "./session-context";
