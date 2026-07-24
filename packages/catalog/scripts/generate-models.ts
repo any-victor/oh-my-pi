@@ -503,8 +503,7 @@ async function generateModels() {
 			.filter(
 				batch =>
 					batch.descriptor.dynamicModelsAuthoritative === true &&
-					(batch.models.length > 0 ||
-						(batch.succeeded && batch.descriptor.providerId === "alibaba-token-plan")),
+					(batch.models.length > 0 || (batch.succeeded && batch.descriptor.providerId === "alibaba-token-plan")),
 			)
 			.map(batch => batch.descriptor.providerId),
 	);

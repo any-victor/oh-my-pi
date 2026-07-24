@@ -322,9 +322,7 @@ export async function launchHeadlessBrowser(opts: LaunchHeadlessOptions): Promis
 		defaultViewport: opts.headless ? initialViewport : null,
 		executablePath,
 		args: launchArgs,
-		ignoreDefaultArgs: [
-			...new Set([...stealthIgnoreDefaultArgs(executablePath), ...(opts.ignoreDefaultArgs ?? [])]),
-		],
+		ignoreDefaultArgs: [...new Set([...stealthIgnoreDefaultArgs(executablePath), ...(opts.ignoreDefaultArgs ?? [])])],
 		protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
 	});
 }
