@@ -11,13 +11,14 @@
  * `ls`/`find` use the cache when fresh (`online-if-uncached`); only `refresh`
  * forces the network (`online`).
  */
-import type { Api, Effort, Model } from "@oh-my-pi/pi-ai";
+import { type Api, type Effort, type Model, UsageProviderRegistry } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import {
+	collectExtensionUsageProviderRegistrations,
 	discoverAndLoadExtensions,
 	ExtensionRunner,
 	emitSessionShutdownEvent,
@@ -325,8 +326,13 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 			process.stderr.write(`Failed to load extension: ${extPath}: ${error}\n`);
 		}
 
-		// Mirror sdk.ts: drain pending provider registrations into the registry.
+		// Validate every pending registration before changing either durable registry.
 		const activeSources = extensionsResult.extensions.map(extension => extension.path);
+		const usageRegistrations = collectExtensionUsageProviderRegistrations(extensionsResult.extensions);
+		new UsageProviderRegistry().syncRegistrations(activeSources, usageRegistrations);
+		for (const { name, config } of extensionsResult.runtime.pendingProviderRegistrations) {
+			modelRegistry.validateProviderRegistration(name, config);
+		}
 		modelRegistry.syncExtensionSources(activeSources);
 		for (const sourceId of new Set(activeSources)) {
 			modelRegistry.clearSourceRegistrations(sourceId);
@@ -335,7 +341,7 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 			modelRegistry.registerProvider(name, config, sourceId);
 		}
 		extensionsResult.runtime.pendingProviderRegistrations = [];
-		// Discover runtime (extension) provider catalogs now that they are registered.
+		modelRegistry.authStorage.syncExtensionUsageProviders(activeSources, usageRegistrations);
 		await modelRegistry.refreshRuntimeProviders(action === "refresh" ? "online" : "online-if-uncached");
 
 		renderProviderModels(modelRegistry, action, pattern, json);

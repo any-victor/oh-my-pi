@@ -44,6 +44,7 @@ export * from "./session/auth-storage";
 export * from "./session/indexed-session-storage";
 export * from "./session/messages";
 export * from "./session/redis-session-storage";
+export { bindToolsToAsyncSessionIdentity, type ToolSessionIdentity } from "./session/session-advisors";
 export * from "./session/session-context";
 export * from "./session/session-dump-format";
 export * from "./session/session-entries";

@@ -15,10 +15,11 @@ import {
 	type UsageReport,
 	type UsageUnit,
 } from "@oh-my-pi/pi-ai";
-import { formatDuration, formatNumber, sanitizeText } from "@oh-my-pi/pi-utils";
+import { formatDuration, formatNumber, getProjectDir, sanitizeText } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { ModelRegistry } from "../config/model-registry";
-import { discoverAuthStorage } from "../sdk";
+import { Settings } from "../config/settings";
+import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
 
 const BAR_WIDTH = 28;
 
@@ -27,10 +28,27 @@ export interface UsageCommandArgs {
 	json?: boolean;
 	provider?: string;
 	redact?: boolean;
+	extensions?: string[];
+	noExtensions?: boolean;
+	config?: string[];
 	/** Show recorded usage-limit history instead of a live snapshot. */
 	history?: boolean;
 	/** History window in days (with `history`). */
 	days?: number;
+}
+
+export interface UsageCommandDependencies {
+	discoverAuthStorage?: () => Promise<AuthStorage>;
+	prepareModelRegistry?: (modelRegistry: ModelRegistry, command: UsageCommandArgs) => Promise<void>;
+}
+
+async function prepareUsageModelRegistry(modelRegistry: ModelRegistry, command: UsageCommandArgs): Promise<void> {
+	const cwd = getProjectDir();
+	const settings = await Settings.init({ cwd, configFiles: command.config });
+	await loadCliExtensionProviders(modelRegistry, settings, cwd, {
+		additionalExtensionPaths: command.extensions,
+		disableExtensionDiscovery: command.noExtensions,
+	});
 }
 
 /** Identity slice of a stored credential, for "every account" coverage. */
@@ -813,10 +831,15 @@ function redactReportForJson(
 	return { ...report, metadata, limits };
 }
 
-export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
-	const authStorage = await discoverAuthStorage();
+export async function runUsageCommand(
+	cmd: UsageCommandArgs,
+	dependencies: UsageCommandDependencies = {},
+): Promise<void> {
+	const authStorage = await (dependencies.discoverAuthStorage ?? discoverAuthStorage)();
 	try {
 		if (cmd.action === "invalidate") {
+			const modelRegistry = new ModelRegistry(authStorage);
+			await (dependencies.prepareModelRegistry ?? prepareUsageModelRegistry)(modelRegistry, cmd);
 			const provider = cmd.provider?.toLowerCase();
 			await authStorage.invalidateUsageCache(provider);
 			if (provider) {
@@ -858,6 +881,7 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 			return;
 		}
 		const modelRegistry = new ModelRegistry(authStorage);
+		await (dependencies.prepareModelRegistry ?? prepareUsageModelRegistry)(modelRegistry, cmd);
 		const reports =
 			(await authStorage.fetchUsageReports({
 				baseUrlResolver: provider => modelRegistry.getProviderBaseUrl(provider),

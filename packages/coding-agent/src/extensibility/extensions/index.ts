@@ -4,6 +4,7 @@
 
 export type { SlashCommandInfo, SlashCommandLocation, SlashCommandSource } from "../slash-commands";
 export {
+	collectExtensionUsageProviderRegistrations,
 	discoverAndLoadExtensions,
 	discoverExtensionPaths,
 	ExtensionRuntimeNotInitializedError,

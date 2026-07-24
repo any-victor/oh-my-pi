@@ -32,6 +32,7 @@ import type {
 	Static,
 	TextContent,
 	TSchema,
+	UsageProvider,
 } from "@oh-my-pi/pi-ai";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import type { AutocompleteItem, AutocompleteProvider, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
@@ -425,6 +426,10 @@ export interface ExtensionContext {
 	sessionManager: ReadonlySessionManager;
 	/** Model registry for API key resolution */
 	modelRegistry: ModelRegistry;
+	/** Provider-facing credential stickiness id for this AgentSession. */
+	providerSessionId?: string;
+	/** Session-local extension usage-provider scope. */
+	usageProviderScopeId?: string;
 	/** Calling session's `local://` root mapping for external tool bridges. */
 	localProtocolOptions?: LocalProtocolOptions;
 	/** Current model (may be undefined) */
@@ -1297,6 +1302,9 @@ export interface ExtensionAPI {
 	 */
 	registerProvider(name: string, config: ProviderConfig): void;
 
+	/** Register a provider that fetches account usage and rate-limit information. */
+	registerUsageProvider(provider: UsageProvider): void;
+
 	/** Shared event bus for extension communication. */
 	events: EventBus;
 }
@@ -1506,6 +1514,7 @@ export interface Extension {
 	commands: Map<string, RegisteredCommand>;
 	flags: Map<string, ExtensionFlag>;
 	shortcuts: Map<KeyId, ExtensionShortcut>;
+	usageProviders?: UsageProvider[];
 }
 
 /** Result of loading extensions. */

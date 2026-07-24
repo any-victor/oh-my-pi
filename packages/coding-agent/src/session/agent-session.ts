@@ -71,7 +71,7 @@ import type {
 	ToolResultMessage,
 	UsageReport,
 } from "@oh-my-pi/pi-ai";
-import { deriveClaudeDeviceId, type Effort, streamSimple } from "@oh-my-pi/pi-ai";
+import { deriveClaudeDeviceId, type Effort, streamSimple, UsageProviderRegistry } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
@@ -128,6 +128,7 @@ import type {
 	TurnStartEvent,
 } from "../extensibility/extensions";
 import { emitSessionShutdownEvent } from "../extensibility/extensions";
+import { collectExtensionUsageProviderRegistrations } from "../extensibility/extensions/loader";
 import { ManagedTimers } from "../extensibility/extensions/managed-timers";
 import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
@@ -560,6 +561,8 @@ export class AgentSession {
 	#modelRegistry: ModelRegistry;
 	#usageFallbackConfirmer: ((confirmation: UsageFallbackConfirmation) => Promise<boolean>) | undefined;
 	#usageReserveApprovedSelector: string | undefined;
+	#usageProviderScopeId: string;
+	#unregisterUsageProviderScope: (() => void) | undefined;
 	#usagePreflightAbortControllers = new Set<AbortController>();
 
 	#transformContext: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
@@ -861,6 +864,7 @@ export class AgentSession {
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
 		this.#modelRegistry = config.modelRegistry;
+		this.#usageProviderScopeId = config.usageProviderScopeId ?? Bun.randomUUIDv7();
 		const bashHost: BashRunnerHost = {
 			agent: this.agent,
 			sessionManager: this.sessionManager,
@@ -964,6 +968,16 @@ export class AgentSession {
 		this.#promptTemplates = config.promptTemplates ?? [];
 		this.#slashCommands = config.slashCommands ?? [];
 		this.#extensionRunner = config.extensionRunner;
+		const usageProviders = collectExtensionUsageProviderRegistrations(this.#extensionRunner?.getExtensions() ?? []);
+		const usageRegistry = new UsageProviderRegistry();
+		usageRegistry.syncRegistrations(
+			[...new Set(usageProviders.map(registration => registration.sourceId))],
+			usageProviders,
+		);
+		this.#unregisterUsageProviderScope = this.#modelRegistry.authStorage.registerSessionUsageProviders(
+			this.#usageProviderScopeId,
+			usageRegistry,
+		);
 		this.#customCommands = config.customCommands ?? [];
 		const recoveryHost: TurnRecoveryHost = {
 			agent: this.agent,
@@ -1437,6 +1451,10 @@ export class AgentSession {
 		this.#unsubscribeAppendOnly = onAppendOnlyModeChanged(_value => this.#syncAppendOnlyContext(this.model));
 		this.#unsubscribeModelRoles = onModelRolesChanged(() => this.#advisors.onModelRolesChanged());
 	}
+	get usageProviderScopeId(): string {
+		return this.#usageProviderScopeId;
+	}
+
 	/** Model registry for API key resolution and model discovery */
 	get modelRegistry(): ModelRegistry {
 		return this.#modelRegistry;
@@ -3383,6 +3401,8 @@ export class AgentSession {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
+		this.#unregisterUsageProviderScope?.();
+		this.#unregisterUsageProviderScope = undefined;
 		this.#memory.cancelLocalMemoryStartup();
 		this.#titleGenerationAbortController.abort();
 		this.#abortAutolearnCapture();
@@ -5063,6 +5083,8 @@ export class AgentSession {
 			cwd: this.sessionManager.getCwd(),
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#modelRegistry,
+			providerSessionId: this.sessionId,
+			usageProviderScopeId: this.#usageProviderScopeId,
 			model: this.model ?? undefined,
 			models: createExtensionModelQuery(this.#modelRegistry, this.settings, () => this.model ?? undefined),
 			isIdle: () => !this.isStreaming,
@@ -7752,6 +7774,7 @@ export class AgentSession {
 				}
 				return this.#modelRegistry.getProviderBaseUrl?.(provider);
 			},
+			usageScopeId: this.#usageProviderScopeId,
 			signal,
 		});
 	}

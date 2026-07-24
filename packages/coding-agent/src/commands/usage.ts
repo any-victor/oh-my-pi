@@ -28,6 +28,18 @@ export default class Usage extends Command {
 			default: false,
 		}),
 		days: Flags.integer({ char: "d", description: "History window in days (with --history)", default: 7 }),
+		extension: Flags.string({
+			char: "e",
+			description: "Load an extension file before fetching usage (repeatable)",
+			multiple: true,
+		}),
+		"no-extensions": Flags.boolean({
+			description: "Disable extension discovery (explicit -e paths still work)",
+		}),
+		config: Flags.string({
+			description: "Load an extra config.yml-style overlay for this run (repeatable)",
+			multiple: true,
+		}),
 	};
 
 	static examples = [
@@ -36,6 +48,7 @@ export default class Usage extends Command {
 		"# Redact account identifiers for screenshots\n  omp usage --redact",
 		"# Machine-readable output\n  omp usage --json",
 		"# Usage-limit trend over the last 30 days\n  omp usage --history --days 30",
+		"# Fetch usage from a source-shipped extension\n  omp usage -e ./packages/provider/src/extension.ts",
 		"# Invalidate cached usage reports for all providers\n  omp usage invalidate",
 		"# Invalidate cached usage reports for a specific provider\n  omp usage invalidate --provider anthropic",
 	];
@@ -49,6 +62,9 @@ export default class Usage extends Command {
 			redact: flags.redact,
 			history: flags.history,
 			days: flags.days,
+			extensions: flags.extension,
+			noExtensions: flags["no-extensions"],
+			config: flags.config,
 		});
 	}
 }

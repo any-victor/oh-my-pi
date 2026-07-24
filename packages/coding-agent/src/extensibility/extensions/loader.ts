@@ -13,6 +13,8 @@ import type {
 	ServiceTierFamily,
 	TextContent,
 	TSchema,
+	UsageProvider,
+	UsageProviderRegistration,
 } from "@oh-my-pi/pi-ai";
 import type { KeyId } from "@oh-my-pi/pi-tui";
 import { hasFsCode, isEacces, isEnoent, logger } from "@oh-my-pi/pi-utils";
@@ -291,6 +293,11 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 	registerProvider(name: string, config: ProviderConfig): void {
 		this.runtime.pendingProviderRegistrations.push({ name, config, sourceId: this.extension.path });
 	}
+
+	registerUsageProvider(provider: UsageProvider): void {
+		this.extension.usageProviders ??= [];
+		this.extension.usageProviders.push(provider);
+	}
 }
 
 /**
@@ -307,7 +314,17 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 		commands: new Map(),
 		flags: new Map(),
 		shortcuts: new Map(),
+		usageProviders: [],
 	};
+}
+
+/** Materialize source-owned usage registrations for one session or CLI invocation. */
+export function collectExtensionUsageProviderRegistrations(
+	extensions: readonly Extension[],
+): UsageProviderRegistration[] {
+	return extensions.flatMap(extension =>
+		(extension.usageProviders ?? []).map(provider => ({ provider, sourceId: extension.path })),
+	);
 }
 
 async function loadExtension(
@@ -330,9 +347,7 @@ async function loadExtension(
 
 		const extension = createExtension(extensionPath, resolvedPath);
 		const api = new ConcreteExtensionAPI(PiCodingAgent, extension, runtime, cwd, eventBus);
-		await withHostGuard(async () => {
-			await factory(api);
-		});
+		await withHostGuard(async () => factory(api));
 
 		return { extension, error: null };
 	} catch (err) {

@@ -52,6 +52,7 @@ export interface DescribeAttachedImagesDeps {
 	activeModelString?: string;
 	telemetryConfig?: AgentTelemetryConfig;
 	sessionId?: string;
+	usageProviderScopeId?: string;
 	/** Test seam: overrides the underlying completeSimple call. */
 	completeImpl?: typeof completeSimple;
 }
@@ -142,7 +143,13 @@ async function describeImage(
 					},
 				],
 			},
-			{ apiKey: deps.modelRegistry.resolver(visionModel, deps.sessionId), signal },
+			{
+				apiKey: deps.modelRegistry.resolver(visionModel, {
+					sessionId: deps.sessionId,
+					usageScopeId: deps.usageProviderScopeId,
+				}),
+				signal,
+			},
 			{ telemetry, oneshotKind: ONESHOT_KIND, completeImpl: deps.completeImpl },
 		);
 		if (response.stopReason === "error" || response.stopReason === "aborted") {
@@ -176,7 +183,9 @@ export async function describeAttachedImagesForTextModel(
 ): Promise<TextContent[]> {
 	const localRoot = resolveLocalRoot(deps.localProtocolOptions);
 	const visionModel = resolveVisionModel(deps);
-	const apiKey = visionModel ? await deps.modelRegistry.getApiKey(visionModel, deps.sessionId) : undefined;
+	const apiKey = visionModel
+		? await deps.modelRegistry.getApiKey(visionModel, deps.sessionId, { usageScopeId: deps.usageProviderScopeId })
+		: undefined;
 	const canDescribe = Boolean(visionModel && apiKey);
 	const telemetry = resolveTelemetry(deps.telemetryConfig, deps.sessionId);
 

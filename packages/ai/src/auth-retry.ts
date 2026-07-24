@@ -256,18 +256,26 @@ export interface OAuthAccessSource {
 	getOAuthAccess(
 		provider: string,
 		sessionId?: string,
-		options?: { forceRefresh?: boolean; signal?: AbortSignal },
+		options?: { forceRefresh?: boolean; signal?: AbortSignal; usageScopeId?: string },
 	): Promise<OAuthAccess | undefined>;
 	rotateSessionCredential(
 		provider: string,
 		sessionId: string | undefined,
-		options?: { error?: unknown; signal?: AbortSignal; apiKey?: string; credentialId?: number },
+		options?: {
+			error?: unknown;
+			signal?: AbortSignal;
+			apiKey?: string;
+			credentialId?: number;
+			usageScopeId?: string;
+		},
 	): Promise<boolean>;
 }
 
 export interface WithOAuthAccessOptions {
 	/** Session id for credential stickiness, threaded into every resolve. */
 	sessionId?: string;
+	/** Session-local extension usage-provider scope. */
+	usageScopeId?: string;
 	signal?: AbortSignal;
 	/** Override the retryable-error classifier (default {@link isAuthRetryableError}). */
 	isAuthError?: (error: unknown) => boolean;
@@ -307,9 +315,9 @@ export async function withOAuthAccess<T>(
 	opts?: WithOAuthAccessOptions,
 ): Promise<T> {
 	const isAuthError = opts?.isAuthError ?? isAuthRetryableError;
-	const { sessionId, signal } = opts ?? {};
+	const { sessionId, signal, usageScopeId } = opts ?? {};
 
-	let lastAccess = opts?.seed ?? (await storage.getOAuthAccess(provider, sessionId, { signal }));
+	let lastAccess = opts?.seed ?? (await storage.getOAuthAccess(provider, sessionId, { signal, usageScopeId }));
 	if (!lastAccess) {
 		throw new AIError.MissingApiKeyError(
 			provider,
@@ -335,7 +343,11 @@ export async function withOAuthAccess<T>(
 			if (!refreshedCurrent) {
 				refreshedCurrent = true;
 				try {
-					next = await storage.getOAuthAccess(provider, sessionId, { forceRefresh: true, signal });
+					next = await storage.getOAuthAccess(provider, sessionId, {
+						forceRefresh: true,
+						signal,
+						usageScopeId,
+					});
 				} catch {
 					next = undefined;
 				}
@@ -363,9 +375,10 @@ export async function withOAuthAccess<T>(
 				signal,
 				apiKey: lastAccess.accessToken,
 				credentialId: lastAccess.credentialId,
+				usageScopeId,
 			});
 			if (!rotated) break;
-			next = await storage.getOAuthAccess(provider, sessionId, { signal });
+			next = await storage.getOAuthAccess(provider, sessionId, { signal, usageScopeId });
 		} catch {
 			next = undefined;
 		}

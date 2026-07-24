@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import * as path from "node:path";
-import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import { assertCustomApiName, registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import type {
 	Api,
 	Context,
@@ -2180,7 +2180,7 @@ export class ModelRegistry {
 	async getApiKey(
 		model: Model<Api>,
 		sessionId?: string,
-		options?: { signal?: AbortSignal },
+		options?: { signal?: AbortSignal; usageScopeId?: string } | string,
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(model.provider);
 		if (commandKey.configured) return commandKey.value;
@@ -2190,7 +2190,8 @@ export class ModelRegistry {
 		return this.authStorage.getApiKey(model.provider, sessionId, {
 			baseUrl: model.baseUrl,
 			modelId: model.id,
-			signal: options?.signal,
+			signal: typeof options === "string" ? undefined : options?.signal,
+			usageScopeId: typeof options === "string" ? options : options?.usageScopeId,
 		});
 	}
 
@@ -2204,7 +2205,13 @@ export class ModelRegistry {
 	async getApiKeyForProvider(
 		provider: string,
 		sessionId?: string,
-		options?: { baseUrl?: string; modelId?: string; forceRefresh?: boolean; signal?: AbortSignal },
+		options?: {
+			baseUrl?: string;
+			modelId?: string;
+			forceRefresh?: boolean;
+			signal?: AbortSignal;
+			usageScopeId?: string;
+		},
 	): Promise<string | undefined> {
 		const commandKey = this.#resolveCommandBackedApiKey(provider);
 		if (commandKey.configured) return commandKey.value;
@@ -2216,18 +2223,18 @@ export class ModelRegistry {
 			modelId: options?.modelId,
 			forceRefresh: options?.forceRefresh,
 			signal: options?.signal,
+			usageScopeId: options?.usageScopeId,
 		});
 	}
 
 	/**
 	 * Build an {@link ApiKeyResolver} implementing the central a/b/c auth-retry
-	 * policy. Accepts a provider id with options, or a model with an optional
-	 * session id (`resolver(model, sessionId)`) which derives `baseUrl`/`modelId`
-	 * from the model. Callers that need the initial key for a guard can call
-	 * `resolveApiKeyOnce(resolver)`.
+	 * policy. Accepts a provider id with options, or a model with a session id
+	 * or full resolver options. Callers that need the initial key for a guard
+	 * can call `resolveApiKeyOnce(resolver)`.
 	 */
 	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver;
-	resolver(model: ApiKeyResolverModel, sessionId?: string): ApiKeyResolver;
+	resolver(model: ApiKeyResolverModel, options?: string | ApiKeyResolverOptions): ApiKeyResolver;
 	resolver(target: string | ApiKeyResolverModel, optionsOrSessionId?: ApiKeyResolverOptions | string): ApiKeyResolver {
 		const options = typeof optionsOrSessionId === "string" ? { sessionId: optionsOrSessionId } : optionsOrSessionId;
 		if (typeof target === "string") {
@@ -2300,19 +2307,14 @@ export class ModelRegistry {
 		}
 	}
 
-	/**
-	 * Register a provider dynamically (from extensions).
-	 *
-	 * If provider has models: replaces all existing models for this provider.
-	 * If provider has only baseUrl/headers: overrides existing models' URLs.
-	 * If provider has streamSimple: registers a custom API streaming function.
-	 * If provider has oauth: registers OAuth provider for /login support.
-	 */
-	registerProvider(providerName: string, config: ProviderConfigInput, sourceId?: string): void {
+	/** Validate a dynamic provider before mutating any shared registry state. */
+	validateProviderRegistration(providerName: string, config: ProviderConfigInput): void {
 		if (config.streamSimple && !config.api) {
 			throw new Error(`Provider ${providerName}: "api" is required when registering streamSimple.`);
 		}
-
+		if (config.streamSimple && config.api) {
+			assertCustomApiName(config.api);
+		}
 		validateProviderConfiguration(
 			providerName,
 			{
@@ -2325,6 +2327,18 @@ export class ModelRegistry {
 			},
 			"runtime-register",
 		);
+	}
+
+	/**
+	 * Register a provider dynamically (from extensions).
+	 *
+	 * If provider has models: replaces all existing models for this provider.
+	 * If provider has only baseUrl/headers: overrides existing models' URLs.
+	 * If provider has streamSimple: registers a custom API streaming function.
+	 * If provider has oauth: registers OAuth provider for /login support.
+	 */
+	registerProvider(providerName: string, config: ProviderConfigInput, sourceId?: string): void {
+		this.validateProviderRegistration(providerName, config);
 
 		if (config.streamSimple && config.api) {
 			const streamSimple = config.streamSimple;

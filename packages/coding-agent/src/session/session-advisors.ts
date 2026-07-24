@@ -1,3 +1,4 @@
+import type { AsyncLocalStorage } from "node:async_hooks";
 import {
 	Agent,
 	type AgentMessage,
@@ -95,6 +96,26 @@ import { formatSessionHistoryMarkdown } from "./session-history-format";
 import type { SessionManager } from "./session-manager";
 import type { YieldQueue } from "./yield-queue";
 
+export interface ToolSessionIdentity {
+	providerSessionId: string;
+	sessionLabel: string;
+}
+
+export function bindToolsToAsyncSessionIdentity(
+	tools: AgentTool[],
+	identity: AsyncLocalStorage<ToolSessionIdentity>,
+	session: ToolSessionIdentity,
+): AgentTool[] {
+	return tools.map(tool => {
+		const bound = Object.defineProperties({}, Object.getOwnPropertyDescriptors(tool)) as AgentTool;
+		Object.defineProperty(bound, "description", {
+			enumerable: true,
+			get: () => tool.description,
+		});
+		bound.execute = (...args) => identity.run(session, () => tool.execute(...args));
+		return bound;
+	});
+}
 /** Advisor statistics for the advisor status command. */
 export interface AdvisorStats {
 	configured: boolean;

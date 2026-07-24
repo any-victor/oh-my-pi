@@ -60,7 +60,7 @@ export interface RegisteredCustomApi {
 
 const customApiRegistry = new Map<string, RegisteredCustomApi>();
 
-function assertCustomApiName(api: string): void {
+export function assertCustomApiName(api: string): void {
 	if (BUILTIN_APIS.has(api as KnownApi)) {
 		throw new AIError.ConfigurationError(`Cannot register custom API "${api}": built-in API names are reserved.`);
 	}

@@ -276,13 +276,22 @@ export class ExtensionRunner {
 		private readonly runtime: ExtensionRuntime,
 		private readonly cwd: string,
 		private readonly sessionManager: SessionManager,
+
 		private readonly modelRegistry: ModelRegistry,
 		getMemory?: () => MemoryRuntimeContext | undefined,
 		private readonly settings?: Settings,
 		private readonly localProtocolOptions?: LocalProtocolOptions,
+		private readonly providerIdentity?: {
+			getProviderSessionId(): string | undefined;
+			getUsageProviderScopeId(): string | undefined;
+		},
 	) {
 		this.#uiContext = noOpUIContext;
 		this.#getMemoryFn = getMemory;
+	}
+
+	getExtensions(): readonly Extension[] {
+		return this.extensions;
 	}
 
 	initialize(
@@ -556,6 +565,8 @@ export class ExtensionRunner {
 			cwd: this.cwd,
 			sessionManager: this.sessionManager,
 			modelRegistry: this.modelRegistry,
+			providerSessionId: this.providerIdentity?.getProviderSessionId(),
+			usageProviderScopeId: this.providerIdentity?.getUsageProviderScopeId(),
 			get model() {
 				return getModel();
 			},

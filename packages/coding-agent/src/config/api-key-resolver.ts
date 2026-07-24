@@ -7,6 +7,8 @@ export type ApiKeyResolverModel = Pick<Model<Api>, "provider" | "baseUrl" | "id"
 export interface ApiKeyResolverOptions {
 	/** Session id for credential stickiness; read at resolve time by the caller. */
 	sessionId?: string;
+	/** Owning AgentSession id for extension usage-provider lookup and session-local quota state. */
+	usageScopeId?: string;
 	/** Provider base URL hint forwarded to the auth-storage cascade. */
 	baseUrl?: string;
 	/** Provider model id forwarded to model-scoped usage ranking/backoff. */
@@ -22,7 +24,13 @@ export interface ApiKeyResolverRegistry {
 	getApiKeyForProvider(
 		provider: string,
 		sessionId?: string,
-		options?: { baseUrl?: string; modelId?: string; forceRefresh?: boolean; signal?: AbortSignal },
+		options?: {
+			baseUrl?: string;
+			modelId?: string;
+			forceRefresh?: boolean;
+			signal?: AbortSignal;
+			usageScopeId?: string;
+		},
 	): Promise<string | undefined>;
 	authStorage: Pick<AuthStorage, "rotateSessionCredential">;
 	/**
@@ -37,7 +45,7 @@ export interface ApiKeyResolverRegistry {
 	 * `resolveApiKeyOnce(resolver)`.
 	 */
 	resolver(provider: string, options?: ApiKeyResolverOptions): ApiKeyResolver;
-	resolver(model: ApiKeyResolverModel, sessionId?: string): ApiKeyResolver;
+	resolver(model: ApiKeyResolverModel, options?: string | ApiKeyResolverOptions): ApiKeyResolver;
 }
 
 /**
@@ -49,10 +57,10 @@ export function createApiKeyResolver(
 	provider: string,
 	options: ApiKeyResolverOptions = {},
 ): ApiKeyResolver {
-	const { sessionId, baseUrl, modelId } = options;
+	const { sessionId, usageScopeId, baseUrl, modelId } = options;
 	return async ({ lastChance, error, signal, previousKey }) => {
 		if (error === undefined) {
-			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId });
+			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId, usageScopeId });
 		}
 		if (lastChance) {
 			// Account constraint (401 / usage / account-rate-limit): rotate to a
@@ -65,6 +73,7 @@ export function createApiKeyResolver(
 				modelId,
 				signal,
 				apiKey: previousKey,
+				usageScopeId,
 			});
 			if (!switched) {
 				const status = AIError.status(error);
@@ -74,8 +83,14 @@ export function createApiKeyResolver(
 				// auth decline can instead mean a peer refreshed the bearer.
 				if (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message)) return undefined;
 			}
-			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId });
+			return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId, usageScopeId });
 		}
-		return registry.getApiKeyForProvider(provider, sessionId, { baseUrl, modelId, forceRefresh: true, signal });
+		return registry.getApiKeyForProvider(provider, sessionId, {
+			baseUrl,
+			modelId,
+			forceRefresh: true,
+			signal,
+			usageScopeId,
+		});
 	};
 }

@@ -308,6 +308,127 @@ export interface UsageProvider {
 	retainLastGoodOnFailure?: boolean;
 }
 
+export interface UsageProviderRegistration {
+	provider: UsageProvider;
+	sourceId: string;
+}
+
+type StoredUsageProviderRegistration = UsageProviderRegistration;
+
+function validateUsageProviderRegistration(provider: UsageProvider, sourceId: string): void {
+	if (
+		!provider ||
+		typeof provider !== "object" ||
+		typeof provider.id !== "string" ||
+		!provider.id ||
+		provider.id.length > 128 ||
+		!/^[a-z0-9][a-z0-9._-]*$/.test(provider.id) ||
+		typeof provider.fetchUsage !== "function" ||
+		(provider.supports !== undefined && typeof provider.supports !== "function") ||
+		(provider.parseRateLimitHeaders !== undefined && typeof provider.parseRateLimitHeaders !== "function") ||
+		(provider.validatesCredentials !== undefined && typeof provider.validatesCredentials !== "boolean") ||
+		typeof sourceId !== "string" ||
+		!sourceId ||
+		sourceId.length > 4_096 ||
+		/[\u0000-\u001f\u007f]/.test(sourceId)
+	) {
+		throw new TypeError("Invalid extension usage-provider registration");
+	}
+}
+
+/**
+ * Source-owned usage-provider registrations for one runtime scope. Agent
+ * sessions create independent registries even when they share AuthStorage;
+ * one-shot CLIs may synchronize a registry directly into their owned storage.
+ * For each provider, the most recently registered active source wins.
+ */
+export class UsageProviderRegistry {
+	#registrations: Map<Provider, StoredUsageProviderRegistration[]> = new Map();
+	#revisions: Map<Provider, number> = new Map();
+
+	#resolveRegistration(provider: Provider): StoredUsageProviderRegistration | undefined {
+		return this.#registrations.get(provider)?.at(-1);
+	}
+
+	#bumpRevisionIfChanged(provider: Provider, previous: StoredUsageProviderRegistration | undefined): void {
+		const current = this.#resolveRegistration(provider);
+		if (previous?.provider === current?.provider && previous?.sourceId === current?.sourceId) return;
+		this.#revisions.set(provider, (this.#revisions.get(provider) ?? 0) + 1);
+	}
+
+	register(provider: UsageProvider, sourceId: string): void {
+		validateUsageProviderRegistration(provider, sourceId);
+		const previous = this.#resolveRegistration(provider.id);
+		const registrations = this.#registrations.get(provider.id) ?? [];
+		const existingIndex = registrations.findIndex(registration => registration.sourceId === sourceId);
+		if (existingIndex !== -1) registrations.splice(existingIndex, 1);
+		registrations.push({ provider, sourceId });
+		this.#registrations.set(provider.id, registrations);
+		this.#bumpRevisionIfChanged(provider.id, previous);
+	}
+
+	clearSource(sourceId: string): void {
+		for (const [providerId, registrations] of this.#registrations) {
+			const previous = registrations.at(-1);
+			const remaining = registrations.filter(registration => registration.sourceId !== sourceId);
+			if (remaining.length === 0) this.#registrations.delete(providerId);
+			else if (remaining.length !== registrations.length) this.#registrations.set(providerId, remaining);
+			this.#bumpRevisionIfChanged(providerId, previous);
+		}
+	}
+
+	syncSources(activeSourceIds: Iterable<string>): void {
+		const activeSources = new Set(activeSourceIds);
+		for (const [providerId, registrations] of this.#registrations) {
+			const previous = registrations.at(-1);
+			const remaining = registrations.filter(registration => activeSources.has(registration.sourceId));
+			if (remaining.length === 0) this.#registrations.delete(providerId);
+			else if (remaining.length !== registrations.length) this.#registrations.set(providerId, remaining);
+			this.#bumpRevisionIfChanged(providerId, previous);
+		}
+	}
+
+	syncRegistrations(activeSourceIds: Iterable<string>, registrations: readonly UsageProviderRegistration[]): void {
+		const activeSources = new Set(activeSourceIds);
+		const next = new UsageProviderRegistry();
+		for (const { provider, sourceId } of registrations) {
+			if (!activeSources.has(sourceId)) {
+				throw new TypeError("Extension usage-provider source is not active");
+			}
+			next.register(provider, sourceId);
+		}
+		const providerIds = new Set([...this.#registrations.keys(), ...next.#registrations.keys()]);
+		for (const providerId of providerIds) {
+			const previous = this.#resolveRegistration(providerId);
+			const current = next.#resolveRegistration(providerId);
+			if (previous?.provider === current?.provider && previous?.sourceId === current?.sourceId) continue;
+			this.#revisions.set(providerId, (this.#revisions.get(providerId) ?? 0) + 1);
+		}
+		this.#registrations = next.#registrations;
+	}
+
+	providerIds(): Provider[] {
+		return [...this.#registrations.keys()];
+	}
+
+	/**
+	 * Partitions the durable cache per extension source and invalidates it on
+	 * in-process re-registration. Across restarts, staleness is bounded by the
+	 * report TTL, just like builtin providers.
+	 */
+	cacheKeyVersion(provider: Provider): string | undefined {
+		const revision = this.#revisions.get(provider);
+		if (revision === undefined) return undefined;
+		const sourceId = this.#resolveRegistration(provider)?.sourceId;
+		return sourceId === undefined ? `builtin:${revision}` : `${Bun.hash(sourceId).toString(16)}:${revision}`;
+	}
+
+	resolve(provider: Provider): UsageProvider | undefined {
+		const registrations = this.#registrations.get(provider);
+		return registrations?.at(-1)?.provider;
+	}
+}
+
 /** Request context used when ranking usage for a specific model. */
 export interface CredentialRankingContext {
 	/** Provider model id, when the caller is selecting a credential for one model. */
