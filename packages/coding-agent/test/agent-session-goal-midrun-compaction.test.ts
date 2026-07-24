@@ -190,14 +190,16 @@ describe("AgentSession mid-run threshold compaction", () => {
 
 	it("falls back to in-place compaction for mid-run handoff strategy", async () => {
 		const { session, observedContexts } = await createHarness({ "compaction.strategy": "handoff" });
-		const handoffSpy = vi.spyOn(session, "handoff").mockImplementation(async () => {
-			throw new Error("mid-run compaction must not reset the session through handoff");
-		});
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockImplementation(async () => {
+				throw new Error("mid-run compaction must not reset the session through handoff");
+			});
 		const compactSpy = mockCompaction("HANDOFF-MID-RUN-COMPACTED-IN-PLACE");
 
 		await session.prompt("work on the release");
 
-		expect(handoffSpy).not.toHaveBeenCalled();
+		expect(generateHandoffSpy).not.toHaveBeenCalled();
 		expect(compactSpy).toHaveBeenCalledTimes(1);
 		expect(observedContexts[1].join("\n")).toContain("HANDOFF-MID-RUN-COMPACTED-IN-PLACE");
 	});

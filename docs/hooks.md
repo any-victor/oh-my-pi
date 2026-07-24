@@ -89,6 +89,8 @@ Hook events are strongly typed in `types.ts`.
 - `session_before_compact` → can return `{ cancel?: boolean; compaction?: CompactionResult }`
 - `session.compacting` → can return `{ context?: string[]; prompt?: string; preserveData?: Record<string, unknown> }`
 - `session_compact`
+- `session_before_handoff` → can return `{ cancel?: boolean; customInstructions?: string; additionalContext?: string[] }`; runs before handoff generation for manual and automatic handoffs, composes field-wise across handlers, and `cancel` ends the handoff (automatic maintenance does not fall back to compaction)
+- `session_handoff_generated` → can return `{ cancel?: boolean; document?: string }`; runs after generation, before the successor session; `document` replaces the generated handoff text
 - `session_before_tree` → can return `{ cancel?: boolean; summary?: { summary: string; details?: unknown } }`
 - `session_tree`
 - `session_shutdown`

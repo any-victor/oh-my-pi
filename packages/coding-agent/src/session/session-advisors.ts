@@ -10,6 +10,7 @@ import {
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import {
+	type CompactionPromptTemplates,
 	type CompactionResult,
 	calculateContextTokens,
 	compact,
@@ -218,7 +219,8 @@ export interface SessionAdvisorsHost {
 	dropPendingAdvisorCards(): void;
 	preserveAdvisorCard(card: CustomMessage): void;
 	hasPendingNextTurnMessages(): boolean;
-	convertToLlmForSideRequest(messages: AgentMessage[]): Message[];
+	convertToLlmForSideRequest(messages: AgentMessage[], promptTemplates?: CompactionPromptTemplates): Message[];
+	resolveOperationPromptTemplates(): Promise<CompactionPromptTemplates>;
 	effectiveServiceTier(model: Model): ServiceTier | undefined;
 	resolveContextPromotionTarget(currentModel: Model, contextWindow: number): Promise<Model | undefined>;
 	resolveCompactionModelCandidates(preferredModel: Model | null | undefined, availableModels: Model[]): Model[];
@@ -1243,6 +1245,7 @@ export class SessionAdvisors {
 			reason: "context_limit",
 			phase: "pre_turn",
 		});
+		const advisorPromptTemplates = await this.#host.resolveOperationPromptTemplates();
 
 		for (const candidate of candidates) {
 			const apiKey = await this.#host.modelRegistry.getApiKey(candidate, advisorProviderSessionId);
@@ -1257,7 +1260,9 @@ export class SessionAdvisors {
 					undefined,
 					{
 						thinkingLevel: advisorCompactionThinkingLevel,
-						convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
+						promptTemplates: advisorPromptTemplates,
+						convertToLlm: (messages, promptTemplates) =>
+							this.#host.convertToLlmForSideRequest(messages, promptTemplates),
 						telemetry,
 						tools: agent.state.tools,
 						sessionId: advisorProviderSessionId,

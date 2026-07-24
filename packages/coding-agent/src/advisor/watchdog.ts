@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
@@ -92,6 +93,7 @@ export async function collectConfigCandidates(
 	const items: ConfigCandidate[] = [];
 	for (const candidate of candidates) {
 		try {
+			if (!(await fs.stat(candidate)).isFile()) continue;
 			const content = await Bun.file(candidate).text();
 			const parent = path.dirname(candidate);
 			const baseName = parent.split(path.sep).pop() ?? "";

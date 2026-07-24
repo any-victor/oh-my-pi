@@ -47,6 +47,7 @@ The same minimum-content guard exists again inside `AgentSession.handoff()` and 
 - Validates minimum message count (`>= 2`).
 - Refuses if a response is still streaming (the TUI `/handoff` and RPC `handoff` command guard on `isStreaming` before calling this; the auto-handoff path runs only after the turn settles). Resetting the agent mid-stream would let the live turn keep emitting into the torn-down session.
 - Creates `#handoffAbortController` and links any caller-provided abort signal to it.
+- Emits mutable `session_before_handoff` handlers before provider work. Ordered handlers may cancel or replace the one-off focus and extra context supplied to `renderHandoffPrompt(...)`; `COMPACTION.yml` still owns the surrounding template.
 - Resolves the current model API key through `ModelRegistry`.
 - Builds the handoff request through the **same pipeline a live turn uses** — the cache-preserving side-request path shared with `runEphemeralTurn` (`/btw`, `/omfg`):
   1. Renders the handoff prompt (`renderHandoffPrompt(...)` with optional `additionalFocus`, after obfuscating any focus instructions) and appends it as a trailing agent-attributed `user` message to a snapshot of `agent.state.messages`.
@@ -73,6 +74,8 @@ await instrumentedCompleteSimple(
 ```
 
 (`generateHandoff(messages, …)` remains exported for downstream callers and now builds a basic `Context` from `systemPrompt`/`tools`/`convertToLlm` and delegates to `generateHandoffFromContext`. `AgentSession` no longer uses it because it cannot apply the host's transform pipeline or cache routing.)
+
+Before a successor session is created, mutable `session_handoff_generated` handlers receive the generated document. Ordered handlers may cancel the transition or replace the document; the final value is what gets persisted and injected.
 
 Important generation properties:
 

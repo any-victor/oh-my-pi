@@ -15,6 +15,8 @@ import {
 	AUTO_HANDOFF_THRESHOLD_FOCUS,
 	applyShakeRegions,
 	CompactionCancelledError,
+	CompactionPrompts,
+	type CompactionPromptTemplates,
 	type CompactionPreparation,
 	type CompactionResult,
 	type CompactionSettings,
@@ -62,7 +64,7 @@ import { computeNonMessageTokens } from "../modes/utils/context-usage";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { AgentSessionEvent } from "./agent-session-events";
-import type { ContextUsageBreakdown, HandoffResult, SessionHandoffOptions } from "./agent-session-types";
+import type { ContextUsageBreakdown, HandoffOutcome, SessionHandoffOptions } from "./agent-session-types";
 import { findCompactMode } from "./compact-modes";
 import { convertToLlm, stripImagesFromMessage } from "./messages";
 import { isTerminalTextAssistantAnswer } from "./queued-messages";
@@ -223,7 +225,7 @@ export interface SessionMaintenanceHost {
 	reconnectToAgent(): void;
 	drainStrandedQueuedMessages(): void;
 	buildDisplaySessionContext(): SessionContext;
-	convertToLlmForSideRequest(messages: AgentMessage[]): Message[];
+	convertToLlmForSideRequest(messages: AgentMessage[], promptTemplates?: CompactionPromptTemplates): Message[];
 	obfuscateTextForProvider(text: string | undefined): string | undefined;
 	obfuscatePreparationForProvider(preparation: CompactionPreparation): CompactionPreparation;
 	closeCodexProviderSessionsForHistoryRewrite(): void;
@@ -239,7 +241,8 @@ export interface SessionMaintenanceHost {
 	getContextUsage(options?: { contextWindow?: number }): ContextUsage | undefined;
 	shake(mode: ShakeMode, options?: { config?: ShakeConfig; signal?: AbortSignal }): Promise<ShakeResult>;
 	dropImages(): Promise<{ removed: number }>;
-	runHandoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined>;
+	runHandoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffOutcome>;
+	resolveOperationPromptTemplates(): Promise<CompactionPromptTemplates>;
 	removeAssistantMessageFromActiveContext(message: AssistantMessage): void;
 	dropPersistedAssistantTurn(message: AssistantMessage): Promise<void>;
 	runRecoveryCompactionWithRollback(
@@ -540,6 +543,7 @@ export class SessionMaintenance {
 		}
 		const compactionAbortController = new AbortController();
 		this.#compactionAbortController = compactionAbortController;
+		const promptTemplates = await this.#host.resolveOperationPromptTemplates();
 
 		try {
 			this.#host.disconnectFromAgent();
@@ -652,7 +656,7 @@ export class SessionMaintenance {
 				snapcompactReady = false;
 			} else if (snapcompactReady) {
 				const text = snapcompact.serializeConversation(
-					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
+					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages), promptTemplates),
 					{ includeThinking: snapcompactIncludeThinking },
 				);
 				const probeText = snapcompact.renderabilityProbeText(
@@ -785,8 +789,13 @@ export class SessionMaintenance {
 						{
 							promptOverride: this.#host.obfuscateTextForProvider(compactionPrep.hookPrompt),
 							extraContext: compactionPrep.hookContext,
-							remoteInstructions: this.#host.baseSystemPrompt().join("\n\n"),
-							convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
+							remoteInstructions:
+								promptTemplates.summarizationSystem === undefined
+									? this.#host.baseSystemPrompt().join("\n\n")
+									: new CompactionPrompts(promptTemplates).render("summarizationSystem", {}),
+							promptTemplates,
+							convertToLlm: (messages, promptTemplates) =>
+								this.#host.convertToLlmForSideRequest(messages, promptTemplates),
 							codexCompaction,
 						},
 						compactionCandidates,
@@ -1469,7 +1478,8 @@ export class SessionMaintenance {
 					{
 						...options,
 						metadata: this.#host.agent.metadataForProvider(candidate.provider),
-						convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
+						convertToLlm: (messages, promptTemplates) =>
+							this.#host.convertToLlmForSideRequest(messages, promptTemplates),
 						telemetry,
 						// Honor the user's /model thinking selection (incl. `off`) on
 						// the manual `/compact` path. Clamped per-model inside compact()
@@ -2127,19 +2137,21 @@ export class SessionMaintenance {
 			// a message typed as the compaction loader appears must land in the compaction
 			// queue, not the core steering queue (which handoff's agent.reset() would wipe).
 			await this.#host.emitSessionEvent({ type: "auto_compaction_start", reason, action });
+			const promptTemplates = await this.#host.resolveOperationPromptTemplates();
 			if (action === "handoff") {
-				let handoffSwitchCancelled = false;
-				const handoffFocus = AUTO_HANDOFF_THRESHOLD_FOCUS;
-				const handoffResult = await this.#host.runHandoff(handoffFocus, {
-					autoTriggered: true,
-					signal: autoCompactionSignal,
-					onSwitchCancelled: () => {
-						handoffSwitchCancelled = true;
+				const outcome = await this.#host.runHandoff(
+					new CompactionPrompts(promptTemplates).render("autoHandoffFocus", {}),
+					{
+						promptTemplates,
+						autoTriggered: true,
+						signal: autoCompactionSignal,
 					},
-				});
-				if (!handoffResult) {
-					const aborted = autoCompactionSignal.aborted || handoffSwitchCancelled;
-					if (aborted) {
+				);
+				if (outcome.kind !== "completed") {
+					// A handler cancellation is a deliberate decision, not a generation
+					// failure - end maintenance instead of rewriting history through the
+					// context-full fallback.
+					if (outcome.kind === "cancelled" || autoCompactionSignal.aborted) {
 						await this.#host.emitSessionEvent({
 							type: "auto_compaction_end",
 							action,
@@ -2154,7 +2166,7 @@ export class SessionMaintenance {
 					});
 					action = "context-full";
 				}
-				if (handoffResult) {
+				if (outcome.kind === "completed") {
 					await this.#host.emitSessionEvent({
 						type: "auto_compaction_end",
 						action,
@@ -2382,7 +2394,7 @@ export class SessionMaintenance {
 				// ("reasoning_extraction", issue #6093).
 				const snapcompactIncludeThinking = preferredDialect(this.#model.id) !== "anthropic";
 				const text = snapcompact.serializeConversation(
-					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
+					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages), promptTemplates),
 					{ includeThinking: snapcompactIncludeThinking },
 				);
 				const probeText = snapcompact.renderabilityProbeText(
@@ -2410,7 +2422,7 @@ export class SessionMaintenance {
 							"snapcompact: kept history alone exceeds the context budget; using context-full auto-compaction instead.";
 					} else {
 						snapcompactResult = await snapcompact.compact(preparation, {
-							convertToLlm,
+							convertToLlm: messages => convertToLlm(messages, promptTemplates),
 							model: this.#model,
 							...(shapeSetting === "auto" ? {} : { shape }),
 							maxFrames,
@@ -2499,10 +2511,15 @@ export class SessionMaintenance {
 								{
 									promptOverride: this.#host.obfuscateTextForProvider(compactionPrep.hookPrompt),
 									extraContext: compactionPrep.hookContext,
-									remoteInstructions: this.#host.baseSystemPrompt().join("\n\n"),
+									remoteInstructions:
+										promptTemplates.summarizationSystem === undefined
+											? this.#host.baseSystemPrompt().join("\n\n")
+											: new CompactionPrompts(promptTemplates).render("summarizationSystem", {}),
+									promptTemplates,
 									metadata: this.#host.agent.metadataForProvider(candidate.provider),
 									initiatorOverride: "agent",
-									convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
+									convertToLlm: (messages, promptTemplates) =>
+										this.#host.convertToLlmForSideRequest(messages, promptTemplates),
 									telemetry,
 									// Honor the user's /model thinking selection on the
 									// auto-compaction path — the most-fired compaction

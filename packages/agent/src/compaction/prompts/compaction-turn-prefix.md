@@ -1,3 +1,7 @@
+<conversation>
+{{conversation}}
+</conversation>
+
 This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
 
 You MUST summarize the prefix to provide context for the retained suffix:

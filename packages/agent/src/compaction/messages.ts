@@ -6,13 +6,8 @@ import type {
 	TextContent,
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
-import { prompt } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "../types";
-import branchSummaryContextPrompt from "./prompts/branch-summary-context.md" with { type: "text" };
-import compactionSummaryContextPrompt from "./prompts/compaction-summary-context.md" with { type: "text" };
-
-const COMPACTION_SUMMARY_TEMPLATE = compactionSummaryContextPrompt;
-const BRANCH_SUMMARY_TEMPLATE = branchSummaryContextPrompt;
+import { CompactionPrompts, type CompactionPromptTemplates } from "./prompt-templates";
 
 export interface CustomMessage<T = unknown> {
 	role: "custom";
@@ -71,7 +66,7 @@ declare module "../types" {
 		compactionSummary: CompactionSummaryMessage;
 	}
 }
-export type ConvertToLlm = (messages: AgentMessage[]) => Message[];
+export type ConvertToLlm = (messages: AgentMessage[], promptTemplates?: CompactionPromptTemplates) => Message[];
 
 function getPrunedToolResultContent(message: ToolResultMessage): (TextContent | ImageContent)[] {
 	if (message.prunedAt === undefined) {
@@ -82,12 +77,12 @@ function getPrunedToolResultContent(message: ToolResultMessage): (TextContent | 
 	return [{ type: "text", text }];
 }
 
-export function renderBranchSummaryContext(summary: string): string {
-	return prompt.render(BRANCH_SUMMARY_TEMPLATE, { summary });
+export function renderBranchSummaryContext(summary: string, promptTemplates?: CompactionPromptTemplates): string {
+	return new CompactionPrompts(promptTemplates).render("branchSummaryContext", { summary });
 }
 
-export function renderCompactionSummaryContext(summary: string): string {
-	return prompt.render(COMPACTION_SUMMARY_TEMPLATE, { summary });
+export function renderCompactionSummaryContext(summary: string, promptTemplates?: CompactionPromptTemplates): string {
+	return new CompactionPrompts(promptTemplates).render("compactionSummaryContext", { summary });
 }
 
 export function createBranchSummaryMessage(summary: string, fromId: string, timestamp: string): BranchSummaryMessage {
@@ -163,7 +158,10 @@ function isCoreCompactionMessage(message: AgentMessage): message is AgentMessage
  * roles and delegate every core role here — duplicating these cases is how
  * snapcompact frames once silently fell off the provider request.
  */
-export function convertMessageToLlm(message: AgentMessage): Message | undefined {
+export function convertMessageToLlm(
+	message: AgentMessage,
+	promptTemplates?: CompactionPromptTemplates,
+): Message | undefined {
 	if (isCoreCompactionMessage(message)) {
 		switch (message.role) {
 			case "custom":
@@ -185,7 +183,7 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
 					content: [
 						{
 							type: "text" as const,
-							text: renderBranchSummaryContext(message.summary),
+							text: renderBranchSummaryContext(message.summary, promptTemplates),
 						},
 					],
 					attribution: "agent",
@@ -200,7 +198,7 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
 							: [
 									{
 										type: "text" as const,
-										text: renderCompactionSummaryContext(message.summary),
+										text: renderCompactionSummaryContext(message.summary, promptTemplates),
 									},
 									...(message.images ?? []),
 								],
@@ -236,6 +234,8 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
  * `SummaryOptions.convertToLlm`; this default intentionally preserves only the
  * core LLM roles and the compaction messages owned by this package.
  */
-export function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
-	return messages.map(convertMessageToLlm).filter(message => message !== undefined);
+export function defaultConvertToLlm(messages: AgentMessage[], promptTemplates?: CompactionPromptTemplates): Message[] {
+	return messages
+		.map(message => convertMessageToLlm(message, promptTemplates))
+		.filter(message => message !== undefined);
 }

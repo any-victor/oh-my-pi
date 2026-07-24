@@ -1,4 +1,4 @@
-import type { Agent, AgentMessage, AgentTool, StreamFn, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { Agent, AgentMessage, AgentTool, CompactionPromptTemplates, StreamFn, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type {
 	Context,
 	ImageContent,
@@ -115,6 +115,18 @@ export interface AgentSessionConfig {
 	serviceTierByFamily?: ServiceTierByFamily;
 	/** Prompt templates for expansion. */
 	promptTemplates?: PromptTemplate[];
+	/** Configured compaction prompt overrides; bundled defaults apply for omitted fields. */
+	compactionPromptTemplates?: CompactionPromptTemplates;
+	/**
+	 * Re-resolves `COMPACTION.yml` prompt overrides at the start of each one-off
+	 * operation (compaction, handoff, branch summary), so configuration edits
+	 * apply without restarting the session. Conversion templates
+	 * (`compactionSummaryContext`, `branchSummaryContext`) always keep their
+	 * session-frozen values: they are re-rendered into every main-turn and
+	 * side-request serialization, so changing them mid-session would shift
+	 * provider-visible history bytes and break the prompt cache.
+	 */
+	resolveCompactionPromptTemplates?: () => Promise<CompactionPromptTemplates>;
 	/** File-based slash commands for expansion. */
 	slashCommands?: FileSlashCommand[];
 	/** Extension runner created with wrapped tools. */
@@ -167,7 +179,10 @@ export interface AgentSessionConfig {
 	/** Per-session raw SSE diagnostic buffer. */
 	rawSseDebugBuffer?: RawSseDebugBuffer;
 	/** Current session message-to-LLM conversion pipeline. */
-	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+	convertToLlm?: (
+		messages: AgentMessage[],
+		promptTemplates?: CompactionPromptTemplates,
+	) => Message[] | Promise<Message[]>;
 	/** System prompt builder that can consider tool availability. */
 	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>;
 	/** Local calendar date provider used by prompt-cache invalidation. */
@@ -256,11 +271,19 @@ export interface HandoffResult {
 	savedPath?: string;
 }
 
+/** Explicit outcome of a handoff attempt. The public `handoff()` maps it to `HandoffResult | undefined`. */
+export type HandoffOutcome = { kind: "completed"; result: HandoffResult } | { kind: "cancelled" } | { kind: "failed" };
+
 /** Options controlling handoff generation. */
 export interface SessionHandoffOptions {
 	autoTriggered?: boolean;
 	signal?: AbortSignal;
 	onSwitchCancelled?: () => void;
+	/**
+	 * Pre-resolved template snapshot. Auto-handoff threads the snapshot it used
+	 * for the focus text so the whole operation renders from one configuration.
+	 */
+	promptTemplates?: CompactionPromptTemplates;
 }
 
 /** Result from cycleModel(). */

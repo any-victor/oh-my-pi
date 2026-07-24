@@ -43,6 +43,7 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import {
 	type CompactionPreparation,
+	type CompactionPromptTemplates,
 	type CompactionResult,
 	calculatePromptTokens,
 	collectEntriesForBranchSummary,
@@ -459,6 +460,9 @@ export class AgentSession {
 
 	readonly #providerBoundary: SessionProviderBoundary;
 	#promptTemplates: PromptTemplate[];
+	/** Session-frozen conversion templates; re-rendered into every serialization for provider byte stability. */
+	readonly #compactionPromptTemplates: CompactionPromptTemplates;
+	readonly #resolveCompactionPromptTemplatesFn?: () => Promise<CompactionPromptTemplates>;
 	#slashCommands: FileSlashCommand[];
 
 	// Event subscription state
@@ -568,7 +572,7 @@ export class AgentSession {
 	#onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
 	#sideStreamFn: StreamFn;
 	#preferWebsockets: boolean | undefined;
-	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+	#convertToLlm: (messages: AgentMessage[], promptTemplates?: CompactionPromptTemplates) => Message[] | Promise<Message[]>;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 
 	readonly #ttsr: TtsrCoordinator;
@@ -962,6 +966,10 @@ export class AgentSession {
 		});
 
 		this.#promptTemplates = config.promptTemplates ?? [];
+		// Clone: conversion templates are session-frozen by contract, so later
+		// mutation of the caller's config object must not leak into this session.
+		this.#compactionPromptTemplates = { ...config.compactionPromptTemplates };
+		this.#resolveCompactionPromptTemplatesFn = config.resolveCompactionPromptTemplates;
 		this.#slashCommands = config.slashCommands ?? [];
 		this.#extensionRunner = config.extensionRunner;
 		this.#customCommands = config.customCommands ?? [];
@@ -1168,7 +1176,8 @@ export class AgentSession {
 			sessionId: () => this.sessionId,
 			localProtocolOptions: () => this.#localProtocolOptions(),
 			transformContext: (messages, signal) => this.#transformContext(messages, signal),
-			convertToLlm: messages => this.#convertToLlm(messages),
+			convertToLlm: (messages, promptTemplates) => this.#convertToLlm(messages, promptTemplates),
+			compactionPromptTemplates: this.#compactionPromptTemplates,
 			onPayload: this.#onPayload,
 			onResponse: this.#onResponse,
 			onSseEvent: this.#onSseEvent,
@@ -1294,7 +1303,9 @@ export class AgentSession {
 			},
 			preserveAdvisorCard: card => this.#preserveAdvisorCard(card),
 			hasPendingNextTurnMessages: () => this.#pendingNextTurnMessages.length > 0,
-			convertToLlmForSideRequest: messages => this.#convertToLlmForSideRequest(messages),
+			convertToLlmForSideRequest: (messages, promptTemplates) =>
+				this.#convertToLlmForSideRequest(messages, promptTemplates),
+			resolveOperationPromptTemplates: () => this.#resolveOperationPromptTemplates(),
 			effectiveServiceTier: model => this.#models.effectiveServiceTier(model),
 			resolveContextPromotionTarget: (model, contextWindow) =>
 				this.#maintenance.resolveContextPromotionTarget(model, contextWindow),
@@ -1352,7 +1363,9 @@ export class AgentSession {
 			reconnectToAgent: () => this.#reconnectToAgent(),
 			drainStrandedQueuedMessages: () => this.#drainStrandedQueuedMessages(),
 			buildDisplaySessionContext: () => this.buildDisplaySessionContext(),
-			convertToLlmForSideRequest: messages => this.#convertToLlmForSideRequest(messages),
+			convertToLlmForSideRequest: (messages, promptTemplates) =>
+				this.#convertToLlmForSideRequest(messages, promptTemplates),
+			resolveOperationPromptTemplates: () => this.#resolveOperationPromptTemplates(),
 			obfuscateTextForProvider: text => this.#obfuscateTextForProvider(text),
 			obfuscatePreparationForProvider: preparation => this.#obfuscatePreparationForProvider(preparation),
 			closeCodexProviderSessionsForHistoryRewrite: () => this.#closeCodexProviderSessionsForHistoryRewrite(),
@@ -1367,7 +1380,7 @@ export class AgentSession {
 			getContextUsage: options => this.getContextUsage(options),
 			shake: (mode, options) => this.shake(mode, options),
 			dropImages: () => this.dropImages(),
-			runHandoff: (customInstructions, options) => this.handoff(customInstructions, options),
+			runHandoff: (customInstructions, options) => this.#handoff.performHandoff(customInstructions, options),
 			removeAssistantMessageFromActiveContext: message =>
 				this.#recovery.removeAssistantMessageFromActiveContext(message),
 			dropPersistedAssistantTurn: message => this.#recovery.dropPersistedAssistantTurn(message),
@@ -1400,6 +1413,7 @@ export class AgentSession {
 			obfuscateTextForProvider: text => this.#obfuscateTextForProvider(text),
 			deobfuscateFromProvider: text => this.#deobfuscateFromProvider(text),
 			convertMessagesToLlm: (messages, signal) => this.convertMessagesToLlm(messages, signal),
+			resolveOperationPromptTemplates: () => this.#resolveOperationPromptTemplates(),
 			prepareSimpleStreamOptions: (options, provider) => this.prepareSimpleStreamOptions(options, provider),
 			effectiveServiceTier: model => this.#models.effectiveServiceTier(model),
 			flushPendingBash: () => this.#bash.flushPending(),
@@ -4110,8 +4124,30 @@ export class AgentSession {
 		return this.#providerBoundary.deobfuscateDelta(text);
 	}
 
-	#convertToLlmForSideRequest(messages: AgentMessage[]): Message[] {
-		return this.#providerBoundary.convertToLlmForSideRequest(messages);
+	#convertToLlmForSideRequest(messages: AgentMessage[], promptTemplates?: CompactionPromptTemplates): Message[] {
+		return this.#providerBoundary.convertToLlmForSideRequest(messages, promptTemplates);
+	}
+
+	/**
+	 * Prompt-template snapshot for a one-off generation operation. When the host
+	 * supplies a resolver, `COMPACTION.yml` edits apply to the next operation
+	 * without a restart; conversion templates stay session-frozen.
+	 */
+	async #resolveOperationPromptTemplates(): Promise<CompactionPromptTemplates> {
+		const resolve = this.#resolveCompactionPromptTemplatesFn;
+		if (!resolve) return this.#compactionPromptTemplates;
+		try {
+			return {
+				...(await resolve()),
+				compactionSummaryContext: this.#compactionPromptTemplates.compactionSummaryContext,
+				branchSummaryContext: this.#compactionPromptTemplates.branchSummaryContext,
+			};
+		} catch (error) {
+			logger.warn("Failed to reload compaction prompt templates; using session values", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return this.#compactionPromptTemplates;
+		}
 	}
 
 	/** Convert session messages using the same pre-LLM pipeline as the active session. */

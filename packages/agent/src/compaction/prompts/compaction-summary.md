@@ -1,3 +1,24 @@
+<conversation>
+{{conversation}}
+</conversation>
+{{#if previousSummary}}
+
+<previous-summary>
+{{previousSummary}}
+</previous-summary>
+{{/if}}
+{{#if additionalContext}}
+
+<additional-context>
+{{#each additionalContext}}
+- {{this}}
+{{/each}}
+</additional-context>
+{{/if}}
+
+{{#if promptOverride}}
+{{promptOverride}}
+{{else}}
 You MUST summarize the conversation above into a structured handoff summary for another LLM to resume the task.
 
 IMPORTANT: If the conversation ends with an unanswered question or a request awaiting user response (e.g., "Please run command and paste output"), you MUST preserve that exact question/request.
@@ -36,3 +57,8 @@ You MUST use this format (sections can be omitted if not applicable):
 You MUST output only the structured summary; you NEVER include extra text.
 
 Sections MUST be kept concise. You MUST preserve exact file paths, function names, error messages, and relevant tool outputs or command results. You MUST include repository state changes (branch, uncommitted changes) if mentioned.
+{{/if}}
+{{#if additionalFocus}}
+
+Additional focus: {{additionalFocus}}
+{{/if}}

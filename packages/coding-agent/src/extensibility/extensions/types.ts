@@ -78,6 +78,8 @@ import type {
 	SessionBeforeBranchResult,
 	SessionBeforeCompactEvent,
 	SessionBeforeCompactResult,
+	SessionBeforeHandoffEvent,
+	SessionBeforeHandoffResult,
 	SessionBeforeSwitchEvent,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeEvent,
@@ -87,6 +89,8 @@ import type {
 	SessionCompactingEvent,
 	SessionCompactingResult,
 	SessionEvent,
+	SessionHandoffGeneratedEvent,
+	SessionHandoffGeneratedResult,
 	SessionShutdownEvent,
 	SessionStartEvent,
 	SessionStopEvent,
@@ -602,12 +606,14 @@ export interface ResourcesDiscoverResult {
 export type {
 	SessionBeforeBranchEvent,
 	SessionBeforeCompactEvent,
+	SessionBeforeHandoffEvent,
 	SessionBeforeSwitchEvent,
 	SessionBeforeTreeEvent,
 	SessionBranchEvent,
 	SessionCompactEvent,
 	SessionCompactingEvent,
 	SessionEvent,
+	SessionHandoffGeneratedEvent,
 	SessionShutdownEvent,
 	SessionStartEvent,
 	SessionSwitchEvent,
@@ -994,9 +1000,11 @@ export interface BeforeAgentStartEventResult {
 export type {
 	SessionBeforeBranchResult,
 	SessionBeforeCompactResult,
+	SessionBeforeHandoffResult,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
 	SessionCompactingResult,
+	SessionHandoffGeneratedResult,
 } from "../shared-events";
 
 // ============================================================================
@@ -1095,6 +1103,14 @@ export interface ExtensionAPI {
 	on(
 		event: "session_before_compact",
 		handler: ExtensionHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
+	): void;
+	on(
+		event: "session_before_handoff",
+		handler: ExtensionHandler<SessionBeforeHandoffEvent, SessionBeforeHandoffResult>,
+	): void;
+	on(
+		event: "session_handoff_generated",
+		handler: ExtensionHandler<SessionHandoffGeneratedEvent, SessionHandoffGeneratedResult>,
 	): void;
 	on(event: "session.compacting", handler: ExtensionHandler<SessionCompactingEvent, SessionCompactingResult>): void;
 	on(event: "session_compact", handler: ExtensionHandler<SessionCompactEvent>): void;

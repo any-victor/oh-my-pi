@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { CompactionPromptTemplates } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import {
 	type CustomMessage,
@@ -156,6 +157,33 @@ describe("convertToLlm caching", () => {
 		const first = convertToLlm(messages);
 		const second = convertToLlm(messages);
 		expect(second).toBe(first);
+	});
+
+	it("uses compaction context templates without leaking cached output across template objects", () => {
+		const messages: AgentMessage[] = [
+			{
+				role: "compactionSummary",
+				summary: "completed the task",
+				tokensBefore: 100,
+				timestamp: 1,
+			},
+		];
+		const defaultOutput = convertToLlm(messages);
+		const firstTemplates: CompactionPromptTemplates = {
+			compactionSummaryContext: "First context: {{summary}}",
+		};
+		const firstOutput = convertToLlm(messages, firstTemplates);
+		const secondTemplates: CompactionPromptTemplates = {
+			compactionSummaryContext: "Second context: {{summary}}",
+		};
+		const secondOutput = convertToLlm(messages, secondTemplates);
+
+		expect(defaultOutput).toMatchObject([
+			{ content: [{ text: expect.stringContaining("<summary>\ncompleted the task\n</summary>") }] },
+		]);
+		expect(firstOutput).toMatchObject([{ content: [{ text: "First context: completed the task" }] }]);
+		expect(secondOutput).toMatchObject([{ content: [{ text: "Second context: completed the task" }] }]);
+		expect(convertToLlm(messages, secondTemplates)).toBe(secondOutput);
 	});
 
 	it("reuses the unchanged prefix output on append-only growth", () => {

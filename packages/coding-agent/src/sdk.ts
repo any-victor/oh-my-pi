@@ -39,6 +39,7 @@ import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
 import { type Rule, ruleCapability, setActiveRules } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
+import { discoverCompactionConfig } from "./compaction/config";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
@@ -1244,6 +1245,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	watchdogFilesPromise.catch(() => {});
 	const advisorConfigsPromise = logger.time("discoverAdvisorConfigs", () => discoverAdvisorConfigs(cwd, agentDir));
 	advisorConfigsPromise.catch(() => {});
+	const compactionConfigPromise = logger.time("discoverCompactionConfig", () =>
+		discoverCompactionConfig(cwd, agentDir),
+	);
+	compactionConfigPromise.catch(() => {});
 	const promptTemplatesPromise = options.promptTemplates
 		? Promise.resolve(options.promptTemplates)
 		: logger.time("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir);
@@ -1540,13 +1545,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 		return result;
 	};
-	const [contextFiles, resolvedWorkspaceTree, watchdogFiles, activeRepoContext, discoveredAdvisors] =
+	const [contextFiles, resolvedWorkspaceTree, watchdogFiles, activeRepoContext, discoveredAdvisors, compactionConfig] =
 		await Promise.all([
 			contextFilesPromise,
 			raceWithDeadline("buildWorkspaceTree", workspaceTreePromise),
 			watchdogFilesPromise,
 			activeRepoContextPromise,
 			advisorConfigsPromise,
+			compactionConfigPromise,
 		]);
 
 	let agent: Agent;
@@ -2856,7 +2862,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// a provider that 400s on them (#5400). Read both dynamically so a `/model`
 		// switch or setting change takes effect on the next turn.
 		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
-			const converted = convertToLlm(messages);
+			const converted = convertToLlm(messages, compactionConfig.prompts);
 			if (settings.get("images.blockImages")) {
 				return replaceLlmImagesWithText(converted, "Image reading is disabled.");
 			}
@@ -3108,6 +3114,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			asyncJobManager: scopedAsyncJobManager,
 			scopedModels: options.scopedModels,
 			promptTemplates,
+			compactionPromptTemplates: compactionConfig.prompts,
+			resolveCompactionPromptTemplates: async () => {
+				const config = await discoverCompactionConfig(sessionManager.getCwd(), agentDir);
+				return config.prompts;
+			},
 			slashCommands,
 			extensionRunner,
 			customCommands: customCommandsResult.commands,

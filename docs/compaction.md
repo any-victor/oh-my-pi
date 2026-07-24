@@ -421,3 +421,40 @@ From `settings-schema.ts`:
 - `branchSummary.reserveTokens` = `16384`
 
 These values are consumed at runtime by `AgentSession` and compaction/branch summarization modules.
+
+## Prompt customization
+
+Create `COMPACTION.yml` or `COMPACTION.yaml` in the active user agent directory, a project ancestor, or that ancestor's `.omp/` directory. Files merge user-first and then ancestor-to-leaf; each prompt field resolves independently to its most-specific value. Invalid files are logged and skipped as a whole. String values support the same `@relative/path.md` expansion used by advisor configuration.
+
+```yaml
+prompts:
+  summary: "@prompts/summary.md"
+  handoffDocument: "@prompts/handoff.md"
+  handoffContext: |
+    <handoff-context>
+    {{document}}
+    </handoff-context>
+```
+
+Every field is optional; omitted fields retain the bundled prompt. Configured templates render with the standard OMP Handlebars renderer and helpers, with one deliberate difference: the output is used verbatim (no post-render prose formatting), so conversation text and caller-supplied context reach the provider byte-for-byte. Template data per key (`CompactionPromptContexts` in `packages/agent/src/compaction/prompt-templates.ts` is the compile-checked source of truth):
+
+| Prompt | Template data |
+|---|---|
+| `summarizationSystem` | None |
+| `summary` | `conversation`, optional `previousSummary`, `additionalContext`, `additionalFocus` |
+| `updateSummary` | `conversation`, `previousSummary`, optional `additionalContext`, `additionalFocus` |
+| `shortSummary` | `conversation`, optional `previousSummary`, `additionalContext` |
+| `turnPrefix` | `conversation` |
+| `handoffDocument` | Optional `additionalFocus`, `additionalContext` |
+| `handoffContext` | `document` |
+| `autoHandoffFocus` | None |
+| `snapcompactArchiveContext` | `archiveText` |
+| `branchSummary` | `conversation`, optional `customInstructions` |
+| `branchSummaryPreamble` | None |
+| `compactionSummaryContext` | `summary` |
+| `branchSummaryContext` | `summary` |
+| `fileOperations` | `files` |
+
+A `session_before_compact` hook-provided prompt remains an imperative override: it replaces a configured `summary` or `updateSummary` body for that compaction while retaining the bundled conversation/context wrapper.
+
+Generation templates are re-resolved at the start of each one-off operation (compaction, handoff, branch summary), so editing `COMPACTION.yml` applies to the next operation without restarting the session. The two conversion templates — `compactionSummaryContext` and `branchSummaryContext` — are the exception: they are frozen when the session is created, because they re-render into every main-turn and side-request serialization of stored summaries, and changing them mid-session would shift provider-visible history bytes and break the prompt cache.

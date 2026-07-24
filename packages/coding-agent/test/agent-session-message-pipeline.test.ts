@@ -125,7 +125,7 @@ describe("AgentSession message pipeline", () => {
 		const result = await session.convertMessagesToLlm(inputMessages, abortController.signal);
 
 		expect(transformContext).toHaveBeenCalledWith(inputMessages, abortController.signal);
-		expect(convertToLlm).toHaveBeenCalledWith(transformedMessages);
+		expect(convertToLlm).toHaveBeenCalledWith(transformedMessages, {});
 		expect(result).toEqual(convertedMessages);
 	});
 
@@ -750,6 +750,72 @@ describe("AgentSession message pipeline", () => {
 		expect(firstSystemPrompt).toBeDefined();
 		expect(firstSystemPrompt!.join("\n")).toContain(injected);
 		expect(contexts[1]!.systemPrompt).toEqual(firstSystemPrompt);
+	});
+
+	it("renders discovered compaction summary context overrides in provider requests", async () => {
+		using tempDir = TempDir.createSync("@pi-sdk-compaction-summary-context-");
+		await Bun.write(
+			tempDir.join("COMPACTION.yml"),
+			["prompts:", '  compactionSummaryContext: "SDK summary wrapper: {{summary}}"'].join("\n"),
+		);
+		const api = "test-sdk-compaction-summary-context";
+		const contexts: Context[] = [];
+		registerCustomApi(api, (_model, context) => {
+			contexts.push(context);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("ok");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "ok", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+		const model = buildModel({
+			id: "local-compaction-summary-model",
+			name: "Local Compaction Summary Model",
+			api,
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const { session } = await createAgentSession({
+			cwd: tempDir.path(),
+			agentDir: tempDir.path(),
+			sessionManager: SessionManager.inMemory(tempDir.path()),
+			authStorage,
+			modelRegistry,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			model,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+		try {
+			session.agent.state.messages.push({
+				role: "compactionSummary",
+				summary: "preserved compaction state",
+				tokensBefore: 1,
+				timestamp: Date.now(),
+			});
+
+			await session.prompt("continue");
+
+			expect(JSON.stringify(contexts[0]!.messages)).toContain("SDK summary wrapper: preserved compaction state");
+		} finally {
+			await session.dispose();
+			authStorage.close();
+		}
 	});
 
 	it("preserves append-only prefixes in subagent sessions when context handlers rewrite prior turns", async () => {

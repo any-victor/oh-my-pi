@@ -11,6 +11,7 @@ import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
 import type { MemoryRuntimeContext } from "../../memory-backend";
 import { type Theme, theme } from "../../modes/theme/theme";
 import type { SessionManager } from "../../session/session-manager";
+import { mergeSessionBeforeHandoffResult, mergeSessionHandoffGeneratedResult } from "../handoff-event-results";
 import type { BranchHandler, NavigateTreeHandler, NewSessionHandler } from "../session-handler-types";
 import { ManagedTimers } from "./managed-timers";
 import { createExtensionModelQuery } from "./model-api";
@@ -46,9 +47,13 @@ import type {
 	ResourcesDiscoverResult,
 	SessionBeforeBranchResult,
 	SessionBeforeCompactResult,
+	SessionBeforeHandoffEvent,
+	SessionBeforeHandoffResult,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
 	SessionCompactingResult,
+	SessionHandoffGeneratedEvent,
+	SessionHandoffGeneratedResult,
 	SessionStopEvent,
 	SessionStopEventResult,
 	ToolCallEvent,
@@ -151,13 +156,21 @@ type RunnerEmitEvent = Exclude<
 
 type SessionBeforeEvent = Extract<
 	RunnerEmitEvent,
-	{ type: "session_before_switch" | "session_before_branch" | "session_before_compact" | "session_before_tree" }
+	{
+		type:
+			| "session_before_switch"
+			| "session_before_branch"
+			| "session_before_compact"
+			| "session_before_handoff"
+			| "session_before_tree";
+	}
 >;
 
 type SessionBeforeEventResult =
 	| SessionBeforeSwitchResult
 	| SessionBeforeBranchResult
 	| SessionBeforeCompactResult
+	| SessionBeforeHandoffResult
 	| SessionBeforeTreeResult;
 
 type RunnerEmitResult<TEvent extends RunnerEmitEvent> = TEvent extends { type: "session_before_switch" }
@@ -166,13 +179,17 @@ type RunnerEmitResult<TEvent extends RunnerEmitEvent> = TEvent extends { type: "
 		? SessionBeforeBranchResult | undefined
 		: TEvent extends { type: "session_before_compact" }
 			? SessionBeforeCompactResult | undefined
-			: TEvent extends { type: "session_before_tree" }
-				? SessionBeforeTreeResult | undefined
-				: TEvent extends { type: "session.compacting" }
-					? SessionCompactingResult | undefined
-					: TEvent extends { type: "session_stop" }
-						? SessionStopEventResult | undefined
-						: undefined;
+			: TEvent extends { type: "session_before_handoff" }
+				? SessionBeforeHandoffResult | undefined
+				: TEvent extends { type: "session_handoff_generated" }
+					? SessionHandoffGeneratedResult | undefined
+					: TEvent extends { type: "session_before_tree" }
+						? SessionBeforeTreeResult | undefined
+						: TEvent extends { type: "session.compacting" }
+							? SessionCompactingResult | undefined
+							: TEvent extends { type: "session_stop" }
+								? SessionStopEventResult | undefined
+								: undefined;
 
 // Session-lifecycle handler types live once in session-handler-types (imported
 // above for local use); re-exported here to keep this module's public API stable.
@@ -609,6 +626,7 @@ export class ExtensionRunner {
 			event.type === "session_before_switch" ||
 			event.type === "session_before_branch" ||
 			event.type === "session_before_compact" ||
+			event.type === "session_before_handoff" ||
 			event.type === "session_before_tree"
 		);
 	}
@@ -658,7 +676,13 @@ export class ExtensionRunner {
 		// message_update / tool_execution_* per delta with usually no extension
 		// subscribed; building `ctx` for a zero-handler event is pure waste.
 		let ctx: ExtensionContext | undefined;
-		let result: SessionBeforeEventResult | SessionCompactingResult | SessionStopEventResult | undefined;
+		let result:
+			| SessionBeforeEventResult
+			| SessionHandoffGeneratedResult
+			| SessionCompactingResult
+			| SessionStopEventResult
+			| undefined;
+		let currentEvent = event;
 
 		if (this.#isSessionShutdownEvent(event)) {
 			const timeoutMs = handlerTimeoutForEvent(event.type);
@@ -683,21 +707,47 @@ export class ExtensionRunner {
 			for (const handler of handlers) {
 				const handlerResult = await this.#runHandlerWithTimeout(
 					handler,
-					event,
+					currentEvent,
 					ctx,
 					ext,
 					handlerTimeoutForEvent(event.type),
 				);
 
 				if (this.#isSessionBeforeEvent(event) && handlerResult) {
-					result = handlerResult as SessionBeforeEventResult;
-					if (result.cancel) {
+					const beforeResult = handlerResult as SessionBeforeEventResult;
+					if (event.type === "session_before_handoff") {
+						const merged = mergeSessionBeforeHandoffResult(
+							currentEvent as SessionBeforeHandoffEvent,
+							result as SessionBeforeHandoffResult | undefined,
+							handlerResult as SessionBeforeHandoffResult,
+						);
+						result = merged.result;
+						currentEvent = merged.event as TEvent;
+					} else {
+						// Pre-existing session_before_* contract: the latest returned
+						// result wins wholesale; only before-handoff composes field-wise.
+						result = beforeResult;
+					}
+					if (beforeResult.cancel) {
 						return result as RunnerEmitResult<TEvent>;
 					}
 				}
 
 				if (event.type === "session.compacting" && handlerResult) {
 					result = handlerResult as SessionCompactingResult;
+				}
+
+				if (event.type === "session_handoff_generated" && handlerResult) {
+					const merged = mergeSessionHandoffGeneratedResult(
+						currentEvent as SessionHandoffGeneratedEvent,
+						result as SessionHandoffGeneratedResult | undefined,
+						handlerResult as SessionHandoffGeneratedResult,
+					);
+					result = merged.result;
+					currentEvent = merged.event as TEvent;
+					if (merged.result.cancel) {
+						return result as RunnerEmitResult<TEvent>;
+					}
 				}
 
 				if (event.type === "session_stop" && handlerResult) {

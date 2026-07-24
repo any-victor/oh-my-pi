@@ -1,3 +1,24 @@
+<conversation>
+{{conversation}}
+</conversation>
+{{#if previousSummary}}
+
+<previous-summary>
+{{previousSummary}}
+</previous-summary>
+{{/if}}
+{{#if additionalContext}}
+
+<additional-context>
+{{#each additionalContext}}
+- {{this}}
+{{/each}}
+</additional-context>
+{{/if}}
+
+{{#if promptOverride}}
+{{promptOverride}}
+{{else}}
 You MUST incorporate the new messages above into the existing handoff summary in <previous-summary> tags, used by another LLM to resume the task.
 RULES:
 - MUST preserve all information from the previous summary
@@ -43,3 +64,8 @@ You MUST use this format (omit sections if not applicable):
 You MUST output only the structured summary; you NEVER include extra text.
 
 Sections MUST be kept concise. You MUST preserve relevant tool outputs/command results. You MUST include repository state changes (branch, uncommitted changes) if mentioned.
+{{/if}}
+{{#if additionalFocus}}
+
+Additional focus: {{additionalFocus}}
+{{/if}}

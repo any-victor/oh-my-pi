@@ -47,3 +47,12 @@ Use exactly this structure:
 Additional focus: {{additionalFocus}}
 </instruction>
 {{/if}}
+
+{{#if additionalContext}}
+<context>
+Additional context:
+{{#each additionalContext}}
+{{this}}
+{{/each}}
+</context>
+{{/if}}

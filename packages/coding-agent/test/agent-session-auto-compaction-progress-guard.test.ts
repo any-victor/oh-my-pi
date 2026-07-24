@@ -815,7 +815,15 @@ describe("AgentSession auto-compaction progress guard", () => {
 		session.settings.set("contextPromotion.enabled", false);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
-		const handoffSpy = vi.spyOn(session, "handoff").mockResolvedValue({ document: "handoff document" });
+		// The real handoff core requires at least two persisted messages.
+		sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "long running work" }],
+			timestamp: Date.now(),
+		});
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("handoff document");
 
 		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
 		session.subscribe(event => {
@@ -846,7 +854,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		await session.waitForIdle();
 
 		expect(promptSpy).toHaveBeenCalledTimes(1);
-		expect(handoffSpy).toHaveBeenCalledTimes(1);
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		expect(continueSpy).not.toHaveBeenCalled();
 		expect(sessionManager.getBranch()).not.toContainEqual(
 			expect.objectContaining({

@@ -23,6 +23,8 @@ import type {
 	SessionBeforeBranchResult,
 	SessionBeforeCompactEvent,
 	SessionBeforeCompactResult,
+	SessionBeforeHandoffEvent,
+	SessionBeforeHandoffResult,
 	SessionBeforeSwitchEvent,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeEvent,
@@ -32,6 +34,8 @@ import type {
 	SessionCompactingEvent,
 	SessionCompactingResult,
 	SessionEvent,
+	SessionHandoffGeneratedEvent,
+	SessionHandoffGeneratedResult,
 	SessionShutdownEvent,
 	SessionStartEvent,
 	SessionSwitchEvent,
@@ -260,14 +264,17 @@ export type {
 	ContextEvent,
 	SessionBeforeBranchEvent,
 	SessionBeforeCompactEvent,
+	SessionBeforeHandoffEvent,
 	SessionBeforeSwitchEvent,
 	SessionBeforeTreeEvent,
 	SessionBranchEvent,
 	SessionCompactEvent,
 	SessionCompactingEvent,
 	SessionEvent,
+	SessionHandoffGeneratedEvent,
 	SessionShutdownEvent,
 	SessionStartEvent,
+	SessionStopEvent,
 	SessionSwitchEvent,
 	SessionTreeEvent,
 	TreePreparation,
@@ -431,9 +438,11 @@ export interface BeforeAgentStartEventResult {
 export type {
 	SessionBeforeBranchResult,
 	SessionBeforeCompactResult,
+	SessionBeforeHandoffResult,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
 	SessionCompactingResult,
+	SessionHandoffGeneratedResult,
 } from "../shared-events";
 
 // ============================================================================
@@ -489,6 +498,14 @@ export interface HookAPI {
 	on(
 		event: "session_before_compact",
 		handler: HookHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
+	): void;
+	on(
+		event: "session_before_handoff",
+		handler: HookHandler<SessionBeforeHandoffEvent, SessionBeforeHandoffResult>,
+	): void;
+	on(
+		event: "session_handoff_generated",
+		handler: HookHandler<SessionHandoffGeneratedEvent, SessionHandoffGeneratedResult>,
 	): void;
 	on(event: "session.compacting", handler: HookHandler<SessionCompactingEvent, SessionCompactingResult>): void;
 	on(event: "session_compact", handler: HookHandler<SessionCompactEvent>): void;

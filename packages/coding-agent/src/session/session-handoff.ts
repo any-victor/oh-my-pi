@@ -8,21 +8,23 @@ import {
 	type StreamFn,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
-import { generateHandoffFromContext, renderHandoffPrompt } from "@oh-my-pi/pi-agent-core/compaction";
+import type { CompactionPromptTemplates } from "@oh-my-pi/pi-agent-core/compaction";
+import { generateHandoffFromContext, renderHandoffContext, renderHandoffPrompt } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Message, Model, ServiceTier, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
-import type { ExtensionRunner, SessionBeforeSwitchResult } from "../extensibility/extensions";
+import type {
+	ExtensionRunner,
+	SessionBeforeHandoffResult,
+	SessionBeforeSwitchResult,
+	SessionHandoffGeneratedResult,
+} from "../extensibility/extensions";
 import { obfuscateProviderContext, type SecretObfuscator } from "../secrets/obfuscator";
-import type { HandoffResult, SessionHandoffOptions } from "./agent-session-types";
+import type { HandoffOutcome, HandoffResult, SessionHandoffOptions } from "./agent-session-types";
 import type { BashSessionTransition } from "./bash-runner";
 import type { SessionContext } from "./session-context";
 import type { SessionManager } from "./session-manager";
-
-function createHandoffContext(document: string): string {
-	return `<handoff-context>\n${document}\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.`;
-}
 
 function createHandoffFileName(date = new Date()): string {
 	const fileTimestamp = date.toISOString().replace(/[:.]/g, "-");
@@ -48,6 +50,7 @@ export interface SessionHandoffHost {
 	obfuscateTextForProvider(text: string | undefined): string | undefined;
 	deobfuscateFromProvider(text: string): string;
 	convertMessagesToLlm(messages: AgentMessage[], signal?: AbortSignal): Promise<Message[]>;
+	resolveOperationPromptTemplates(): Promise<CompactionPromptTemplates>;
 	prepareSimpleStreamOptions(options: SimpleStreamOptions, provider?: string): SimpleStreamOptions;
 	effectiveServiceTier(model: Model | undefined): ServiceTier | undefined;
 	flushPendingBash(): Promise<void>;
@@ -98,9 +101,21 @@ export class SessionHandoff {
 	 * @returns The handoff document text, or undefined if cancelled/failed
 	 */
 	async handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
+		const outcome = await this.performHandoff(customInstructions, options);
+		return outcome.kind === "completed" ? outcome.result : undefined;
+	}
+
+	/**
+	 * Explicit-outcome handoff core. Distinguishes deliberate handler
+	 * cancellation (`session_before_handoff`, `session_handoff_generated`,
+	 * `session_before_switch`) from generation failure, so automatic
+	 * maintenance ends as aborted instead of falling back to another strategy.
+	 */
+	async performHandoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffOutcome> {
 		this.#host.assertVibeSessionTransitionAllowed("handoff to a new session");
 		const entries = this.#host.sessionManager.getBranch();
 		const messageCount = entries.filter(e => e.type === "message").length;
+		const promptTemplates = options?.promptTemplates ?? (await this.#host.resolveOperationPromptTemplates());
 
 		if (messageCount < 2) {
 			throw new Error("Nothing to hand off (no messages yet)");
@@ -129,6 +144,31 @@ export class SessionHandoff {
 				throw new Error("Handoff cancelled");
 			}
 
+			let handoffCustomInstructions = customInstructions;
+			let handoffAdditionalContext: string[] = [];
+			if (this.#host.extensionRunner?.hasHandlers("session_before_handoff")) {
+				const result = (await this.#host.extensionRunner.emit({
+					type: "session_before_handoff",
+					customInstructions: handoffCustomInstructions,
+					additionalContext: handoffAdditionalContext,
+					autoTriggered: options?.autoTriggered === true,
+					signal: handoffSignal,
+				})) as SessionBeforeHandoffResult | undefined;
+
+				if (handoffSignal.aborted) {
+					throw new Error("Handoff cancelled");
+				}
+				if (result?.cancel) {
+					return { kind: "cancelled" };
+				}
+				if (result?.customInstructions !== undefined) {
+					handoffCustomInstructions = result.customInstructions;
+				}
+				if (result?.additionalContext !== undefined) {
+					handoffAdditionalContext = result.additionalContext;
+				}
+			}
+
 			const model = this.#host.model();
 			if (!model) {
 				throw new Error("No model selected for handoff");
@@ -152,7 +192,12 @@ export class SessionHandoff {
 			// Both can diverge from this.#host.sessionId() (tan/subagent/shared sessions), so
 			// mirror exactly what the live turn populated the cache under.
 			const handoffPromptCacheKey = this.#host.agent.promptCacheKey ?? this.#host.agent.sessionId;
-			const handoffPromptText = renderHandoffPrompt(this.#host.obfuscateTextForProvider(customInstructions));
+			const handoffPromptText = renderHandoffPrompt(this.#host.obfuscateTextForProvider(handoffCustomInstructions), {
+				additionalContext: handoffAdditionalContext.map(
+					context => this.#host.obfuscateTextForProvider(context) ?? context,
+				),
+				promptTemplates,
+			});
 			const handoffSnapshot: AgentMessage[] = [
 				...this.#host.agent.state.messages,
 				{
@@ -200,14 +245,33 @@ export class SessionHandoff {
 					thinkingLevel: this.#host.thinkingLevel(),
 				},
 			);
-			const handoffText = this.#host.deobfuscateFromProvider(rawHandoffText);
+			let finalHandoffDocument = this.#host.deobfuscateFromProvider(rawHandoffText);
 
 			if (handoffSignal.aborted) {
 				throw new Error("Handoff cancelled");
 			}
-			if (!handoffText) {
-				return undefined;
+			if (this.#host.extensionRunner?.hasHandlers("session_handoff_generated")) {
+				const result = (await this.#host.extensionRunner.emit({
+					type: "session_handoff_generated",
+					document: finalHandoffDocument,
+					autoTriggered: options?.autoTriggered === true,
+					signal: handoffSignal,
+				})) as SessionHandoffGeneratedResult | undefined;
+
+				if (handoffSignal.aborted) {
+					throw new Error("Handoff cancelled");
+				}
+				if (result?.cancel) {
+					return { kind: "cancelled" };
+				}
+				if (result?.document !== undefined) {
+					finalHandoffDocument = result.document;
+				}
 			}
+			if (!finalHandoffDocument) {
+				return { kind: "failed" };
+			}
+			const handoffContent = renderHandoffContext(finalHandoffDocument, promptTemplates);
 
 			// Start a new session
 			const previousSessionFile = this.#host.sessionFile();
@@ -219,7 +283,7 @@ export class SessionHandoff {
 
 				if (result?.cancel) {
 					options?.onSwitchCancelled?.();
-					return undefined;
+					return { kind: "cancelled" };
 				}
 			}
 			await this.#host.flushPendingBash();
@@ -259,7 +323,6 @@ export class SessionHandoff {
 			this.#host.resetTodoCycle();
 
 			// Inject the handoff document as a custom message
-			const handoffContent = createHandoffContext(handoffText);
 			this.#host.sessionManager.appendCustomMessageEntry("handoff", handoffContent, true, undefined, "agent");
 			await this.#host.sessionManager.ensureOnDisk();
 			let savedPath: string | undefined;
@@ -268,7 +331,7 @@ export class SessionHandoff {
 				if (artifactsDir) {
 					const handoffFilePath = path.join(artifactsDir, createHandoffFileName());
 					try {
-						await Bun.write(handoffFilePath, `${handoffText}\n`);
+						await Bun.write(handoffFilePath, `${finalHandoffDocument}\n`);
 						savedPath = handoffFilePath;
 					} catch (error) {
 						logger.warn("Failed to save handoff document to disk", {
@@ -294,7 +357,7 @@ export class SessionHandoff {
 				});
 			}
 
-			return { document: handoffText, savedPath };
+			return { kind: "completed", result: { document: finalHandoffDocument, savedPath } };
 		} catch (error) {
 			if (handoffSignal.aborted || (error instanceof Error && error.name === "AbortError")) {
 				throw new Error("Handoff cancelled");

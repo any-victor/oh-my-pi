@@ -108,3 +108,42 @@ describe("helpers: join", () => {
 		expect(prompt.render("{{join files}}", { files: "not-an-array" })).toBe("");
 	});
 });
+
+describe("validate", () => {
+	it("rejects an unknown zero-argument subexpression helper", () => {
+		expect(() => prompt.validate("{{#if (bogusHelper)}}x{{/if}}")).toThrow("Unknown Handlebars helper: bogusHelper");
+	});
+
+	it("rejects invalid built-in helper calls in value-dependent branches", () => {
+		expect(() => prompt.validate("{{#if disabled}}{{#xml}}hidden{{/xml}}{{/if}}")).toThrow(
+			"Invalid Handlebars helper invocation: xml requires block form with exactly 1 argument(s)",
+		);
+	});
+
+	it("accepts valid built-in and data-path blocks", () => {
+		expect(() => prompt.validate("{{#xml tag}}value{{/xml}}")).not.toThrow();
+		expect(() => prompt.validate("{{#ifAny first second}}value{{/ifAny}}")).not.toThrow();
+		expect(() => prompt.validate("{{#ifAll}}value{{/ifAll}}")).not.toThrow();
+	});
+
+	it("accepts data paths named after Object.prototype members", () => {
+		expect(() => prompt.validate("{{toString}} {{#constructor}}value{{/constructor}}")).not.toThrow();
+	});
+
+	it("keeps registered helpers without contracts backward-compatible", () => {
+		prompt.registerHelper("externalNoContract", () => "");
+		prompt.registerHelper("externalWithContract", () => "", { kind: "block", minParams: 1, maxParams: 1 });
+		expect(() => prompt.validate("{{externalNoContract}}")).not.toThrow();
+		expect(() => prompt.validate("{{#externalNoContract}}value{{/externalNoContract}}")).not.toThrow();
+		expect(() => prompt.validate("{{#externalWithContract}}value{{/externalWithContract}}")).toThrow(
+			"Invalid Handlebars helper invocation: externalWithContract requires block form with exactly 1 argument(s)",
+		);
+	});
+
+	it("accepts path sections while rejecting unknown helper-style blocks", () => {
+		expect(() => prompt.validate("{{#documentedField}}{{name}}{{/documentedField}}")).not.toThrow();
+		expect(() => prompt.validate("{{#missingHelper value}}x{{/missingHelper}}")).toThrow(
+			"Unknown Handlebars helper: missingHelper",
+		);
+	});
+});

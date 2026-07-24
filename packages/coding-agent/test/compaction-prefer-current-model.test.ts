@@ -100,6 +100,57 @@ describe("compaction prefers the current session model over modelRoles.default",
 		expect(`${firstCandidate.provider}/${firstCandidate.id}`).toBe(`${currentModel.provider}/${currentModel.id}`);
 	});
 
+	it("forwards a configured summarization system prompt to compaction", async () => {
+		const model = getBundledModel("openai", "gpt-5");
+		if (!model) throw new Error("Expected bundled openai/gpt-5 model");
+
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Base system prompt"],
+				tools: [],
+				messages: [],
+			},
+		});
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey(model.provider, "openai-token");
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.keepRecentTokens": 1, "compaction.strategy": "context-full" }),
+			modelRegistry,
+			compactionPromptTemplates: { summarizationSystem: "Configured compaction system prompt" },
+		});
+		session.subscribe(() => {});
+
+		for (const [userText, assistantText] of [
+			["first question", "first answer"],
+			["second question", "second answer"],
+		] as const) {
+			const user = userMsg(userText);
+			const assistant = assistantMsg(assistantText);
+			session.agent.appendMessage(user);
+			session.sessionManager.appendMessage(user);
+			session.agent.appendMessage(assistant);
+			session.sessionManager.appendMessage(assistant);
+		}
+
+		const compactSpy = vi
+			.spyOn(compactionModule, "compact")
+			.mockImplementation(async (preparation, compactModel) => ({
+				summary: "ok",
+				shortSummary: "ok short",
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: 1,
+				details: { provider: compactModel.provider },
+			}));
+
+		await session.compact();
+
+		expect(compactSpy.mock.calls[0]?.[5]?.remoteInstructions).toBe("Configured compaction system prompt");
+	});
+
 	it("falls back when the authenticated Bedrock candidate cannot resolve AWS credentials", async () => {
 		const currentModel = getBundledModel("amazon-bedrock", "global.anthropic.claude-opus-4-6-v1");
 		const fallbackModel = getBundledModel("anthropic", "claude-sonnet-4-5");

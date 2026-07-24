@@ -1,3 +1,10 @@
+<conversation>
+{{conversation}}
+</conversation>
+
+{{#if customInstructions}}
+{{customInstructions}}
+{{else}}
 You MUST create a structured summary of the conversation branch for context when returning.
 
 You MUST use EXACT format:
@@ -28,3 +35,4 @@ You MUST use EXACT format:
 1. [What should happen next to continue]
 
 Sections MUST be kept concise. You MUST preserve exact file paths, function names, error messages.
+{{/if}}

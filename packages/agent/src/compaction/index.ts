@@ -9,6 +9,7 @@ export * from "./errors";
 export * from "./message-cache";
 export * from "./messages";
 export * from "./openai";
+export * from "./prompt-templates";
 export * from "./pruning";
 export * from "./shake";
 export * from "./utils";

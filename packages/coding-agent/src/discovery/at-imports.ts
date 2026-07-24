@@ -53,6 +53,20 @@ export interface ExpandAtImportsOptions {
 	maxDepth?: number;
 	/** Override the home directory used to resolve `~/...` (default: `os.homedir()`). */
 	home?: string;
+	/**
+	 * Override the file reader (default: the process-cached capability
+	 * `readFile`). Pass an uncached reader when expansion must observe live
+	 * edits, e.g. per-operation `COMPACTION.yml` reloads.
+	 */
+	readFile?: (absPath: string) => Promise<string | null>;
+}
+
+/** Shared expansion state threaded through the recursive walk. */
+interface ExpandState {
+	maxDepth: number;
+	home: string;
+	visited: Set<string>;
+	read: (absPath: string) => Promise<string | null>;
 }
 
 /**
@@ -66,22 +80,18 @@ export async function expandAtImports(
 	filePath: string,
 	options: ExpandAtImportsOptions = {},
 ): Promise<string> {
-	const maxDepth = options.maxDepth ?? MAX_AT_IMPORT_DEPTH;
-	const home = options.home ?? os.homedir();
 	const absoluteSource = path.resolve(filePath);
-	const visited = new Set<string>([absoluteSource]);
-	return await expand(content, path.dirname(absoluteSource), 0, maxDepth, home, visited);
+	const state: ExpandState = {
+		maxDepth: options.maxDepth ?? MAX_AT_IMPORT_DEPTH,
+		home: options.home ?? os.homedir(),
+		visited: new Set<string>([absoluteSource]),
+		read: options.readFile ?? readFile,
+	};
+	return await expand(content, path.dirname(absoluteSource), 0, state);
 }
 
-async function expand(
-	content: string,
-	baseDir: string,
-	depth: number,
-	maxDepth: number,
-	home: string,
-	visited: Set<string>,
-): Promise<string> {
-	if (depth >= maxDepth) return content;
+async function expand(content: string, baseDir: string, depth: number, state: ExpandState): Promise<string> {
+	if (depth >= state.maxDepth) return content;
 
 	const segments = splitMarkdownSegments(content);
 	const out: string[] = [];
@@ -90,34 +100,20 @@ async function expand(
 			out.push(segment.text);
 			continue;
 		}
-		out.push(await expandTextSegment(segment.text, baseDir, depth, maxDepth, home, visited));
+		out.push(await expandTextSegment(segment.text, baseDir, depth, state));
 	}
 	return out.join("");
 }
 
-async function expandTextSegment(
-	text: string,
-	baseDir: string,
-	depth: number,
-	maxDepth: number,
-	home: string,
-	visited: Set<string>,
-): Promise<string> {
+async function expandTextSegment(text: string, baseDir: string, depth: number, state: ExpandState): Promise<string> {
 	const lines = text.split("\n");
 	for (let i = 0; i < lines.length; i++) {
-		lines[i] = await expandLine(lines[i], baseDir, depth, maxDepth, home, visited);
+		lines[i] = await expandLine(lines[i], baseDir, depth, state);
 	}
 	return lines.join("\n");
 }
 
-async function expandLine(
-	line: string,
-	baseDir: string,
-	depth: number,
-	maxDepth: number,
-	home: string,
-	visited: Set<string>,
-): Promise<string> {
+async function expandLine(line: string, baseDir: string, depth: number, state: ExpandState): Promise<string> {
 	if (!line.includes("@")) return line;
 
 	const matches: Array<{ start: number; end: number; importPath: string }> = [];
@@ -144,7 +140,7 @@ async function expandLine(
 	let cursor = 0;
 	for (const m of matches) {
 		parts.push(line.slice(cursor, m.start));
-		const expanded = await resolveAndExpand(m.importPath, baseDir, depth, maxDepth, home, visited);
+		const expanded = await resolveAndExpand(m.importPath, baseDir, depth, state);
 		parts.push(expanded ?? line.slice(m.start, m.end));
 		cursor = m.end;
 	}
@@ -156,17 +152,15 @@ async function resolveAndExpand(
 	importPath: string,
 	baseDir: string,
 	depth: number,
-	maxDepth: number,
-	home: string,
-	visited: Set<string>,
+	state: ExpandState,
 ): Promise<string | null> {
-	const resolved = resolveImportPath(importPath, baseDir, home);
-	if (visited.has(resolved)) {
+	const resolved = resolveImportPath(importPath, baseDir, state.home);
+	if (state.visited.has(resolved)) {
 		logger.debug("@-import: skipping cyclic include", { path: resolved });
 		return null;
 	}
 
-	const content = await readFile(resolved);
+	const content = await state.read(resolved);
 	if (content === null) {
 		logger.debug("@-import: file not found", { path: resolved });
 		return null;
@@ -174,8 +168,8 @@ async function resolveAndExpand(
 
 	// Visited is shared across the whole expansion tree to break cycles,
 	// even cycles that span multiple importing files.
-	visited.add(resolved);
-	return await expand(content, path.dirname(resolved), depth + 1, maxDepth, home, visited);
+	state.visited.add(resolved);
+	return await expand(content, path.dirname(resolved), depth + 1, state);
 }
 
 function resolveImportPath(importPath: string, baseDir: string, home: string): string {

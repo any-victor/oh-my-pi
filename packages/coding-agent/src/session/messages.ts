@@ -5,6 +5,7 @@
  * and provides a transformer to convert them to LLM-compatible messages.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { CompactionPromptTemplates } from "@oh-my-pi/pi-agent-core/compaction";
 import {
 	invalidateMessageCache,
 	registerMessageCacheInvalidator,
@@ -1041,6 +1042,7 @@ function convertImageBearingCustomMessage(message: CustomMessage | HookMessage):
  */
 interface ConvertMemoEntry {
 	interruptedNext: boolean;
+	promptTemplates: CompactionPromptTemplates | undefined;
 	fragment: Message[];
 }
 const convertCache = new WeakMap<AgentMessage, ConvertMemoEntry>();
@@ -1049,10 +1051,10 @@ const convertCache = new WeakMap<AgentMessage, ConvertMemoEntry>();
 // `AgentMessage[]` identity across a turn: appending new messages and swapping
 // the streaming tail (`context.messages[len-1] = partial → trailing`). Between
 // owner invalidations (prune/shake/strip bump `convertGeneration`) and for a
-// given array identity, only the last index is ever swapped and the array only
-// grows — interior prefix messages are immutable. That invariant lets two
-// shortcuts skip the O(N) re-walk:
-//   - exact-repeat: same array, same length, same generation, same tail identity
+// given array and prompt-template identities, only the last index is ever
+// swapped and the array only grows — interior prefix messages are immutable.
+// That invariant lets two shortcuts skip the O(N) re-walk:
+//   - exact-repeat: same array, templates, length, generation, and tail identity
 //     → hand back the same outer array.
 //   - slice-on-growth: same array, same generation, length grew → copy the
 //     unchanged prefix output and reconvert only the neighbor-sensitive boundary
@@ -1066,6 +1068,7 @@ let lastConvertLength = 0;
 let lastConvertOutput: Message[] | undefined;
 let lastConvertGeneration = -1;
 let lastConvertTail: AgentMessage | undefined;
+let lastConvertPromptTemplates: CompactionPromptTemplates | undefined;
 // Output-message count contributed by messages[0 .. lastConvertLength-1), i.e.
 // every message except the last. The last message is neighbor-sensitive (its LLM
 // view drops the trailing thinking run only while an interrupted-thinking marker
@@ -1079,7 +1082,7 @@ registerMessageCacheInvalidator(message => {
 
 /** Convert one message to its LLM fragment. `interruptedNext` is true only for an
  *  assistant turn immediately followed by its interrupted-thinking marker. */
-function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
+function convertOne(m: AgentMessage, interruptedNext: boolean, promptTemplates?: CompactionPromptTemplates): Message[] {
 	switch (m.role) {
 		case "bashExecution":
 			if (m.excludeFromContext) {
@@ -1158,14 +1161,14 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 			}
 			const split = convertImageBearingCustomMessage(m);
 			if (split) return split;
-			const converted = convertMessageToLlm(m);
+			const converted = convertMessageToLlm(m, promptTemplates);
 			return converted ? [converted] : [];
 		}
 		case "hookMessage": {
 			if (!isCustomMessageContent(m.content)) return [];
 			const split = convertImageBearingCustomMessage(m);
 			if (split) return split;
-			const converted = convertMessageToLlm(m);
+			const converted = convertMessageToLlm(m, promptTemplates);
 			return converted ? [converted] : [];
 		}
 		case "assistant": {
@@ -1175,7 +1178,7 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 			// resend, so strip it here — LLM path only — when the hidden
 			// interrupted-thinking continuity message follows.
 			const source = interruptedNext ? stripDemotedThinkingForLlm(m) : m;
-			const converted = convertMessageToLlm(source);
+			const converted = convertMessageToLlm(source, promptTemplates);
 			return converted ? [converted] : [];
 		}
 		case "branchSummary":
@@ -1186,7 +1189,7 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 			// Core roles share one transformer with agent-core —
 			// duplicating them here is how snapcompact frames once
 			// silently fell off the provider request.
-			const converted = convertMessageToLlm(m);
+			const converted = convertMessageToLlm(m, promptTemplates);
 			return converted ? [converted] : [];
 		}
 		default:
@@ -1195,13 +1198,23 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 	}
 }
 
-/** Cached per-message conversion. Reuses the stored fragment while identity and
- *  `interruptedNext` neighbor state hold; recomputes on a neighbor flip. */
-function convertOneCached(m: AgentMessage, interruptedNext: boolean): Message[] {
+/** Cached per-message conversion. Reuses the stored fragment while identity,
+ *  `interruptedNext` neighbor state, and prompt-template identity hold. */
+function convertOneCached(
+	m: AgentMessage,
+	interruptedNext: boolean,
+	promptTemplates?: CompactionPromptTemplates,
+): Message[] {
 	const cached = convertCache.get(m);
-	if (cached !== undefined && cached.interruptedNext === interruptedNext) return cached.fragment;
-	const fragment = convertOne(m, interruptedNext);
-	convertCache.set(m, { interruptedNext, fragment });
+	if (
+		cached !== undefined &&
+		cached.interruptedNext === interruptedNext &&
+		cached.promptTemplates === promptTemplates
+	) {
+		return cached.fragment;
+	}
+	const fragment = convertOne(m, interruptedNext, promptTemplates);
+	convertCache.set(m, { interruptedNext, promptTemplates, fragment });
 	return fragment;
 }
 
@@ -1219,9 +1232,12 @@ function convertOneCached(m: AgentMessage, interruptedNext: boolean): Message[] 
  * Owner mutations (prune/shake/strip-images) invalidate the affected message
  * through the shared registry before the next pass.
  */
-export function convertToLlm(messages: AgentMessage[]): Message[] {
+export function convertToLlm(messages: AgentMessage[], promptTemplates?: CompactionPromptTemplates): Message[] {
 	const len = messages.length;
-	const sameArray = messages === lastConvertInput && lastConvertGeneration === convertGeneration;
+	const sameArray =
+		messages === lastConvertInput &&
+		lastConvertGeneration === convertGeneration &&
+		lastConvertPromptTemplates === promptTemplates;
 	const tail = len > 0 ? messages[len - 1] : undefined;
 
 	// Exact-repeat: same array, same length, same trailing identity → reuse the
@@ -1263,7 +1279,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 		if (i === len - 1) prefixOutputLen = out.length;
 		const m = messages[i];
 		const interruptedNext = m.role === "assistant" && followedByInterruptedThinking(messages, i);
-		const fragment = convertOneCached(m, interruptedNext);
+		const fragment = convertOneCached(m, interruptedNext, promptTemplates);
 		for (const msg of fragment) out.push(msg);
 	}
 	if (len === 0) prefixOutputLen = 0;
@@ -1275,6 +1291,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 	lastConvertOutput = out;
 	lastConvertGeneration = convertGeneration;
 	lastConvertTail = tail;
+	lastConvertPromptTemplates = promptTemplates;
 	lastConvertPrefixOutputLen = prefixOutputLen;
 	return out;
 }

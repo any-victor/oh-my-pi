@@ -1,3 +1,21 @@
+<conversation>
+{{conversation}}
+</conversation>
+{{#if previousSummary}}
+
+<previous-summary>
+{{previousSummary}}
+</previous-summary>
+{{/if}}
+{{#if additionalContext}}
+
+<additional-context>
+{{#each additionalContext}}
+- {{this}}
+{{/each}}
+</additional-context>
+{{/if}}
+
 You MUST summarize what was done in this conversation, written like a pull request description.
 
 Rules:

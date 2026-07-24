@@ -88,6 +88,30 @@ export interface SessionCompactEvent {
 	fromExtension: boolean;
 }
 
+/** Fired before handoff generation (can be cancelled or customized) */
+export interface SessionBeforeHandoffEvent {
+	type: "session_before_handoff";
+	/** Optional one-off focus for this handoff */
+	customInstructions?: string;
+	/** Additional context lines to include in the handoff document */
+	additionalContext: string[];
+	/** Whether automatic compaction triggered the handoff */
+	autoTriggered: boolean;
+	/** Abort signal - handlers should pass this to LLM calls and check it periodically */
+	signal: AbortSignal;
+}
+
+/** Fired after handoff generation (can be customized) */
+export interface SessionHandoffGeneratedEvent {
+	type: "session_handoff_generated";
+	/** Generated handoff document */
+	document: string;
+	/** Whether automatic compaction triggered the handoff */
+	autoTriggered: boolean;
+	/** Abort signal - handlers should pass this to LLM calls and check it periodically */
+	signal: AbortSignal;
+}
+
 /** Fired on process exit (SIGINT/SIGTERM) */
 export interface SessionShutdownEvent {
 	type: "session_shutdown";
@@ -154,6 +178,8 @@ export type SessionEvent =
 	| SessionBeforeBranchEvent
 	| SessionBranchEvent
 	| SessionBeforeCompactEvent
+	| SessionBeforeHandoffEvent
+	| SessionHandoffGeneratedEvent
 	| SessionCompactingEvent
 	| SessionCompactEvent
 	| SessionStopEvent
@@ -343,6 +369,24 @@ export interface SessionBeforeCompactResult {
 	cancel?: boolean;
 	/** Custom compaction result - SessionManager adds id/parentId */
 	compaction?: CompactionResult;
+}
+
+/** Return type for `session_before_handoff` handlers */
+export interface SessionBeforeHandoffResult {
+	/** If true, cancel handoff generation */
+	cancel?: boolean;
+	/** Replace optional one-off focus for this handoff */
+	customInstructions?: string;
+	/** Replace additional context lines included in the handoff document */
+	additionalContext?: string[];
+}
+
+/** Return type for `session_handoff_generated` handlers */
+export interface SessionHandoffGeneratedResult {
+	/** Cancel the handoff before creating a successor session */
+	cancel?: boolean;
+	/** Replace the generated handoff document */
+	document?: string;
 }
 
 /** Return type for `session.compacting` handlers */

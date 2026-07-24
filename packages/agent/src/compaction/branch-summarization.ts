@@ -7,7 +7,6 @@
 
 import type { Api, ApiKey, AssistantMessage, Context, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
-import { prompt } from "@oh-my-pi/pi-utils";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import type { AgentMessage } from "../types";
 import { estimateTokens } from "./compaction";
@@ -19,14 +18,12 @@ import {
 	createCustomMessage,
 	defaultConvertToLlm,
 } from "./messages";
-import branchSummaryPrompt from "./prompts/branch-summary.md" with { type: "text" };
-import branchSummaryPreamble from "./prompts/branch-summary-preamble.md" with { type: "text" };
+import { CompactionPrompts, type CompactionPromptTemplates } from "./prompt-templates";
 import {
 	computeFileLists,
 	createFileOps,
 	extractFileOpsFromMessage,
 	type FileOperations,
-	SUMMARIZATION_SYSTEM_PROMPT,
 	serializeConversationForSummary,
 	stripReadSelector,
 	truncateToolResultForSummary,
@@ -82,6 +79,8 @@ export interface GenerateBranchSummaryOptions {
 	reserveTokens?: number;
 	/** Optional metadata forwarded to the underlying API request (e.g. user_id for session attribution). */
 	metadata?: Record<string, unknown>;
+	/** Optional prompt templates for branch summary rendering. */
+	promptTemplates?: CompactionPromptTemplates;
 	/** Convert app-specific messages before serializing the branch summary prompt. */
 	convertToLlm?: ConvertToLlm;
 	/**
@@ -290,10 +289,6 @@ export function prepareBranchEntries(entries: SessionEntry[], tokenBudget: numbe
 // Summary Generation
 // ============================================================================
 
-const BRANCH_SUMMARY_PREAMBLE = prompt.render(branchSummaryPreamble);
-
-const BRANCH_SUMMARY_PROMPT = prompt.render(branchSummaryPrompt);
-
 /**
  * Generate a summary of abandoned branch entries.
  *
@@ -318,13 +313,15 @@ export async function generateBranchSummary(
 
 	// Transform to LLM-compatible messages, then serialize to text
 	// Serialization prevents the model from treating it as a conversation to continue
-	const llmMessages = (options.convertToLlm ?? defaultConvertToLlm)(messages);
+	const llmMessages = (options.convertToLlm ?? defaultConvertToLlm)(messages, options.promptTemplates);
 	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
-
-	// Build prompt
-	const instructions = customInstructions || BRANCH_SUMMARY_PROMPT;
-	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${instructions}`;
-
+	const prompts = new CompactionPrompts(options.promptTemplates);
+	// Render the complete provider prompt so configured templates can control
+	// both the serialized conversation and the summarization instructions.
+	const promptText = prompts.render("branchSummary", {
+		conversation: conversationText,
+		customInstructions,
+	});
 	const summarizationMessages = [
 		{
 			role: "user" as const,
@@ -336,7 +333,10 @@ export async function generateBranchSummary(
 	// Call LLM for summarization
 	const response = await instrumentedCompleteSimple(
 		model,
-		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
+		{
+			systemPrompt: [prompts.render("summarizationSystem", {})],
+			messages: summarizationMessages,
+		},
 		{ apiKey, signal, maxTokens: 2048, metadata },
 		{ telemetry: options.telemetry, oneshotKind: "branch_summary", completeImpl: options.completeImpl },
 	);
@@ -355,11 +355,11 @@ export async function generateBranchSummary(
 		.join("\n");
 
 	// Prepend preamble to provide context about the branch summary
-	summary = BRANCH_SUMMARY_PREAMBLE + summary;
+	summary = prompts.render("branchSummaryPreamble", {}) + summary;
 
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-	summary = upsertFileOperations(summary, readFiles, modifiedFiles, fileOps.read);
+	summary = upsertFileOperations(summary, readFiles, modifiedFiles, fileOps.read, options.promptTemplates);
 
 	return {
 		summary: summary || "No summary generated",

@@ -5,6 +5,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { SessionManager } from "../../session/session-manager";
+import { mergeSessionBeforeHandoffResult, mergeSessionHandoffGeneratedResult } from "../handoff-event-results";
 import { createNoOpUIContext } from "../utils";
 import type {
 	AppendEntryHandler,
@@ -26,9 +27,15 @@ import type {
 	HookMessageRenderer,
 	HookUIContext,
 	RegisteredCommand,
+	SessionBeforeBranchResult,
 	SessionBeforeCompactResult,
+	SessionBeforeHandoffEvent,
+	SessionBeforeHandoffResult,
+	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
 	SessionCompactingResult,
+	SessionHandoffGeneratedEvent,
+	SessionHandoffGeneratedResult,
 	ToolCallEvent,
 	ToolCallEventResult,
 	ToolResultEventResult,
@@ -38,6 +45,31 @@ import type {
  * Listener for hook errors.
  */
 export type HookErrorListener = (error: HookError) => void;
+
+type SessionBeforeEventResult =
+	| SessionBeforeSwitchResult
+	| SessionBeforeBranchResult
+	| SessionBeforeCompactResult
+	| SessionBeforeHandoffResult
+	| SessionBeforeTreeResult;
+
+type HookRunnerEmitResult<TEvent extends HookEvent> = TEvent extends { type: "session_before_switch" }
+	? SessionBeforeSwitchResult | undefined
+	: TEvent extends { type: "session_before_branch" }
+		? SessionBeforeBranchResult | undefined
+		: TEvent extends { type: "session_before_compact" }
+			? SessionBeforeCompactResult | undefined
+			: TEvent extends { type: "session_before_handoff" }
+				? SessionBeforeHandoffResult | undefined
+				: TEvent extends { type: "session_handoff_generated" }
+					? SessionHandoffGeneratedResult | undefined
+					: TEvent extends { type: "session_before_tree" }
+						? SessionBeforeTreeResult | undefined
+						: TEvent extends { type: "session.compacting" }
+							? SessionCompactingResult | undefined
+							: TEvent extends { type: "tool_result" }
+								? ToolResultEventResult | undefined
+								: undefined;
 
 // Re-export execCommand for backward compatibility
 export { execCommand } from "../../exec/exec";
@@ -254,11 +286,17 @@ export class HookRunner {
 	 */
 	#isSessionBeforeEvent(
 		type: string,
-	): type is "session_before_switch" | "session_before_branch" | "session_before_compact" | "session_before_tree" {
+	): type is
+		| "session_before_switch"
+		| "session_before_branch"
+		| "session_before_compact"
+		| "session_before_handoff"
+		| "session_before_tree" {
 		return (
 			type === "session_before_switch" ||
 			type === "session_before_branch" ||
 			type === "session_before_compact" ||
+			type === "session_before_handoff" ||
 			type === "session_before_tree"
 		);
 	}
@@ -267,18 +305,15 @@ export class HookRunner {
 	 * Emit an event to all hooks.
 	 * Returns the result from session before_* / tool_result events (if any handler returns one).
 	 */
-	async emit(
-		event: HookEvent,
-	): Promise<
-		SessionBeforeCompactResult | SessionBeforeTreeResult | SessionCompactingResult | ToolResultEventResult | undefined
-	> {
+	async emit<TEvent extends HookEvent>(event: TEvent): Promise<HookRunnerEmitResult<TEvent>> {
 		const ctx = this.#createContext();
 		let result:
-			| SessionBeforeCompactResult
-			| SessionBeforeTreeResult
+			| SessionBeforeEventResult
+			| SessionHandoffGeneratedResult
 			| SessionCompactingResult
 			| ToolResultEventResult
 			| undefined;
+		let currentEvent = event;
 
 		for (const hook of this.hooks) {
 			const handlers = hook.handlers.get(event.type);
@@ -286,14 +321,26 @@ export class HookRunner {
 
 			for (const handler of handlers) {
 				try {
-					const handlerResult = await handler(event, ctx);
+					const handlerResult = await handler(currentEvent, ctx);
 
 					// For session before_* events, capture the result (for cancellation)
 					if (this.#isSessionBeforeEvent(event.type) && handlerResult) {
-						result = handlerResult as SessionBeforeCompactResult | SessionBeforeTreeResult;
-						// If cancelled, stop processing further hooks
-						if (result.cancel) {
-							return result;
+						const beforeResult = handlerResult as SessionBeforeEventResult;
+						if (event.type === "session_before_handoff") {
+							const merged = mergeSessionBeforeHandoffResult(
+								currentEvent as SessionBeforeHandoffEvent,
+								result as SessionBeforeHandoffResult | undefined,
+								handlerResult as SessionBeforeHandoffResult,
+							);
+							result = merged.result;
+							currentEvent = merged.event as TEvent;
+						} else {
+							// Pre-existing session_before_* contract: the latest returned
+							// result wins wholesale; only before-handoff composes field-wise.
+							result = beforeResult;
+						}
+						if (beforeResult.cancel) {
+							return result as HookRunnerEmitResult<TEvent>;
 						}
 					}
 
@@ -303,6 +350,18 @@ export class HookRunner {
 					}
 					if (event.type === "session.compacting" && handlerResult) {
 						result = handlerResult as SessionCompactingResult;
+					}
+					if (event.type === "session_handoff_generated" && handlerResult) {
+						const merged = mergeSessionHandoffGeneratedResult(
+							currentEvent as SessionHandoffGeneratedEvent,
+							result as SessionHandoffGeneratedResult | undefined,
+							handlerResult as SessionHandoffGeneratedResult,
+						);
+						result = merged.result;
+						currentEvent = merged.event as TEvent;
+						if (merged.result.cancel) {
+							return result as HookRunnerEmitResult<TEvent>;
+						}
 					}
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
@@ -315,7 +374,7 @@ export class HookRunner {
 			}
 		}
 
-		return result;
+		return result as HookRunnerEmitResult<TEvent>;
 	}
 
 	/**

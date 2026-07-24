@@ -53,20 +53,17 @@ import {
 	shouldUseOpenAiRemoteCompaction,
 	withOpenAiRemoteCompactionPreserveData,
 } from "./openai";
-import autoHandoffThresholdFocusPrompt from "./prompts/auto-handoff-threshold-focus.md" with { type: "text" };
-import compactionShortSummaryPrompt from "./prompts/compaction-short-summary.md" with { type: "text" };
-import compactionSummaryPrompt from "./prompts/compaction-summary.md" with { type: "text" };
-import compactionTurnPrefixPrompt from "./prompts/compaction-turn-prefix.md" with { type: "text" };
-import compactionUpdateSummaryPrompt from "./prompts/compaction-update-summary.md" with { type: "text" };
-import handoffDocumentPrompt from "./prompts/handoff-document.md" with { type: "text" };
-import snapcompactArchiveContextPrompt from "./prompts/snapcompact-archive-context.md" with { type: "text" };
+import {
+	CompactionPrompts,
+	type CompactionPromptTemplates,
+	DEFAULT_COMPACTION_PROMPT_TEMPLATES,
+} from "./prompt-templates";
 
 import {
 	computeFileLists,
 	createFileOps,
 	extractFileOpsFromMessage,
 	type FileOperations,
-	SUMMARIZATION_SYSTEM_PROMPT,
 	serializeConversationForSummary,
 	stripReadSelector,
 	upsertFileOperations,
@@ -640,21 +637,7 @@ export function findCutPoint(
 // Summarization
 // ============================================================================
 
-const SUMMARIZATION_PROMPT = prompt.render(compactionSummaryPrompt);
-
-const UPDATE_SUMMARIZATION_PROMPT = prompt.render(compactionUpdateSummaryPrompt);
-
-const SHORT_SUMMARY_PROMPT = prompt.render(compactionShortSummaryPrompt);
-
-const HANDOFF_DOCUMENT_PROMPT = prompt.render(handoffDocumentPrompt);
-
-export const AUTO_HANDOFF_THRESHOLD_FOCUS = prompt.render(autoHandoffThresholdFocusPrompt);
-
-function formatAdditionalContext(context: string[] | undefined): string {
-	if (!context || context.length === 0) return "";
-	const lines = context.map(line => `- ${line}`).join("\n");
-	return `<additional-context>\n${lines}\n</additional-context>\n\n`;
-}
+export const AUTO_HANDOFF_THRESHOLD_FOCUS = prompt.render(DEFAULT_COMPACTION_PROMPT_TEMPLATES.autoHandoffFocus);
 
 /**
  * Maps the non-special `ThinkingLevel` values to their `Effort` counterparts.
@@ -778,6 +761,8 @@ export interface SummaryOptions {
 		ctx: Context,
 		options: SimpleStreamOptions,
 	) => Promise<AssistantMessage>;
+	/** Optional prompt templates for compaction renderers. */
+	promptTemplates?: CompactionPromptTemplates;
 }
 
 function localCodexCompaction(options: SummaryOptions | undefined) {
@@ -787,23 +772,20 @@ function localCodexCompaction(options: SummaryOptions | undefined) {
 	});
 }
 
-function formatPreviousSnapcompactArchive(archiveText: string): string {
-	return prompt.render(snapcompactArchiveContextPrompt, { archiveText });
-}
-
 function mergePreviousSummaryWithSnapcompactArchive(
 	previousSummary: string | undefined,
 	archiveText: string | undefined,
+	prompts: CompactionPrompts,
 ): string | undefined {
 	if (!archiveText) return previousSummary;
-	const archiveSummary = formatPreviousSnapcompactArchive(archiveText);
+	const archiveSummary = prompts.render("snapcompactArchiveContext", { archiveText });
 	return previousSummary ? `${previousSummary}\n\n${archiveSummary}` : archiveSummary;
 }
 
-function createSnapcompactArchiveMigrationMessage(archiveText: string): Message {
+function createSnapcompactArchiveMigrationMessage(archiveText: string, prompts: CompactionPrompts): Message {
 	return {
 		role: "user",
-		content: [{ type: "text", text: formatPreviousSnapcompactArchive(archiveText) }],
+		content: [{ type: "text", text: prompts.render("snapcompactArchiveContext", { archiveText }) }],
 		timestamp: Date.now(),
 	};
 }
@@ -820,28 +802,22 @@ export async function generateSummary(
 ): Promise<string> {
 	const maxTokens = Math.floor(0.8 * reserveTokens);
 
-	// Use update prompt if we have a previous summary, otherwise initial prompt
-	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
-	if (options?.promptOverride) {
-		basePrompt = options.promptOverride;
-	}
-	if (customInstructions) {
-		basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
-	}
-
-	// Serialize conversation to text so model doesn't try to continue it
+	// Serialize conversation to text so model doesn't try to continue it.
 	// Convert to LLM messages first (handles custom app messages when caller provides a transformer).
-	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(currentMessages);
+	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(currentMessages, options?.promptTemplates);
 	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
-
-	// Build the prompt with conversation wrapped in tags
-	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
-	if (previousSummary) {
-		promptText += `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`;
-	}
-	promptText += formatAdditionalContext(options?.extraContext);
-	promptText += basePrompt;
-
+	const prompts = new CompactionPrompts(options?.promptTemplates);
+	// A session_before_compact hook prompt is an imperative override, not
+	// optional template data. The bundled template is guaranteed to render
+	// {{promptOverride}}, so it takes precedence over file configuration.
+	const summaryPrompts = options?.promptOverride ? new CompactionPrompts() : prompts;
+	const promptText = summaryPrompts.render(previousSummary ? "updateSummary" : "summary", {
+		conversation: conversationText,
+		previousSummary,
+		additionalContext: options?.extraContext,
+		additionalFocus: customInstructions,
+		promptOverride: options?.promptOverride,
+	});
 	const summarizationMessages = [
 		{
 			role: "user" as const,
@@ -857,7 +833,10 @@ export async function generateSummary(
 			key =>
 				requestRemoteCompaction(
 					endpoint,
-					{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText },
+					{
+						systemPrompt: prompts.render("summarizationSystem", {}),
+						prompt: promptText,
+					},
 					signal,
 					{ fetch: options.fetch, model, apiKey: key },
 				),
@@ -868,7 +847,10 @@ export async function generateSummary(
 
 	const response = await instrumentedCompleteSimple(
 		model,
-		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
+		{
+			systemPrompt: [prompts.render("summarizationSystem", {})],
+			messages: summarizationMessages,
+		},
 		{
 			maxTokens,
 			signal,
@@ -922,13 +904,24 @@ export interface HandoffOptions {
 	 * `resolveCompactionEffort` for the conversion contract.
 	 */
 	thinkingLevel?: ThinkingLevel;
+	/** Optional prompt templates for handoff rendering. */
+	promptTemplates?: CompactionPromptTemplates;
 }
 
-export function renderHandoffPrompt(customInstructions?: string): string {
-	if (!customInstructions) return HANDOFF_DOCUMENT_PROMPT;
-	return prompt.render(handoffDocumentPrompt, {
+export interface HandoffPromptOptions {
+	additionalContext?: string[];
+	promptTemplates?: CompactionPromptTemplates;
+}
+
+export function renderHandoffPrompt(customInstructions?: string, options?: HandoffPromptOptions): string {
+	return new CompactionPrompts(options?.promptTemplates).render("handoffDocument", {
 		additionalFocus: customInstructions,
+		additionalContext: options?.additionalContext,
 	});
+}
+
+export function renderHandoffContext(document: string, promptTemplates?: CompactionPromptTemplates): string {
+	return new CompactionPrompts(promptTemplates).render("handoffContext", { document });
 }
 
 export interface HandoffFromContextOptions {
@@ -1008,12 +1001,17 @@ export async function generateHandoff(
 	options: HandoffOptions,
 	signal?: AbortSignal,
 ): Promise<string> {
-	const llmMessages = (options.convertToLlm ?? defaultConvertToLlm)(messages);
+	const llmMessages = (options.convertToLlm ?? defaultConvertToLlm)(messages, options.promptTemplates);
 	const requestMessages: Message[] = [
 		...llmMessages,
 		{
 			role: "user",
-			content: [{ type: "text", text: renderHandoffPrompt(options.customInstructions) }],
+			content: [
+				{
+					type: "text",
+					text: renderHandoffPrompt(options.customInstructions, { promptTemplates: options.promptTemplates }),
+				},
+			],
 			attribution: "agent",
 			timestamp: Date.now(),
 		},
@@ -1045,15 +1043,14 @@ async function generateShortSummary(
 	options?: SummaryOptions,
 ): Promise<string> {
 	const maxTokens = Math.min(512, Math.floor(0.2 * reserveTokens));
-	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(recentMessages);
+	const prompts = new CompactionPrompts(options?.promptTemplates);
+	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(recentMessages, options?.promptTemplates);
 	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
-
-	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
-	if (historySummary) {
-		promptText += `<previous-summary>\n${historySummary}\n</previous-summary>\n\n`;
-	}
-	promptText += formatAdditionalContext(options?.extraContext);
-	promptText += SHORT_SUMMARY_PROMPT;
+	const promptText = prompts.render("shortSummary", {
+		conversation: conversationText,
+		previousSummary: historySummary,
+		additionalContext: options?.extraContext,
+	});
 
 	if (options?.remoteEndpoint) {
 		const endpoint = options.remoteEndpoint;
@@ -1062,7 +1059,10 @@ async function generateShortSummary(
 			key =>
 				requestRemoteCompaction(
 					endpoint,
-					{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText },
+					{
+						systemPrompt: prompts.render("summarizationSystem", {}),
+						prompt: promptText,
+					},
 					signal,
 					{ fetch: options?.fetch, model, apiKey: key },
 				),
@@ -1074,7 +1074,7 @@ async function generateShortSummary(
 	const response = await instrumentedCompleteSimple(
 		model,
 		{
-			systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT],
+			systemPrompt: [prompts.render("summarizationSystem", {})],
 			messages: [{ role: "user", content: [{ type: "text", text: promptText }], timestamp: Date.now() }],
 		},
 		{
@@ -1271,8 +1271,6 @@ export function prepareCompaction(
 // Main compaction function
 // ============================================================================
 
-const TURN_PREFIX_SUMMARIZATION_PROMPT = prompt.render(compactionTurnPrefixPrompt);
-
 function openAiCompatSupportsImageDetailOriginal(model: Model): boolean {
 	const compat = model.compat;
 	return !!compat && "supportsImageDetailOriginal" in compat && compat.supportsImageDetailOriginal === true;
@@ -1368,7 +1366,14 @@ export async function compact(
 		tools: options?.tools,
 		fetch: options?.fetch,
 		completeImpl: options?.completeImpl,
+		promptTemplates: options?.promptTemplates,
 	};
+	const prompts = new CompactionPrompts(options?.promptTemplates);
+	const nativeRemoteCompactionCanHonorPrompts =
+		options?.promptTemplates?.summary === undefined &&
+		options?.promptTemplates?.updateSummary === undefined &&
+		options?.promptTemplates?.turnPrefix === undefined &&
+		options?.promptTemplates?.shortSummary === undefined;
 
 	const previousSnapcompactArchive = snapcompact.getPreservedArchive(previousPreserveData);
 	const previousSnapcompactArchiveText = previousSnapcompactArchive
@@ -1377,9 +1382,10 @@ export async function compact(
 	const previousSummaryForCompaction = mergePreviousSummaryWithSnapcompactArchive(
 		previousSummary,
 		previousSnapcompactArchiveText,
+		prompts,
 	);
 	const snapcompactArchiveMigrationMessage = previousSnapcompactArchiveText
-		? createSnapcompactArchiveMigrationMessage(previousSnapcompactArchiveText)
+		? createSnapcompactArchiveMigrationMessage(previousSnapcompactArchiveText, prompts)
 		: undefined;
 
 	let preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, undefined);
@@ -1391,6 +1397,7 @@ export async function compact(
 	];
 	let usedRemoteCompaction = false;
 	if (
+		nativeRemoteCompactionCanHonorPrompts &&
 		settings.remoteEnabled !== false &&
 		settings.remoteStreamingV2Enabled !== false &&
 		shouldUseCompactionV2Streaming(model)
@@ -1401,7 +1408,7 @@ export async function compact(
 				? previousRemoteCompaction.replacementHistory
 				: undefined;
 		const remoteHistory = buildOpenAiResponsesCompactionInput(
-			(summaryOptions.convertToLlm ?? defaultConvertToLlm)(remoteMessages),
+			(summaryOptions.convertToLlm ?? defaultConvertToLlm)(remoteMessages, summaryOptions.promptTemplates),
 			model,
 			previousReplacementHistory,
 		);
@@ -1410,7 +1417,7 @@ export async function compact(
 				const request = buildCompactionV2Request(
 					model,
 					remoteHistory,
-					summaryOptions.remoteInstructions ?? SUMMARIZATION_SYSTEM_PROMPT,
+					summaryOptions.remoteInstructions ?? prompts.render("summarizationSystem", {}),
 					{
 						tools: summaryOptions.tools
 							? convertTools(summaryOptions.tools, model.compat.supportsStrictMode, model)
@@ -1447,7 +1454,12 @@ export async function compact(
 		}
 	}
 
-	if (!usedRemoteCompaction && settings.remoteEnabled !== false && shouldUseOpenAiRemoteCompaction(model)) {
+	if (
+		!usedRemoteCompaction &&
+		nativeRemoteCompactionCanHonorPrompts &&
+		settings.remoteEnabled !== false &&
+		shouldUseOpenAiRemoteCompaction(model)
+	) {
 		const previousRemoteCompaction = getPreservedOpenAiRemoteCompactionData(previousPreserveData);
 		const previousV2Compaction = getCompactionV2PreserveData(previousPreserveData);
 		const previousReplacementHistory =
@@ -1457,7 +1469,7 @@ export async function compact(
 					? previousV2Compaction.replacementHistory
 					: undefined;
 		const remoteHistory = buildOpenAiNativeHistory(
-			(summaryOptions.convertToLlm ?? defaultConvertToLlm)(remoteMessages),
+			(summaryOptions.convertToLlm ?? defaultConvertToLlm)(remoteMessages, summaryOptions.promptTemplates),
 			model,
 			previousReplacementHistory,
 		);
@@ -1470,7 +1482,7 @@ export async function compact(
 							model,
 							key,
 							remoteHistory,
-							summaryOptions.remoteInstructions ?? SUMMARIZATION_SYSTEM_PROMPT,
+							summaryOptions.remoteInstructions ?? prompts.render("summarizationSystem", {}),
 							signal,
 							{
 								fetch: summaryOptions.fetch,
@@ -1560,7 +1572,7 @@ export async function compact(
 
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-	summary = upsertFileOperations(summary, readFiles, modifiedFiles, fileOps.read);
+	summary = upsertFileOperations(summary, readFiles, modifiedFiles, fileOps.read, summaryOptions.promptTemplates);
 
 	if (!firstKeptEntryId) {
 		throw new Error("First kept entry has no ID - session may need migration");
@@ -1597,9 +1609,10 @@ async function generateTurnPrefixSummary(
 ): Promise<string> {
 	const maxTokens = Math.floor(0.5 * reserveTokens); // Smaller budget for turn prefix
 
-	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages);
+	const prompts = new CompactionPrompts(options?.promptTemplates);
+	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages, options?.promptTemplates);
 	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
-	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
+	const promptText = prompts.render("turnPrefix", { conversation: conversationText });
 	const summarizationMessages = [
 		{
 			role: "user" as const,
@@ -1610,7 +1623,10 @@ async function generateTurnPrefixSummary(
 
 	const response = await instrumentedCompleteSimple(
 		model,
-		{ systemPrompt: [SUMMARIZATION_SYSTEM_PROMPT], messages: summarizationMessages },
+		{
+			systemPrompt: [prompts.render("summarizationSystem", {})],
+			messages: summarizationMessages,
+		},
 		{
 			maxTokens,
 			signal,

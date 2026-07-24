@@ -1,7 +1,7 @@
 /** Provider-facing message, image, secret, and stream normalization for a session. */
 
 import type { Agent, AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { CompactionPreparation } from "@oh-my-pi/pi-agent-core/compaction";
+import type { CompactionPreparation, CompactionPromptTemplates } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Message, Model, SimpleStreamOptions, TextContent } from "@oh-my-pi/pi-ai";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
@@ -35,7 +35,9 @@ export interface SessionProviderBoundaryHost {
 	sessionId(): string;
 	localProtocolOptions(): LocalProtocolOptions;
 	transformContext(messages: AgentMessage[], signal?: AbortSignal): AgentMessage[] | Promise<AgentMessage[]>;
-	convertToLlm(messages: AgentMessage[]): Message[] | Promise<Message[]>;
+	convertToLlm(messages: AgentMessage[], promptTemplates?: CompactionPromptTemplates): Message[] | Promise<Message[]>;
+	/** Session-frozen conversion templates; never re-resolved per operation (provider byte stability). */
+	compactionPromptTemplates: CompactionPromptTemplates;
 	onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
@@ -122,15 +124,15 @@ export class SessionProviderBoundary {
 	}
 
 	/** Converts side-request messages through the session's secret boundary. */
-	convertToLlmForSideRequest(messages: AgentMessage[]): Message[] {
-		const converted = convertToLlm(messages);
+	convertToLlmForSideRequest(messages: AgentMessage[], promptTemplates?: CompactionPromptTemplates): Message[] {
+		const converted = convertToLlm(messages, promptTemplates);
 		return this.#host.obfuscator?.hasSecrets() ? obfuscateMessages(this.#host.obfuscator, converted) : converted;
 	}
 
 	/** Converts session messages using the configured pre-LLM pipeline. */
 	async convertMessagesToLlm(messages: AgentMessage[], signal?: AbortSignal): Promise<Message[]> {
 		const transformedMessages = await this.#host.transformContext(messages, signal);
-		return await this.#host.convertToLlm(transformedMessages);
+		return await this.#host.convertToLlm(transformedMessages, this.#host.compactionPromptTemplates);
 	}
 
 	/** Applies session-level stream hooks and provider defaults to a side request. */

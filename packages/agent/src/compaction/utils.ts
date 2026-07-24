@@ -6,8 +6,11 @@ import type { Message, ToolCall } from "@oh-my-pi/pi-ai";
 import { type Dialect, getDialectDefinition } from "@oh-my-pi/pi-ai/dialect";
 import { formatGroupedPaths, prompt, stringifyJson } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "../types";
-import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
-import summarizationSystemPrompt from "./prompts/summarization-system.md" with { type: "text" };
+import {
+	CompactionPrompts,
+	type CompactionPromptTemplates,
+	DEFAULT_COMPACTION_PROMPT_TEMPLATES,
+} from "./prompt-templates";
 
 // ============================================================================
 // File Operation Tracking
@@ -165,6 +168,7 @@ export function formatFileOperations(
 	readFiles: string[],
 	modifiedFiles: string[],
 	readSet?: ReadonlySet<string>,
+	promptTemplates?: CompactionPromptTemplates,
 ): string {
 	if (readFiles.length === 0 && modifiedFiles.length === 0) return "";
 	const mode = new Map<string, "Read" | "Write" | "RW">();
@@ -175,7 +179,7 @@ export function formatFileOperations(
 	if (all.length > FILE_OPERATION_SUMMARY_LIMIT) {
 		files += `\n[…${all.length - FILE_OPERATION_SUMMARY_LIMIT} files elided…]`;
 	}
-	return prompt.render(fileOperationsTemplate, { files });
+	return new CompactionPrompts(promptTemplates).render("fileOperations", { files });
 }
 
 export function upsertFileOperations(
@@ -183,9 +187,10 @@ export function upsertFileOperations(
 	readFiles: string[],
 	modifiedFiles: string[],
 	readSet?: ReadonlySet<string>,
+	promptTemplates?: CompactionPromptTemplates,
 ): string {
 	const baseSummary = stripFileOperationTags(summary);
-	const fileOperations = formatFileOperations(readFiles, modifiedFiles, readSet);
+	const fileOperations = formatFileOperations(readFiles, modifiedFiles, readSet, promptTemplates);
 	if (!fileOperations) return baseSummary;
 	if (!baseSummary) return fileOperations;
 	return `${baseSummary}\n\n${fileOperations}`;
@@ -341,4 +346,4 @@ function renderToolCalls(calls: ToolCall[]): string {
 // Summarization System Prompt
 // ============================================================================
 
-export const SUMMARIZATION_SYSTEM_PROMPT = prompt.render(summarizationSystemPrompt);
+export const SUMMARIZATION_SYSTEM_PROMPT = prompt.render(DEFAULT_COMPACTION_PROMPT_TEMPLATES.summarizationSystem);

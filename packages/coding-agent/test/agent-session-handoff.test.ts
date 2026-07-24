@@ -261,6 +261,652 @@ describe("AgentSession handoff", () => {
 		]);
 	});
 
+	it("applies before-handoff focus and context after obfuscating handler-supplied secrets", async () => {
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const customizeHandoff = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_before_handoff", () => ({
+					customInstructions: `focus ${HANDOFF_SECRET}`,
+					additionalContext: [`context ${HANDOFF_SECRET}`],
+				}));
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"customize-handoff",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[customizeHandoff],
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+		});
+
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("## Goal\nContinue");
+		await session.handoff();
+
+		const call = generateHandoffSpy.mock.calls[0];
+		if (!call) throw new Error("Expected handoff generation");
+		const providerContext = JSON.stringify(call[0]);
+		const placeholder = obfuscator.obfuscate(HANDOFF_SECRET);
+		expect(providerContext).toContain(`focus ${placeholder}`);
+		expect(providerContext).toContain(`context ${placeholder}`);
+		expect(providerContext).not.toContain(HANDOFF_SECRET);
+	});
+
+	it("composes ordered before-handoff handler results and honours cancellation before generation", async () => {
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const focusHandler = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_before_handoff", () => ({ customInstructions: "first focus" }));
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"handoff-focus",
+		);
+		const contextHandler = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_before_handoff", event => {
+					expect(event.customInstructions).toBe("first focus");
+					return { customInstructions: undefined, additionalContext: ["second context"] };
+				});
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"handoff-context",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[focusHandler, contextHandler],
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+		});
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("## Goal\nContinue");
+
+		await session.handoff();
+
+		const call = generateHandoffSpy.mock.calls[0];
+		if (!call) throw new Error("Expected handoff generation");
+		const providerContext = JSON.stringify(call[0]);
+		expect(providerContext).toContain("first focus");
+		expect(providerContext).toContain("second context");
+
+		const cancellingHandler = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_before_handoff", () => ({ cancel: true }));
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"cancel-handoff",
+		);
+		const cancellingRunner = new ExtensionRunner(
+			[cancellingHandler],
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			extensionRunner: cancellingRunner,
+			obfuscator,
+		});
+		const sessionFile = session.sessionFile;
+		sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "cancel seed" }],
+			timestamp: Date.now() - 1,
+		});
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "cancel seed response" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		});
+		generateHandoffSpy.mockClear();
+
+		expect(await session.handoff()).toBeUndefined();
+		expect(generateHandoffSpy).not.toHaveBeenCalled();
+		expect(session.sessionFile).toBe(sessionFile);
+	});
+
+	it("stops before provider work when cancellation arrives during a before-handoff handler", async () => {
+		const handlerStarted = Promise.withResolvers<void>();
+		const releaseHandler = Promise.withResolvers<void>();
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const waitingHandler = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_before_handoff", async () => {
+					handlerStarted.resolve();
+					await releaseHandler.promise;
+				});
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"wait-before-handoff",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[waitingHandler],
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+		});
+		const sessionFile = session.sessionFile;
+		const generateHandoffSpy = vi.spyOn(compactionModule, "generateHandoffFromContext");
+		const controller = new AbortController();
+
+		const handoffPromise = session.handoff(undefined, { signal: controller.signal });
+		await handlerStarted.promise;
+		controller.abort();
+		releaseHandler.resolve();
+
+		await expect(handoffPromise).rejects.toThrow("Handoff cancelled");
+		expect(generateHandoffSpy).not.toHaveBeenCalled();
+		expect(session.sessionFile).toBe(sessionFile);
+	});
+
+	it("uses freshly resolved COMPACTION.yml templates for the next handoff", async () => {
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			obfuscator,
+			compactionPromptTemplates: {
+				handoffDocument: "STALE_DOC_4076 {{additionalFocus}}",
+				handoffContext: "STALE_CTX {{document}}",
+			},
+			resolveCompactionPromptTemplates: async () => ({
+				handoffDocument: "FRESH_DOC_4076 {{additionalFocus}}",
+				handoffContext: "FRESH_CTX {{document}}",
+			}),
+		});
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("generated document");
+
+		const result = await session.handoff("focus text");
+
+		expect(result?.document).toBe("generated document");
+		const providerContext = JSON.stringify(generateHandoffSpy.mock.calls[0]?.[0]);
+		expect(providerContext).toContain("FRESH_DOC_4076");
+		expect(providerContext).not.toContain("STALE_DOC_4076");
+		expect(session.getLastVisibleHandoffText()).toBe("FRESH_CTX generated document");
+	});
+
+	it("renders freshly resolved summary templates into the manual compaction request", async () => {
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": true,
+				"compaction.autoContinue": false,
+				"compaction.keepRecentTokens": 1,
+				"compaction.remoteEnabled": false,
+				"compaction.strategy": "context-full",
+			}),
+			modelRegistry,
+			obfuscator,
+			compactionPromptTemplates: { summary: "STALE_SUMMARY_4076\n{{conversation}}" },
+			resolveCompactionPromptTemplates: async () => ({
+				summary: "FRESH_SUMMARY_4076\n{{conversation}}",
+			}),
+		});
+		sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "second seed" }],
+			timestamp: Date.now() - 2,
+		});
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "second seed response" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 16,
+				output: 8,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 24,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now() - 1,
+		});
+		const captured: string[] = [];
+		const originalCompact = compactionModule.compact;
+		vi.spyOn(compactionModule, "compact").mockImplementation((prep, mdl, key, instr, sig, opts) =>
+			originalCompact(prep, mdl, key, instr, sig, {
+				...opts,
+				remoteEndpoint: undefined,
+				completeImpl: async (_model, context) => {
+					captured.push(JSON.stringify(context));
+					const message: AssistantMessage = {
+						role: "assistant",
+						content: [{ type: "text", text: "summary text" }],
+						api: model.api,
+						provider: model.provider,
+						model: model.id,
+						stopReason: "stop",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						timestamp: Date.now(),
+					};
+					return message;
+				},
+			}),
+		);
+
+		await session.compact();
+
+		expect(captured.join("\n")).toContain("FRESH_SUMMARY_4076");
+		expect(captured.join("\n")).not.toContain("STALE_SUMMARY_4076");
+	});
+
+	it("keeps conversion templates session-frozen when the resolver changes them", async () => {
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [
+						{ role: "compactionSummary", summary: "STORED_4076", tokensBefore: 1, timestamp: Date.now() },
+					],
+				},
+			}),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			obfuscator,
+			compactionPromptTemplates: { compactionSummaryContext: "SESSION_WRAP_4076 {{summary}}" },
+			resolveCompactionPromptTemplates: async () => ({
+				compactionSummaryContext: "RESOLVER_WRAP_4076 {{summary}}",
+			}),
+		});
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("generated document");
+
+		await session.handoff();
+
+		const providerContext = JSON.stringify(generateHandoffSpy.mock.calls[0]?.[0]);
+		expect(providerContext).toContain("SESSION_WRAP_4076 STORED_4076");
+		expect(providerContext).not.toContain("RESOLVER_WRAP_4076");
+	});
+
+	it("keeps last-result-wins for pre-existing session_before_* events", async () => {
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const first = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_before_branch", () => ({ skipConversationRestore: true }));
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"first-before-branch",
+		);
+		const second = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_before_branch", () => ({}));
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"second-before-branch",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[first, second],
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+
+		const result = await extensionRunner.emit({ type: "session_before_branch", entryId: "entry-1" });
+
+		// The pre-existing contract: the latest returned result wins wholesale, so
+		// the second handler's empty result must erase skipConversationRestore.
+		expect(result).toEqual({});
+	});
+
+	it("ends automatic handoff as aborted when a lifecycle handler cancels", async () => {
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const cancellingHandler = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_before_handoff", () => ({ cancel: true }));
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"auto-cancel-handoff",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[cancellingHandler],
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+		});
+		const sessionEvents: AgentSessionEvent[] = [];
+		session.subscribe(event => {
+			sessionEvents.push(event);
+		});
+		session.settings.set("compaction.strategy", "handoff");
+		session.settings.set("compaction.thresholdPercent", 1);
+		session.settings.set("contextPromotion.enabled", false);
+		const generateHandoffSpy = vi.spyOn(compactionModule, "generateHandoffFromContext");
+		const compactSpy = vi.spyOn(compactionModule, "compact");
+
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "maintenance trigger" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 10_000,
+				output: 1_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 11_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+		await waitFor(() => sessionEvents.filter(event => event.type === "auto_compaction_end").length === 1);
+
+		// Deliberate cancellation: no generation, and no context-full fallback.
+		expect(generateHandoffSpy).not.toHaveBeenCalled();
+		expect(compactSpy).not.toHaveBeenCalled();
+		const endEvents = sessionEvents.filter(event => event.type === "auto_compaction_end");
+		expect(endEvents[0]).toMatchObject({ type: "auto_compaction_end", aborted: true, willRetry: false });
+	});
+
+	it("chains generated-handoff document replacements before persisting the configured context", async () => {
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const firstReplacement = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_handoff_generated", () => ({ document: "first replacement" }));
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"first-handoff-replacement",
+		);
+		const secondReplacement = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_handoff_generated", event => {
+					expect(event.document).toBe("first replacement");
+					return { document: "final replacement" };
+				});
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"second-handoff-replacement",
+		);
+		const undefinedReplacement = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_handoff_generated", event => {
+					expect(event.document).toBe("final replacement");
+					return { document: undefined };
+				});
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"undefined-handoff-replacement",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[firstReplacement, secondReplacement, undefinedReplacement],
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+			compactionPromptTemplates: { handoffContext: "Saved handoff: {{document}}" },
+		});
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue("generated document");
+
+		const result = await session.handoff();
+		const sessionFile = session.sessionFile;
+		if (!sessionFile) throw new Error("Expected persisted handoff session");
+
+		expect(result?.document).toBe("final replacement");
+		expect(session.getLastVisibleHandoffText()).toBe("Saved handoff: final replacement");
+		expect(await Bun.file(sessionFile).text()).toContain("Saved handoff: final replacement");
+	});
+
+	it("honours generated-handoff cancellation before creating a successor session", async () => {
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const cancellingHandler = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_handoff_generated", () => ({ cancel: true }));
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"cancel-generated-handoff",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[cancellingHandler],
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+		});
+		const sessionFile = session.sessionFile;
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("generated document");
+
+		expect(await session.handoff()).toBeUndefined();
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
+		expect(session.sessionFile).toBe(sessionFile);
+	});
+
+	it("validates the configured handoff context before creating a successor session", async () => {
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			obfuscator,
+			compactionPromptTemplates: { handoffContext: "{{#if document}}" },
+		});
+		const sessionFile = session.sessionFile;
+		const entryCount = sessionManager.getEntries().length;
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue("generated document");
+
+		await expect(session.handoff()).rejects.toThrow();
+		expect(session.sessionFile).toBe(sessionFile);
+		expect(sessionManager.getEntries()).toHaveLength(entryCount);
+	});
+
+	it("stops before session creation when cancellation arrives during a generated-handoff handler", async () => {
+		const handlerStarted = Promise.withResolvers<void>();
+		const releaseHandler = Promise.withResolvers<void>();
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const waitingHandler = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_handoff_generated", async () => {
+					handlerStarted.resolve();
+					await releaseHandler.promise;
+				});
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"wait-generated-handoff",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[waitingHandler],
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+		});
+		const sessionFile = session.sessionFile;
+		vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue("generated document");
+		const controller = new AbortController();
+
+		const handoffPromise = session.handoff(undefined, { signal: controller.signal });
+		await handlerStarted.promise;
+		controller.abort();
+		releaseHandler.resolve();
+
+		await expect(handoffPromise).rejects.toThrow("Handoff cancelled");
+		expect(session.sessionFile).toBe(sessionFile);
+	});
+
+	it("renders a custom handoff document template with one-off focus and context data only", async () => {
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const contextHandler = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_before_handoff", () => ({ additionalContext: ["event context"] }));
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"template-handoff-context",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[contextHandler],
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({ "compaction.enabled": true, "compaction.autoContinue": false }),
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+			compactionPromptTemplates: {
+				handoffDocument: "Custom focus={{additionalFocus}} context={{#each additionalContext}}[{{this}}]{{/each}}",
+			},
+		});
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("generated document");
+
+		await session.handoff("one-off focus");
+
+		const call = generateHandoffSpy.mock.calls[0];
+		if (!call) throw new Error("Expected handoff generation");
+		const providerContext = JSON.stringify(call[0]);
+		expect(providerContext).toContain("Custom focus=one-off focus context=[event context]");
+		expect(session.getLastVisibleHandoffText()).toBe(
+			"<handoff-context>\ngenerated document\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.",
+		);
+	});
+
 	it("runs handoff generation through the configured side stream function", async () => {
 		const handoffText = "## Goal\nContinue via side stream";
 		let sideStreamCalls = 0;
@@ -1240,7 +1886,9 @@ describe("AgentSession handoff", () => {
 			timestamp: Date.now(),
 		};
 
-		const handoffSpy = vi.spyOn(session, "handoff").mockResolvedValue({ document: "handoff document" });
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("handoff document");
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
 		session.agent.emitExternalEvent({
 			type: "tool_execution_end",
@@ -1255,7 +1903,7 @@ describe("AgentSession handoff", () => {
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
 		await drainMaintenance();
 
-		expect(handoffSpy).not.toHaveBeenCalled();
+		expect(generateHandoffSpy).not.toHaveBeenCalled();
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
 		expect(events.filter(event => event.type === "auto_compaction_end")).toHaveLength(0);
 	});
@@ -1335,12 +1983,12 @@ describe("AgentSession handoff", () => {
 			timestamp: Date.now(),
 		};
 
-		const handoffSpy = vi.spyOn(session, "handoff");
+		const generateHandoffSpy = vi.spyOn(compactionModule, "generateHandoffFromContext");
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
 		await drainMaintenance();
 
-		expect(handoffSpy).not.toHaveBeenCalled();
+		expect(generateHandoffSpy).not.toHaveBeenCalled();
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
 		expect(events.filter(event => event.type === "auto_compaction_end")).toHaveLength(0);
 	});
@@ -1363,7 +2011,7 @@ describe("AgentSession handoff", () => {
 		if (!model) {
 			throw new Error("Expected model to be set");
 		}
-		const handoffSpy = vi.spyOn(session, "handoff");
+		const generateHandoffSpy = vi.spyOn(compactionModule, "generateHandoffFromContext");
 
 		const overflowAssistant: AssistantMessage = {
 			role: "assistant",
@@ -1388,7 +2036,7 @@ describe("AgentSession handoff", () => {
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [overflowAssistant] });
 		await waitFor(() => events.filter(event => event.type === "auto_compaction_end").length === 1);
 
-		expect(handoffSpy).not.toHaveBeenCalled();
+		expect(generateHandoffSpy).not.toHaveBeenCalled();
 		const startEvents = events.filter(event => event.type === "auto_compaction_start");
 		expect(startEvents).toHaveLength(1);
 		expect(startEvents[0]).toMatchObject({ type: "auto_compaction_start", reason: "overflow" });
@@ -1427,26 +2075,103 @@ describe("AgentSession handoff", () => {
 			timestamp: Date.now(),
 		};
 
-		const handoffSpy = vi.spyOn(session, "handoff").mockResolvedValue({ document: "handoff document" });
+		const previousSessionFile = session.sessionFile;
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("## Goal\nThreshold handoff document");
 
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
 		await waitFor(
 			() =>
-				handoffSpy.mock.calls.length === 1 &&
+				generateHandoffSpy.mock.calls.length === 1 &&
 				events.filter(event => event.type === "auto_compaction_end").length === 1,
 		);
 
-		expect(handoffSpy).toHaveBeenCalledTimes(1);
-		expect(handoffSpy).toHaveBeenCalledWith(expect.stringContaining("Threshold-triggered maintenance"), {
-			autoTriggered: true,
-			signal: expect.anything(),
-			onSwitchCancelled: expect.any(Function),
-		});
+		// The generation request carries the bundled auto-handoff focus text.
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
+		const providerContext = JSON.stringify(generateHandoffSpy.mock.calls[0]?.[0]);
+		expect(providerContext).toContain("Threshold-triggered maintenance");
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(1);
 		const endEvents = events.filter(event => event.type === "auto_compaction_end");
 		expect(endEvents).toHaveLength(1);
 		expect(endEvents[0]).toMatchObject({ type: "auto_compaction_end", aborted: false, willRetry: false });
+		// The handoff completed: the session moved to a successor file.
+		expect(session.sessionFile).not.toBe(previousSessionFile);
+	});
+	it("uses configured automatic handoff focus through the dedicated before-handoff event", async () => {
+		const extensionsResult = await loadExtensions([], tempDir.path());
+		const observedHandoffs: Array<{ focus: string | undefined; autoTriggered: boolean }> = [];
+		const observeHandoff = await loadExtensionFromFactory(
+			pi => {
+				pi.on("session_before_handoff", event => {
+					observedHandoffs.push({
+						focus: event.customInstructions,
+						autoTriggered: event.autoTriggered,
+					});
+				});
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionsResult.runtime,
+			"observe-auto-handoff",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[observeHandoff],
+			extensionsResult.runtime,
+			tempDir.path(),
+			sessionManager,
+			modelRegistry,
+		);
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": true,
+				"compaction.autoContinue": false,
+				"compaction.strategy": "handoff",
+				"compaction.thresholdPercent": 1,
+				"contextPromotion.enabled": false,
+			}),
+			modelRegistry,
+			extensionRunner,
+			obfuscator,
+			compactionPromptTemplates: { autoHandoffFocus: "configured automatic focus" },
+		});
+		session.subscribe(event => {
+			events.push(event);
+		});
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("## Goal\nContinue");
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "maintenance trigger" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "stop",
+			usage: {
+				input: 10_000,
+				output: 1_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 11_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+		await waitFor(
+			() =>
+				generateHandoffSpy.mock.calls.length === 1 &&
+				events.filter(event => event.type === "auto_compaction_end").length === 1,
+		);
+
+		expect(observedHandoffs).toEqual([{ focus: "configured automatic focus", autoTriggered: true }]);
 	});
 
 	it("completes threshold-triggered auto-handoff while the original prompt is still unwinding", async () => {
@@ -1581,9 +2306,9 @@ describe("AgentSession handoff", () => {
 			throw new Error("Expected model to be set");
 		}
 
-		const handoffSpy = vi
-			.spyOn(session, "handoff")
-			.mockResolvedValue({ document: "## Goal\nContinue", savedPath: undefined });
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockResolvedValue("## Goal\nContinue");
 		const continueSpy = vi.spyOn(session.agent, "continue");
 
 		const assistantMessage: AssistantMessage = {
@@ -1606,10 +2331,10 @@ describe("AgentSession handoff", () => {
 
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
-		await waitFor(() => handoffSpy.mock.calls.length === 1);
+		await waitFor(() => generateHandoffSpy.mock.calls.length === 1);
 		await session.waitForIdle();
 
-		expect(handoffSpy).toHaveBeenCalledTimes(1);
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		// The bug surfaced as agent.continue() racing the deferred handoff. With the fix,
 		// the agent_end handler short-circuits after the deferred-handoff signal.
 		expect(continueSpy).not.toHaveBeenCalled();
@@ -1706,13 +2431,15 @@ describe("AgentSession handoff", () => {
 			timestamp: Date.now(),
 		};
 
-		const handoffSpy = vi.spyOn(session, "handoff").mockResolvedValue(undefined);
+		// Empty generated text: a failure, not a cancellation, so maintenance
+		// falls back to context-full.
+		const generateHandoffSpy = vi.spyOn(compactionModule, "generateHandoffFromContext").mockResolvedValue("");
 
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
 		await waitFor(() => events.filter(event => event.type === "auto_compaction_end").length === 1);
 
-		expect(handoffSpy).toHaveBeenCalledTimes(1);
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		const endEvents = events.filter(event => event.type === "auto_compaction_end");
 		expect(endEvents).toHaveLength(1);
 		expect(endEvents[0]).toMatchObject({

@@ -313,7 +313,39 @@ export interface TemplateContext extends Record<string, unknown> {
 
 const handlebars = Handlebars.create();
 
-handlebars.registerHelper("arg", function (this: TemplateContext, index: number | string): string {
+type HelperInvocationKind = "block" | "inline";
+
+export type HelperInvocationContract = {
+	kind: HelperInvocationKind;
+	minParams: number;
+	maxParams?: number;
+};
+
+const helperContracts: Record<string, HelperInvocationContract | undefined> = Object.create(null);
+
+function registerBuiltinHelper(name: string, contract: HelperInvocationContract, fn: HelperDelegate): void {
+	registerHelper(name, fn, contract);
+}
+
+function registerBuiltinBlockHelper(
+	name: string,
+	minParams: number,
+	maxParams: number | undefined,
+	fn: HelperDelegate,
+): void {
+	registerBuiltinHelper(name, { kind: "block", minParams, maxParams }, fn);
+}
+
+function registerBuiltinInlineHelper(
+	name: string,
+	minParams: number,
+	maxParams: number | undefined,
+	fn: HelperDelegate,
+): void {
+	registerBuiltinHelper(name, { kind: "inline", minParams, maxParams }, fn);
+}
+
+registerBuiltinInlineHelper("arg", 1, 1, function (this: TemplateContext, index: number | string): string {
 	const args = this.args ?? [];
 	const parsedIndex = typeof index === "number" ? index : Number.parseInt(index, 10);
 	if (!Number.isFinite(parsedIndex)) return "";
@@ -327,8 +359,10 @@ handlebars.registerHelper("arg", function (this: TemplateContext, index: number 
  * Renders an array with customizable prefix, suffix, and join separator.
  * Note: Use \n in join for newlines (will be unescaped automatically).
  */
-handlebars.registerHelper(
+registerBuiltinBlockHelper(
 	"list",
+	1,
+	1,
 	function (this: unknown, context: unknown[], options: Handlebars.HelperOptions): string {
 		if (!Array.isArray(context) || context.length === 0) return "";
 		const prefix = (options.hash.prefix as string) ?? "";
@@ -345,7 +379,7 @@ handlebars.registerHelper(
  * Note: Use \n/\t in the separator for newlines/tabs (unescaped automatically,
  * same convention as {{#list}} — Handlebars string literals carry no escapes).
  */
-handlebars.registerHelper("join", (context: unknown[], separator?: unknown): string => {
+registerBuiltinInlineHelper("join", 1, 2, (context: unknown[], separator?: unknown): string => {
 	if (!Array.isArray(context)) return "";
 	const sep = typeof separator === "string" ? separator.replace(/\\n/g, "\n").replace(/\\t/g, "\t") : ", ";
 	return context.join(sep);
@@ -355,14 +389,16 @@ handlebars.registerHelper("join", (context: unknown[], separator?: unknown): str
  * {{default value "fallback"}}
  * Returns the value if truthy, otherwise returns the fallback.
  */
-handlebars.registerHelper("default", (value: unknown, defaultValue: unknown): unknown => value || defaultValue);
+registerBuiltinInlineHelper("default", 2, 2, (value: unknown, defaultValue: unknown): unknown => value || defaultValue);
 
 /**
  * {{pluralize count "item" "items"}}
  * Returns "1 item" or "5 items" based on count.
  */
-handlebars.registerHelper(
+registerBuiltinInlineHelper(
 	"pluralize",
+	3,
+	3,
 	(count: number, singular: string, plural: string): string => `${count} ${count === 1 ? singular : plural}`,
 );
 
@@ -370,8 +406,10 @@ handlebars.registerHelper(
  * {{#when value "==" compare}}...{{else}}...{{/when}}
  * Conditional block with comparison operators: ==, ===, !=, !==, >, <, >=, <=
  */
-handlebars.registerHelper(
+registerBuiltinBlockHelper(
 	"when",
+	3,
+	3,
 	function (this: unknown, lhs: unknown, operator: string, rhs: unknown, options: Handlebars.HelperOptions): string {
 		const ops: Record<string, (a: unknown, b: unknown) => boolean> = {
 			"==": (a, b) => a === b,
@@ -393,7 +431,7 @@ handlebars.registerHelper(
  * {{#ifAny a b c}}...{{else}}...{{/ifAny}}
  * True if any argument is truthy.
  */
-handlebars.registerHelper("ifAny", function (this: unknown, ...args: unknown[]): string {
+registerBuiltinBlockHelper("ifAny", 0, undefined, function (this: unknown, ...args: unknown[]): string {
 	const options = args.pop() as Handlebars.HelperOptions;
 	return args.some(Boolean) ? options.fn(this) : options.inverse(this);
 });
@@ -402,7 +440,7 @@ handlebars.registerHelper("ifAny", function (this: unknown, ...args: unknown[]):
  * {{#ifAll a b c}}...{{else}}...{{/ifAll}}
  * True if all arguments are truthy.
  */
-handlebars.registerHelper("ifAll", function (this: unknown, ...args: unknown[]): string {
+registerBuiltinBlockHelper("ifAll", 0, undefined, function (this: unknown, ...args: unknown[]): string {
 	const options = args.pop() as Handlebars.HelperOptions;
 	return args.every(Boolean) ? options.fn(this) : options.inverse(this);
 });
@@ -411,8 +449,10 @@ handlebars.registerHelper("ifAll", function (this: unknown, ...args: unknown[]):
  * {{#table rows headers="Col1|Col2"}}{{col1}}|{{col2}}{{/table}}
  * Generates a markdown table from an array of objects.
  */
-handlebars.registerHelper(
+registerBuiltinBlockHelper(
 	"table",
+	1,
+	1,
 	function (this: unknown, context: unknown[], options: Handlebars.HelperOptions): string {
 		if (!Array.isArray(context) || context.length === 0) return "";
 		const headersStr = options.hash.headers as string | undefined;
@@ -428,7 +468,7 @@ handlebars.registerHelper(
  * {{#codeblock lang="diff"}}...{{/codeblock}}
  * Wraps content in a fenced code block.
  */
-handlebars.registerHelper("codeblock", function (this: unknown, options: Handlebars.HelperOptions): string {
+registerBuiltinBlockHelper("codeblock", 0, 0, function (this: unknown, options: Handlebars.HelperOptions): string {
 	const lang = (options.hash.lang as string) ?? "";
 	const content = options.fn(this).trim();
 	return `\`\`\`${lang}\n${content}\n\`\`\``;
@@ -438,17 +478,22 @@ handlebars.registerHelper("codeblock", function (this: unknown, options: Handleb
  * {{#xml "tag"}}content{{/xml}}
  * Wraps content in XML-style tags. Returns empty string if content is empty.
  */
-handlebars.registerHelper("xml", function (this: unknown, tag: string, options: Handlebars.HelperOptions): string {
-	const content = options.fn(this).trim();
-	if (!content) return "";
-	return `<${tag}>\n${content}\n</${tag}>`;
-});
+registerBuiltinBlockHelper(
+	"xml",
+	1,
+	1,
+	function (this: unknown, tag: string, options: Handlebars.HelperOptions): string {
+		const content = options.fn(this).trim();
+		if (!content) return "";
+		return `<${tag}>\n${content}\n</${tag}>`;
+	},
+);
 
 /**
  * {{escapeXml value}}
  * Escapes XML special characters: & < > "
  */
-handlebars.registerHelper("escapeXml", (value: unknown): string => {
+registerBuiltinInlineHelper("escapeXml", 1, 1, (value: unknown): string => {
 	if (value == null) return "";
 	return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 });
@@ -457,7 +502,7 @@ handlebars.registerHelper("escapeXml", (value: unknown): string => {
  * {{len array}}
  * Returns the length of an array or string.
  */
-handlebars.registerHelper("len", (value: unknown): number => {
+registerBuiltinInlineHelper("len", 1, 1, (value: unknown): number => {
 	if (Array.isArray(value)) return value.length;
 	if (typeof value === "string") return value.length;
 	return 0;
@@ -467,20 +512,22 @@ handlebars.registerHelper("len", (value: unknown): number => {
  * {{add a b}}
  * Adds two numbers.
  */
-handlebars.registerHelper("add", (a: number, b: number): number => (a ?? 0) + (b ?? 0));
+registerBuiltinInlineHelper("add", 2, 2, (a: number, b: number): number => (a ?? 0) + (b ?? 0));
 
 /**
  * {{sub a b}}
  * Subtracts b from a.
  */
-handlebars.registerHelper("sub", (a: number, b: number): number => (a ?? 0) - (b ?? 0));
+registerBuiltinInlineHelper("sub", 2, 2, (a: number, b: number): number => (a ?? 0) - (b ?? 0));
 
 /**
  * {{#has collection item}}...{{else}}...{{/has}}
  * Checks if an array includes an item or if a Set/Map has a key.
  */
-handlebars.registerHelper(
+registerBuiltinBlockHelper(
 	"has",
+	2,
+	2,
 	function (this: unknown, collection: unknown, item: unknown, options: Handlebars.HelperOptions): string {
 		let found = false;
 		if (Array.isArray(collection)) {
@@ -502,7 +549,7 @@ handlebars.registerHelper(
  * {{includes array item}}
  * Returns true if array includes item. For use in other helpers.
  */
-handlebars.registerHelper("includes", (collection: unknown, item: unknown): boolean => {
+registerBuiltinInlineHelper("includes", 2, 2, (collection: unknown, item: unknown): boolean => {
 	if (Array.isArray(collection)) return collection.includes(item);
 	if (collection instanceof Set) return collection.has(item);
 	if (collection instanceof Map) return collection.has(item);
@@ -513,11 +560,13 @@ handlebars.registerHelper("includes", (collection: unknown, item: unknown): bool
  * {{not value}}
  * Returns logical NOT of value. For use in subexpressions.
  */
-handlebars.registerHelper("not", (value: unknown): boolean => !value);
+registerBuiltinInlineHelper("not", 1, 1, (value: unknown): boolean => !value);
 
-handlebars.registerHelper("jsonStringify", (value: unknown): string => JSON.stringify(value));
+registerBuiltinInlineHelper("jsonStringify", 1, 1, (value: unknown): string => JSON.stringify(value));
 
-export function registerHelper(name: string, fn: HelperDelegate): void {
+export function registerHelper(name: string, fn: HelperDelegate, contract?: HelperInvocationContract): void {
+	if (contract) helperContracts[name] = contract;
+	else delete helperContracts[name];
 	handlebars.registerHelper(name, fn);
 }
 
@@ -539,6 +588,74 @@ export function registerPartial(name: string, fn: Template): void {
  */
 function disambiguateClosingBraces(template: string): string {
 	return template.replace(/\}\}(\}+)/g, "}}{{!---}}$1");
+}
+
+type TemplateAstNode = {
+	type?: string;
+	path?: { original?: string };
+	name?: { original?: string };
+	params?: unknown[];
+	hash?: { pairs?: unknown[] };
+	[key: string]: unknown;
+};
+
+/**
+ * Reject unknown invoked helpers and partials without depending on a render
+ * context. Rendering samples cannot exercise every value-dependent branch in a
+ * user template.
+ */
+export function validate(template: string): void {
+	const visit = (node: unknown): void => {
+		if (!node || typeof node !== "object") return;
+		const ast = node as TemplateAstNode;
+		const helper = ast.path?.original;
+		const contract = helper ? helperContracts[helper] : undefined;
+		const invokesHelper =
+			ast.type === "Decorator" ||
+			ast.type === "DecoratorBlock" ||
+			ast.type === "SubExpression" ||
+			(ast.type === "BlockStatement" &&
+				(Boolean(handlebars.helpers[helper ?? ""]) ||
+					(ast.params?.length ?? 0) > 0 ||
+					(ast.hash?.pairs?.length ?? 0) > 0)) ||
+			(ast.type === "MustacheStatement" &&
+				((ast.params?.length ?? 0) > 0 || (ast.hash?.pairs?.length ?? 0) > 0 || contract !== undefined));
+		if (invokesHelper && helper && !handlebars.helpers[helper]) {
+			throw new Error(`Unknown Handlebars helper: ${helper}`);
+		}
+		if (contract && invokesHelper) {
+			const kind = ast.type === "BlockStatement" ? "block" : "inline";
+			const params = ast.params?.length ?? 0;
+			if (
+				kind !== contract.kind ||
+				params < contract.minParams ||
+				(contract.maxParams !== undefined && params > contract.maxParams)
+			) {
+				const arity =
+					contract.maxParams === undefined
+						? `at least ${contract.minParams}`
+						: contract.minParams === contract.maxParams
+							? `exactly ${contract.minParams}`
+							: `${contract.minParams} to ${contract.maxParams}`;
+				throw new Error(
+					`Invalid Handlebars helper invocation: ${helper} requires ${contract.kind} form with ${arity} argument(s)`,
+				);
+			}
+		}
+		const partial = ast.name?.original;
+		if (ast.type === "PartialStatement" && partial && !handlebars.partials[partial]) {
+			throw new Error(`Unknown Handlebars partial: ${partial}`);
+		}
+		for (const value of Object.values(ast)) {
+			if (Array.isArray(value)) {
+				for (const child of value) visit(child);
+			} else {
+				visit(value);
+			}
+		}
+	};
+
+	visit(handlebars.parse(disambiguateClosingBraces(template)));
 }
 
 const compiledTemplateCache = new Map<string, (context: TemplateContext) => string>();

@@ -1347,6 +1347,54 @@ describe("compact() remote compaction failure handling", () => {
 		expect(completeSpy).not.toHaveBeenCalled();
 	});
 
+	test("bypasses native remote compaction for every body prompt override", async () => {
+		const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue(localSummaryMessage("local body summary"));
+		const fetchMock: FetchImpl = async () => {
+			throw new Error("native remote compaction must not receive body-template overrides");
+		};
+		const bodyOverrides = [
+			{ summary: "CUSTOM_BODY_SENTINEL {{conversation}}" },
+			{ updateSummary: "CUSTOM_UPDATE_SENTINEL {{conversation}}" },
+			{ turnPrefix: "CUSTOM_TURN_PREFIX_SENTINEL {{conversation}}" },
+			{ shortSummary: "CUSTOM_SHORT_SUMMARY_SENTINEL {{conversation}}" },
+		];
+
+		for (const promptTemplates of bodyOverrides) {
+			const result = await compact(makePreparation(), makeOpenAiModel(), "test-key", undefined, undefined, {
+				fetch: fetchMock,
+				promptTemplates,
+			});
+			expect(result.summary).toContain("local body summary");
+		}
+		expect(completeSpy).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				messages: [
+					expect.objectContaining({
+						content: [expect.objectContaining({ text: expect.stringContaining("CUSTOM_BODY_SENTINEL") })],
+					}),
+				],
+			}),
+			expect.anything(),
+		);
+	});
+
+	test("keeps native remote compaction for default and system-only prompts", async () => {
+		const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue(localSummaryMessage("local fallback"));
+		const fetchMock: FetchImpl = async () =>
+			new Response(JSON.stringify({ output: [{ type: "compaction_summary", summary: "native summary" }] }), {
+				headers: { "content-type": "application/json" },
+			});
+
+		const result = await compact(makePreparation(), makeOpenAiModel(), "test-key", undefined, undefined, {
+			fetch: fetchMock,
+			promptTemplates: { summarizationSystem: "CUSTOM_SYSTEM_SENTINEL" },
+		});
+
+		expect(result.summary).toContain("Remote compaction preserved provider-native history");
+		expect(completeSpy).not.toHaveBeenCalled();
+	});
+
 	test("re-expands a prior V2 compaction's originals when no candidate can reuse the replay", async () => {
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(localSummaryMessage("re-expanded local summary"));
 		const compactionItem = { type: "compaction", encrypted_content: "enc_v2" };
