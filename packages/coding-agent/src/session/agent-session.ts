@@ -572,7 +572,10 @@ export class AgentSession {
 	#onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
 	#sideStreamFn: StreamFn;
 	#preferWebsockets: boolean | undefined;
-	#convertToLlm: (messages: AgentMessage[], promptTemplates?: CompactionPromptTemplates) => Message[] | Promise<Message[]>;
+	#convertToLlm: (
+		messages: AgentMessage[],
+		promptTemplates?: CompactionPromptTemplates,
+	) => Message[] | Promise<Message[]>;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 
 	readonly #ttsr: TtsrCoordinator;

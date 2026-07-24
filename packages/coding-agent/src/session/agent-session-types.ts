@@ -1,4 +1,11 @@
-import type { Agent, AgentMessage, AgentTool, CompactionPromptTemplates, StreamFn, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type {
+	Agent,
+	AgentMessage,
+	AgentTool,
+	CompactionPromptTemplates,
+	StreamFn,
+	ThinkingLevel,
+} from "@oh-my-pi/pi-agent-core";
 import type {
 	Context,
 	ImageContent,

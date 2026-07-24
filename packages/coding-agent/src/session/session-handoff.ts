@@ -9,7 +9,11 @@ import {
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionPromptTemplates } from "@oh-my-pi/pi-agent-core/compaction";
-import { generateHandoffFromContext, renderHandoffContext, renderHandoffPrompt } from "@oh-my-pi/pi-agent-core/compaction";
+import {
+	generateHandoffFromContext,
+	renderHandoffContext,
+	renderHandoffPrompt,
+} from "@oh-my-pi/pi-agent-core/compaction";
 import type { Message, Model, ServiceTier, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";

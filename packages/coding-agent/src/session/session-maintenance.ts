@@ -12,12 +12,11 @@ import {
 } from "@oh-my-pi/pi-agent-core";
 import {
 	AGGRESSIVE_SHAKE_CONFIG,
-	AUTO_HANDOFF_THRESHOLD_FOCUS,
 	applyShakeRegions,
 	CompactionCancelledError,
+	type CompactionPreparation,
 	CompactionPrompts,
 	type CompactionPromptTemplates,
-	type CompactionPreparation,
 	type CompactionResult,
 	type CompactionSettings,
 	calculateContextTokens,
