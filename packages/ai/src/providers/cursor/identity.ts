@@ -1,0 +1,183 @@
+import { createHash, randomUUID } from "node:crypto";
+import * as fs from "node:fs/promises";
+import { networkInterfaces } from "node:os";
+import * as path from "node:path";
+import { arch, env, platform } from "node:process";
+import { getAgentDir, isRecord, logger } from "@oh-my-pi/pi-utils";
+
+export const CURSOR_IDE_VERSION = "3.18.9";
+export const CURSOR_IDE_COMMIT = "2ba48ff3f7514cc4643c52ca9f7b3173d9b66130";
+
+const REJECTED_MAC_ADDRESSES = new Set(["00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff", "ac:de:48:00:11:22"]);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+export interface CursorMachineIdentity {
+	readonly machineId: string;
+	readonly macMachineId?: string;
+	readonly machineIdSource: "host" | "fallback";
+}
+
+export interface NetworkInterfaceMap {
+	readonly [name: string]: readonly { readonly mac: string }[] | undefined;
+}
+
+export interface IdentityDependencies {
+	readonly platform: NodeJS.Platform;
+	readonly arch: string;
+	readonly env: NodeJS.ProcessEnv;
+	readonly execute: (command: string) => Promise<string>;
+	readonly interfaces: () => NetworkInterfaceMap;
+	readonly createUuid: () => string;
+}
+
+const DEFAULT_DEPENDENCIES: IdentityDependencies = {
+	platform,
+	arch,
+	env,
+	execute: async command => {
+		const shell =
+			platform === "win32" ? [env.ComSpec ?? "cmd.exe", "/d", "/s", "/c", command] : ["/bin/sh", "-c", command];
+		const process = Bun.spawn(shell, { stdout: "pipe", stderr: "pipe" });
+		const output = await new Response(process.stdout).text();
+		const error = await new Response(process.stderr).text();
+		const exitCode = await process.exited;
+		if (exitCode !== 0) throw new Error(error.trim() || `Cursor identity command exited ${exitCode}`);
+		return output;
+	},
+	interfaces: networkInterfaces,
+	createUuid: randomUUID,
+};
+
+export function machineIdCommand(
+	targetPlatform: NodeJS.Platform,
+	targetArch: string,
+	targetEnv: NodeJS.ProcessEnv,
+): string {
+	switch (targetPlatform) {
+		case "darwin":
+			return "ioreg -rd1 -c IOPlatformExpertDevice";
+		case "win32": {
+			const windowsRoot =
+				targetArch === "ia32" && Object.hasOwn(targetEnv, "PROCESSOR_ARCHITEW6432")
+					? "%windir%\\sysnative\\cmd.exe /c %windir%\\System32"
+					: "%windir%\\System32";
+			return `${windowsRoot}\\REG.exe QUERY HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography /v MachineGuid`;
+		}
+		case "linux":
+			return "( cat /var/lib/dbus/machine-id /etc/machine-id 2> /dev/null || hostname ) | head -n 1 || :";
+		case "freebsd":
+			return "kenv -q smbios.system.uuid || sysctl -n kern.hostuuid";
+		default:
+			throw new Error(`Unsupported platform: ${targetPlatform}`);
+	}
+}
+
+/** Normalize the platform command output exactly as Cursor 3.18.9. */
+export function normalizeHardwareId(targetPlatform: NodeJS.Platform, output: string): string {
+	switch (targetPlatform) {
+		case "darwin": {
+			const value = output.split("IOPlatformUUID")[1]?.split("\n")[0];
+			if (value === undefined) throw new Error("IOPlatformUUID is missing");
+			return value.replace(/=|\s+|"/giu, "").toLowerCase();
+		}
+		case "win32": {
+			const value = output.split("REG_SZ")[1];
+			if (value === undefined) throw new Error("MachineGuid is missing");
+			return value.replace(/\r+|\n+|\s+/giu, "").toLowerCase();
+		}
+		case "linux":
+		case "freebsd":
+			return output.replace(/\r+|\n+|\s+/giu, "").toLowerCase();
+		default:
+			throw new Error(`Unsupported platform: ${targetPlatform}`);
+	}
+}
+
+export async function deriveHostMachineId(dependencies: IdentityDependencies = DEFAULT_DEPENDENCIES): Promise<string> {
+	const command = machineIdCommand(dependencies.platform, dependencies.arch, dependencies.env);
+	const hardwareId = normalizeHardwareId(dependencies.platform, await dependencies.execute(command));
+	if (hardwareId === "") throw new Error("Cursor host identity is empty");
+	return createHash("sha256").update(hardwareId, "utf8").digest("hex");
+}
+
+export function firstUsableMac(interfaces: NetworkInterfaceMap): string {
+	for (const name in interfaces) {
+		const entries = interfaces[name];
+		if (entries === undefined) continue;
+		for (const entry of entries) {
+			const normalized = entry.mac.replace(/-/gu, ":").toLowerCase();
+			if (!REJECTED_MAC_ADDRESSES.has(normalized)) return entry.mac;
+		}
+	}
+	throw new Error("Unable to retrieve mac address (unexpected format)");
+}
+
+export function deriveMacMachineId(
+	dependencies: Pick<IdentityDependencies, "interfaces"> = DEFAULT_DEPENDENCIES,
+): string | undefined {
+	try {
+		return createHash("sha256").update(firstUsableMac(dependencies.interfaces()), "utf8").digest("hex");
+	} catch {
+		return undefined;
+	}
+}
+
+function fallbackIdentityPath(agentDir: string): string {
+	return path.join(agentDir, "cursor", "identity.json");
+}
+
+function parseFallbackIdentity(raw: string): string {
+	const value: unknown = JSON.parse(raw);
+	if (!isRecord(value) || typeof value.machineId !== "string" || !UUID_PATTERN.test(value.machineId)) {
+		throw new Error("Persisted Cursor fallback identity is invalid");
+	}
+	return value.machineId;
+}
+
+function isErrorCode(error: unknown, code: string): boolean {
+	return isRecord(error) && error.code === code;
+}
+
+async function loadOrCreateFallbackIdentity(agentDir: string, createUuid: () => string): Promise<string> {
+	const identityPath = fallbackIdentityPath(agentDir);
+	try {
+		return parseFallbackIdentity(await Bun.file(identityPath).text());
+	} catch (error) {
+		if (!isErrorCode(error, "ENOENT")) throw error;
+	}
+
+	const machineId = createUuid();
+	if (!UUID_PATTERN.test(machineId)) throw new Error("Generated Cursor fallback identity is invalid");
+	await fs.mkdir(path.dirname(identityPath), { recursive: true, mode: 0o700 });
+	try {
+		const file = await fs.open(identityPath, "wx", 0o600);
+		try {
+			await file.writeFile(`${JSON.stringify({ machineId })}\n`, "utf8");
+		} finally {
+			await file.close();
+		}
+		return machineId;
+	} catch (error) {
+		if (!isErrorCode(error, "EEXIST")) throw error;
+		return parseFallbackIdentity(await Bun.file(identityPath).text());
+	}
+}
+
+/** Derive Cursor's host identity, persisting and reporting a UUID only when host derivation fails. */
+export async function loadCursorMachineIdentity(
+	agentDir = getAgentDir(),
+	dependencies: IdentityDependencies = DEFAULT_DEPENDENCIES,
+): Promise<CursorMachineIdentity> {
+	let machineId: string;
+	let machineIdSource: CursorMachineIdentity["machineIdSource"];
+	try {
+		machineId = await deriveHostMachineId(dependencies);
+		machineIdSource = "host";
+	} catch (error) {
+		machineId = await loadOrCreateFallbackIdentity(agentDir, dependencies.createUuid);
+		machineIdSource = "fallback";
+		logger.warn("Cursor host identity unavailable; using persisted fallback", { error: String(error) });
+	}
+	const macMachineId = deriveMacMachineId(dependencies);
+	return macMachineId === undefined ? { machineId, machineIdSource } : { machineId, macMachineId, machineIdSource };
+}

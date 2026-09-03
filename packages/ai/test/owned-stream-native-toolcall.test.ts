@@ -1,12 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { wrapInbandToolStream } from "../src/dialect/owned-stream";
+import { wrapLeakedThinkingStream } from "../src/utils/leaked-thinking-stream";
 import type { AssistantMessage, AssistantMessageEvent, ThinkingContent, ToolCall, Usage } from "../src/types";
-import {
-	getStreamingPartialJson,
-	isCursorExecResolved,
-	kCursorExecResolved,
-	setStreamingPartialJson,
-} from "../src/utils/block-symbols";
+import { getStreamingPartialJson, setStreamingPartialJson } from "../src/utils/block-symbols";
 import { AssistantMessageEventStream } from "../src/utils/event-stream";
 
 const TOOLS = [
@@ -304,29 +300,6 @@ describe("wrapInbandToolStream native tool-call passthrough", () => {
 		expect(events).toContain("toolcall_end");
 	});
 
-	it("preserves kCursorExecResolved across the owned/in-band projector", async () => {
-		// Cursor + tools.format: gemini wraps every provider stream in
-		// wrapInbandToolStream. The projector rebuilds toolCall objects
-		// field-by-field; dropping the exec-resolved marker lets agent-loop
-		// re-run a call Cursor already settled.
-		const inner = drive((push, out) => {
-			const block: ToolCall = {
-				type: "toolCall",
-				id: "cursor-bash-1",
-				name: "bash",
-				arguments: { command: "echo hi" },
-			};
-			(block as ToolCall & { [kCursorExecResolved]?: true })[kCursorExecResolved] = true;
-			out.content.push(block);
-			push({ type: "toolcall_start", contentIndex: 0, partial: out });
-			push({ type: "toolcall_end", contentIndex: 0, toolCall: block, partial: out });
-		});
-		const { message } = await collect(wrapInbandToolStream(inner, TOOLS, "gemini"));
-		const calls = message.content.filter((b): b is ToolCall => b.type === "toolCall");
-		expect(calls).toHaveLength(1);
-		expect(isCursorExecResolved(calls[0])).toBe(true);
-	});
-
 	it("drops a nameless native ghost but keeps the real native call", async () => {
 		const { message } = await collect(wrapInbandToolStream(ghostThenRealNative(), TOOLS, "gemini"));
 		const calls = message.content.filter((b): b is ToolCall => b.type === "toolCall");
@@ -342,5 +315,26 @@ describe("wrapInbandToolStream native tool-call passthrough", () => {
 		expect(calls).toHaveLength(1);
 		expect(calls[0]!.name).toBe("todo");
 		expect(calls[0]!.arguments).toEqual({ ops: [{ op: "view" }] });
+	});
+});
+
+describe("leaked-thinking terminal reconciliation", () => {
+	it("does not replay text whose terminal index shifted around signed reasoning", async () => {
+		const source = new AssistantMessageEventStream();
+		const projected = wrapLeakedThinkingStream(source);
+		const message = makeAssistant([]);
+		const streamedText = { type: "text" as const, text: "answer" };
+		message.content.push(streamedText);
+		source.push({ type: "start", partial: message });
+		source.push({ type: "text_start", contentIndex: 0, partial: message });
+		source.push({ type: "text_delta", contentIndex: 0, delta: "answer", partial: message });
+		message.content.push({ type: "thinking", thinking: "", thinkingSignature: "opaque" });
+		source.push({ type: "thinking_start", contentIndex: 1, partial: message });
+		source.push({ type: "thinking_end", contentIndex: 1, content: "", partial: message });
+		message.content = [message.content[1]!, streamedText];
+		source.push({ type: "done", reason: "stop", message });
+
+		const result = await projected.result();
+		expect(result.content.filter(block => block.type === "text")).toEqual([streamedText]);
 	});
 });

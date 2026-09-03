@@ -1,0 +1,602 @@
+import type { ClientHttp2Session, ClientHttp2Stream, IncomingHttpHeaders } from "node:http2";
+import { connect } from "node:http2";
+import { gzipSync } from "node:zlib";
+import type {
+	InferenceStreamRequest,
+	RunInferenceClientMessage,
+	RunInferenceInvocationEnd,
+	RunInferenceInvocationError,
+	RunInferenceRunReady,
+	RunInferenceServerMessage,
+} from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
+import {
+	RunInferenceCancelInvocationSchema,
+	RunInferenceClientMessageSchema,
+	RunInferenceFinishRunSchema,
+	RunInferenceInvokeModelSchema,
+	RunInferenceServerMessageSchema,
+} from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
+import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
+import { isRecord } from "@oh-my-pi/pi-utils";
+import * as AIError from "../../error";
+import type { ProviderResponseMetadata } from "../../types";
+import { CONNECT_FLAG_COMPRESSED, CONNECT_MAX_FRAME_BYTES, ConnectFrameDecoder, encodeConnectFrame } from "./connect";
+import { inferenceRequestHeaders } from "./headers";
+import type { CursorMachineIdentity } from "./identity";
+
+const CONNECT_COMPRESSION_MIN_BYTES = 1_024;
+const RESPONSE_TIMEOUT_MS = 65_000;
+const SHUTDOWN_TIMEOUT_MS = 2_000;
+const MAX_PENDING_INVOCATIONS = 64;
+const MAX_QUEUED_RESPONSE_MESSAGES = 512;
+const MAX_QUEUED_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+interface ConnectTrailer {
+	readonly error?: { readonly code: string; readonly message?: string };
+}
+
+export interface CursorInferenceRuntimeOptions {
+	readonly backendUrl: string;
+	readonly token: string;
+	readonly ghostMode: boolean;
+	readonly identity: CursorMachineIdentity;
+	readonly connect?: (authority: string | URL) => ClientHttp2Session | Promise<ClientHttp2Session>;
+	readonly responseTimeoutMs?: number;
+	readonly shutdownTimeoutMs?: number;
+	readonly createRequestId?: () => string;
+	readonly createClientKey?: () => string;
+	readonly now?: () => number;
+	readonly timezone?: () => string;
+}
+
+export interface CursorInferenceInvokeOptions {
+	readonly signal?: AbortSignal;
+	readonly callerHeaders?: Record<string, string>;
+	readonly onResponse?: (response: ProviderResponseMetadata) => void | Promise<void>;
+	readonly onMessage: (message: RunInferenceServerMessage) => void | Promise<void>;
+}
+
+export interface CursorInferenceInvocation {
+	readonly invocationId: string;
+	readonly end: RunInferenceInvocationEnd;
+}
+
+interface PendingInvocation {
+	readonly onMessage: CursorInferenceInvokeOptions["onMessage"];
+	readonly resolve: (value: CursorInferenceInvocation) => void;
+	readonly reject: (error: unknown) => void;
+	readonly signal: AbortSignal | undefined;
+	readonly abort: () => void;
+	delivery: Promise<void>;
+}
+
+function randomHex(bytes: number): string {
+	return Buffer.from(crypto.getRandomValues(new Uint8Array(bytes))).toString("hex");
+}
+
+function validateBackendUrl(value: string): URL {
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch (error) {
+		throw new Error("Cursor backend authority is invalid", { cause: error });
+	}
+	const loopbackHttp =
+		url.protocol === "http:" &&
+		(url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]");
+	if (
+		(url.protocol !== "https:" && !loopbackHttp) ||
+		url.username !== "" ||
+		url.password !== "" ||
+		(url.pathname !== "" && url.pathname !== "/") ||
+		url.search !== "" ||
+		url.hash !== ""
+	) {
+		throw new Error("Cursor backend authority must be an HTTPS origin or loopback HTTP origin");
+	}
+	return new URL(url.origin);
+}
+
+function encodeClientMessage(message: RunInferenceClientMessage): Uint8Array {
+	const protobufBody = toBinary(RunInferenceClientMessageSchema, message);
+	if (protobufBody.byteLength > CONNECT_MAX_FRAME_BYTES) {
+		throw new Error("Cursor RunInference client message exceeds the Connect frame limit");
+	}
+	return protobufBody.byteLength < CONNECT_COMPRESSION_MIN_BYTES
+		? encodeConnectFrame(protobufBody)
+		: encodeConnectFrame(gzipSync(protobufBody), CONNECT_FLAG_COMPRESSED);
+}
+
+function parseTrailer(body: Uint8Array): ConnectTrailer {
+	let raw: unknown;
+	try {
+		raw = JSON.parse(new TextDecoder().decode(body));
+	} catch (error) {
+		throw new Error("Cursor returned an invalid Connect end-of-stream trailer", { cause: error });
+	}
+	if (!isRecord(raw)) throw new Error("Cursor returned an invalid Connect end-of-stream trailer");
+	if (raw.error === undefined) return {};
+	if (!isRecord(raw.error) || typeof raw.error.code !== "string") {
+		throw new Error("Cursor returned an invalid Connect error trailer");
+	}
+	const code = raw.error.code.trim();
+	const message = raw.error.message;
+	if (code === "" || (message !== undefined && typeof message !== "string")) {
+		throw new Error("Cursor returned an invalid Connect error trailer");
+	}
+	return message === undefined ? { error: { code } } : { error: { code, message } };
+}
+
+export function cursorInvocationErrorMessage(error: RunInferenceInvocationError): string {
+	return error.message.trim() === "" ? `Cursor invocation error ${error.code}` : error.message;
+}
+
+function cursorInvocationError(error: RunInferenceInvocationError): Error {
+	const message = `Cursor invocation failed: ${cursorInvocationErrorMessage(error)}`;
+	const status =
+		error.code === 16 ? 401 : error.code === 7 ? 403 : error.code === 8 ? 429 : error.code === 14 ? 503 : undefined;
+	return status === undefined
+		? new AIError.ProviderResponseError(message, { provider: "cursor", kind: "output" })
+		: new AIError.ProviderHttpError(message, status, { code: String(error.code) });
+}
+
+function waitWithTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+	const { promise: bounded, resolve, reject } = Promise.withResolvers<T>();
+	const timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+	void promise.then(
+		value => {
+			clearTimeout(timer);
+			resolve(value);
+		},
+		error => {
+			clearTimeout(timer);
+			reject(error);
+		},
+	);
+	return bounded;
+}
+
+function responseMetadata(headers: IncomingHttpHeaders): ProviderResponseMetadata {
+	const normalized: Record<string, string> = {};
+	for (const [name, value] of Object.entries(headers)) {
+		if (name.startsWith(":")) continue;
+		if (typeof value === "string") normalized[name] = value;
+		else if (typeof value === "number") normalized[name] = String(value);
+		else if (Array.isArray(value)) normalized[name] = value.join(", ");
+	}
+	const requestId = normalized["x-request-id"] ?? normalized["x-amzn-trace-id"] ?? null;
+	return { status: Number(headers[":status"] ?? 0), headers: normalized, requestId };
+}
+
+export class CursorInferenceRun {
+	readonly routeKey: string;
+	readonly ready: Promise<RunInferenceRunReady>;
+	readonly response: Promise<ProviderResponseMetadata>;
+	readonly completion: Promise<ConnectTrailer>;
+	readonly #request: ClientHttp2Stream;
+	readonly #pending = new Map<string, PendingInvocation>();
+	readonly #cancelled = new Set<string>();
+	readonly #responseTimeoutMs: number;
+	readonly #resolveReady: (value: RunInferenceRunReady) => void;
+	readonly #rejectReady: (error: unknown) => void;
+	readonly #resolveResponse: (value: ProviderResponseMetadata) => void;
+	readonly #rejectResponse: (error: unknown) => void;
+	readonly #resolveCompletion: (value: ConnectTrailer) => void;
+	readonly #rejectCompletion: (error: unknown) => void;
+	#writeQueue = Promise.resolve();
+	#deliveryQueue = Promise.resolve();
+	#queuedDeliveryMessages = 0;
+	#queuedDeliveryBytes = 0;
+	#runReady: RunInferenceRunReady | undefined;
+	#trailer: ConnectTrailer | undefined;
+	#failed: unknown;
+	#finishing = false;
+
+	constructor(
+		session: ClientHttp2Session,
+		routeKey: string,
+		headers: Record<string, string>,
+		responseTimeoutMs = RESPONSE_TIMEOUT_MS,
+	) {
+		this.routeKey = routeKey;
+		this.#responseTimeoutMs = responseTimeoutMs;
+		const ready = Promise.withResolvers<RunInferenceRunReady>();
+		this.ready = ready.promise;
+		this.#resolveReady = ready.resolve;
+		this.#rejectReady = ready.reject;
+		void this.ready.catch(() => undefined);
+		const response = Promise.withResolvers<ProviderResponseMetadata>();
+		this.response = response.promise;
+		this.#resolveResponse = response.resolve;
+		this.#rejectResponse = response.reject;
+		void this.response.catch(() => undefined);
+		const completion = Promise.withResolvers<ConnectTrailer>();
+		this.completion = completion.promise;
+		this.#resolveCompletion = completion.resolve;
+		this.#rejectCompletion = completion.reject;
+		void this.completion.catch(() => undefined);
+		this.#request = session.request(headers);
+		this.#bindResponse();
+	}
+
+	#bindResponse(): void {
+		const decoder = new ConnectFrameDecoder();
+		let status = 0;
+		this.#request.on("response", headers => {
+			status = Number(headers[":status"] ?? 0);
+			const metadata = responseMetadata(headers);
+			if (status !== 200) {
+				this.#fail(
+					new AIError.ProviderHttpError(`Cursor RunInference returned HTTP ${status}`, status, {
+						headers: new Headers(metadata.headers),
+					}),
+				);
+				return;
+			}
+			const contentType = headers["content-type"] ?? "";
+			if (!String(contentType).startsWith("application/connect+proto")) {
+				this.#fail(new Error("Cursor RunInference returned an invalid content type"));
+				return;
+			}
+			this.#resolveResponse(metadata);
+		});
+		this.#request.on("data", (chunk: Uint8Array) => {
+			try {
+				for (const frame of decoder.push(chunk)) {
+					if (this.#trailer !== undefined) throw new Error("Cursor sent data after the Connect trailer");
+					if (frame.endOfStream) {
+						this.#trailer = parseTrailer(frame.body);
+						if (this.#trailer.error !== undefined) {
+							const suffix =
+								this.#trailer.error.message === undefined ? "" : ` — ${this.#trailer.error.message}`;
+							throw new Error(`Cursor RunInference failed: ${this.#trailer.error.code}${suffix}`);
+						}
+						continue;
+					}
+					const message = fromBinary(RunInferenceServerMessageSchema, frame.body);
+					this.#queuedDeliveryMessages++;
+					this.#queuedDeliveryBytes += frame.body.byteLength;
+					if (
+						this.#queuedDeliveryMessages > MAX_QUEUED_RESPONSE_MESSAGES ||
+						this.#queuedDeliveryBytes > MAX_QUEUED_RESPONSE_BYTES
+					) {
+						throw new Error("Cursor RunInference response delivery exceeded its bound");
+					}
+					this.#deliveryQueue = this.#deliveryQueue.then(async () => {
+						try {
+							await this.#handle(message);
+						} finally {
+							this.#queuedDeliveryMessages--;
+							this.#queuedDeliveryBytes -= frame.body.byteLength;
+						}
+					});
+					void this.#deliveryQueue.catch(error => this.#fail(error));
+				}
+			} catch (error) {
+				this.#fail(error);
+			}
+		});
+		this.#request.on("error", error => this.#fail(error));
+		this.#request.on("aborted", () => this.#fail(new Error("Cursor RunInference stream aborted")));
+		this.#request.on("end", () => {
+			try {
+				decoder.end();
+			} catch (error) {
+				this.#fail(error);
+				return;
+			}
+			void this.#deliveryQueue.then(() => {
+				if (this.#failed !== undefined || status !== 200) return;
+				if (this.#trailer === undefined) {
+					this.#fail(new Error("Cursor RunInference ended without a Connect trailer"));
+					return;
+				}
+				if (this.#pending.size > 0) {
+					this.#fail(new Error("Cursor RunInference ended with pending invocations"));
+					return;
+				}
+				this.#resolveCompletion(this.#trailer);
+			});
+		});
+	}
+
+	async #handle(message: RunInferenceServerMessage): Promise<void> {
+		switch (message.message.case) {
+			case "heartbeat":
+				return;
+			case "runReady":
+				if (this.#runReady !== undefined) throw new Error("Cursor sent duplicate runReady");
+				if (
+					message.message.value.resolvedModel === undefined ||
+					message.message.value.resolvedModel.modelId === ""
+				) {
+					throw new Error("Cursor runReady has no resolved model");
+				}
+				this.#runReady = message.message.value;
+				this.#resolveReady(message.message.value);
+				return;
+			case "invocationResponse": {
+				const { invocationId } = message.message.value;
+				if (this.#cancelled.has(invocationId)) return;
+				const pending = this.#pending.get(invocationId);
+				if (pending === undefined) throw new Error(`Cursor response has unknown invocation '${invocationId}'`);
+				pending.delivery = pending.delivery.then(async () => await pending.onMessage(message));
+				await pending.delivery;
+				return;
+			}
+			case "invocationEnd": {
+				const end = message.message.value;
+				if (this.#cancelled.delete(end.invocationId)) return;
+				const pending = this.#pending.get(end.invocationId);
+				if (pending === undefined) throw new Error(`Cursor ended unknown invocation '${end.invocationId}'`);
+				this.#pending.delete(end.invocationId);
+				pending.signal?.removeEventListener("abort", pending.abort);
+				await pending.delivery;
+				if (end.error === undefined) pending.resolve({ invocationId: end.invocationId, end });
+				else pending.reject(cursorInvocationError(end.error));
+				return;
+			}
+			case undefined:
+				throw new Error("Cursor RunInference server message has no arm");
+		}
+	}
+
+	#fail(error: unknown): void {
+		if (this.#failed !== undefined) return;
+		this.#failed = error;
+		this.#rejectReady(error);
+		this.#rejectResponse(error);
+		for (const pending of this.#pending.values()) {
+			pending.signal?.removeEventListener("abort", pending.abort);
+			pending.reject(error);
+		}
+		this.#pending.clear();
+		this.#rejectCompletion(error);
+		this.#request.destroy(error instanceof Error ? error : new Error(String(error)));
+	}
+
+	async send(message: RunInferenceClientMessage): Promise<void> {
+		if (this.#failed !== undefined) throw this.#failed;
+		const frame = encodeClientMessage(message);
+		this.#writeQueue = this.#writeQueue.then(async () => {
+			const { promise, resolve, reject } = Promise.withResolvers<void>();
+			this.#request.write(frame, error => {
+				if (error === undefined || error === null) resolve();
+				else reject(error);
+			});
+			await promise;
+		});
+		await this.#writeQueue;
+	}
+
+	async waitUntilReady(): Promise<RunInferenceRunReady> {
+		return await waitWithTimeout(this.ready, this.#responseTimeoutMs, "Cursor runReady");
+	}
+
+	abort(error: unknown): void {
+		this.#fail(error);
+	}
+
+	async invoke(
+		invocationId: string,
+		request: InferenceStreamRequest,
+		options: CursorInferenceInvokeOptions,
+	): Promise<CursorInferenceInvocation> {
+		if (this.#finishing) throw new Error("Cursor RunInference run is finishing");
+		await this.waitUntilReady();
+		await options.onResponse?.(await this.response);
+		if (this.#pending.size >= MAX_PENDING_INVOCATIONS)
+			throw new Error("Cursor RunInference has too many pending invocations");
+		if (this.#pending.has(invocationId) || this.#cancelled.has(invocationId)) {
+			throw new Error(`Cursor invocation '${invocationId}' already exists`);
+		}
+		const result = Promise.withResolvers<CursorInferenceInvocation>();
+		const abort = (): void => {
+			const pending = this.#pending.get(invocationId);
+			if (pending === undefined) return;
+			this.#pending.delete(invocationId);
+			this.#cancelled.add(invocationId);
+			void this.send(
+				create(RunInferenceClientMessageSchema, {
+					message: {
+						case: "cancelInvocation",
+						value: create(RunInferenceCancelInvocationSchema, { invocationId }),
+					},
+				}),
+			).then(
+				() => result.reject(new DOMException("Aborted", "AbortError")),
+				error => {
+					result.reject(error);
+					this.#fail(error);
+				},
+			);
+		};
+		this.#pending.set(invocationId, {
+			onMessage: options.onMessage,
+			resolve: result.resolve,
+			reject: result.reject,
+			signal: options.signal,
+			abort,
+			delivery: Promise.resolve(),
+		});
+		if (options.signal?.aborted === true) abort();
+		else options.signal?.addEventListener("abort", abort, { once: true });
+		if (this.#cancelled.has(invocationId)) return await result.promise;
+		try {
+			await this.send(
+				create(RunInferenceClientMessageSchema, {
+					message: {
+						case: "invokeModel",
+						value: create(RunInferenceInvokeModelSchema, { invocationId, request }),
+					},
+				}),
+			);
+		} catch (error) {
+			this.#pending.delete(invocationId);
+			options.signal?.removeEventListener("abort", abort);
+			result.reject(error);
+			this.#fail(error);
+		}
+		return await result.promise;
+	}
+
+	async finish(timeoutMs: number): Promise<void> {
+		if (this.#finishing) {
+			await waitWithTimeout(this.completion, timeoutMs, "Cursor RunInference shutdown");
+			return;
+		}
+		this.#finishing = true;
+		for (const [invocationId, pending] of this.#pending) {
+			this.#pending.delete(invocationId);
+			this.#cancelled.add(invocationId);
+			pending.signal?.removeEventListener("abort", pending.abort);
+			pending.reject(new Error("Cursor RunInference closed before invocation completed"));
+			await this.send(
+				create(RunInferenceClientMessageSchema, {
+					message: {
+						case: "cancelInvocation",
+						value: create(RunInferenceCancelInvocationSchema, { invocationId }),
+					},
+				}),
+			);
+		}
+		await this.send(
+			create(RunInferenceClientMessageSchema, {
+				message: { case: "finishRun", value: create(RunInferenceFinishRunSchema) },
+			}),
+		);
+		this.#request.end();
+		await waitWithTimeout(this.completion, timeoutMs, "Cursor RunInference shutdown");
+	}
+}
+
+interface RunSlot {
+	readonly routeKey: string;
+	readonly run: CursorInferenceRun;
+}
+
+/** Account-scoped managed-inference runtime with routed runs isolated by OMP session id. */
+export class CursorInferenceRuntime {
+	readonly #options: CursorInferenceRuntimeOptions;
+	readonly #backend: URL;
+	readonly #clientKey: string;
+	readonly #runs = new Map<string, RunSlot>();
+	readonly #runLocks = new Map<string, Promise<void>>();
+	#session: ClientHttp2Session | undefined;
+	#sessionPromise: Promise<ClientHttp2Session> | undefined;
+	#closed = false;
+
+	constructor(options: CursorInferenceRuntimeOptions) {
+		this.#backend = validateBackendUrl(options.backendUrl);
+		this.#options = options;
+		this.#clientKey = (options.createClientKey ?? (() => randomHex(32)))();
+		if (!/^[0-9a-f]{64}$/u.test(this.#clientKey)) throw new Error("Cursor client key must be 32-byte lowercase hex");
+	}
+
+	async #getSession(): Promise<ClientHttp2Session> {
+		if (this.#closed) throw new Error("Cursor managed-inference runtime is shut down");
+		if (this.#session !== undefined && !this.#session.destroyed && !this.#session.closed) return this.#session;
+		this.#sessionPromise ??= Promise.resolve(
+			(this.#options.connect ?? (authority => connect(authority)))(this.#backend.origin),
+		)
+			.catch(error => {
+				this.#sessionPromise = undefined;
+				throw error;
+			})
+			.then(session => {
+				this.#session = session;
+				this.#sessionPromise = undefined;
+				const clear = (): void => {
+					if (this.#session === session) this.#session = undefined;
+				};
+				session.once("goaway", clear);
+				session.on("error", clear);
+				session.once("close", clear);
+				return session;
+			});
+		return await this.#sessionPromise;
+	}
+
+	async #newRun(
+		routeKey: string,
+		runRequest: RunInferenceClientMessage,
+		callerHeaders: Record<string, string> | undefined,
+	): Promise<CursorInferenceRun> {
+		const requestId = (this.#options.createRequestId ?? (() => crypto.randomUUID()))();
+		const headers = inferenceRequestHeaders({
+			token: this.#options.token,
+			ghostMode: this.#options.ghostMode,
+			identity: this.#options.identity,
+			requestId,
+			clientKey: this.#clientKey,
+			callerHeaders,
+			nowMs: (this.#options.now ?? Date.now)(),
+			timezone: (this.#options.timezone ?? (() => Intl.DateTimeFormat().resolvedOptions().timeZone))(),
+		});
+		const run = new CursorInferenceRun(await this.#getSession(), routeKey, headers, this.#options.responseTimeoutMs);
+		try {
+			await run.send(runRequest);
+			await run.waitUntilReady();
+			return run;
+		} catch (error) {
+			run.abort(error);
+			throw error;
+		}
+	}
+
+	async runFor(
+		sessionId: string,
+		routeKey: string,
+		runRequest: RunInferenceClientMessage,
+		callerHeaders?: Record<string, string>,
+	): Promise<CursorInferenceRun> {
+		if (sessionId === "") throw new Error("Cursor managed inference requires a stable session id");
+		const previous = this.#runLocks.get(sessionId) ?? Promise.resolve();
+		const gate = Promise.withResolvers<void>();
+		const lock = previous.then(async () => await gate.promise);
+		this.#runLocks.set(sessionId, lock);
+		await previous;
+		try {
+			const slot = this.#runs.get(sessionId);
+			if (slot?.routeKey === routeKey) return slot.run;
+			if (slot !== undefined) {
+				this.#runs.delete(sessionId);
+				await slot.run.finish(this.#options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS);
+			}
+			const run = await this.#newRun(routeKey, runRequest, callerHeaders);
+			this.#runs.set(sessionId, { routeKey, run });
+			const removeRun = (): void => {
+				if (this.#runs.get(sessionId)?.run === run) this.#runs.delete(sessionId);
+			};
+			void run.completion.then(removeRun, removeRun);
+			return run;
+		} finally {
+			gate.resolve();
+			if (this.#runLocks.get(sessionId) === lock) this.#runLocks.delete(sessionId);
+		}
+	}
+
+	async invoke(
+		sessionId: string,
+		routeKey: string,
+		runRequest: RunInferenceClientMessage,
+		invocationId: string,
+		request: InferenceStreamRequest,
+		options: CursorInferenceInvokeOptions,
+	): Promise<CursorInferenceInvocation> {
+		const run = await this.runFor(sessionId, routeKey, runRequest, options.callerHeaders);
+		return await run.invoke(invocationId, request, options);
+	}
+
+	async shutdown(): Promise<void> {
+		if (this.#closed) return;
+		this.#closed = true;
+		const runs = [...this.#runs.values()];
+		this.#runs.clear();
+		await Promise.allSettled(
+			runs.map(async ({ run }) => await run.finish(this.#options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS)),
+		);
+		this.#session?.destroy();
+		this.#session = undefined;
+	}
+}

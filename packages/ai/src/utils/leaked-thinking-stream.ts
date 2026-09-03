@@ -44,7 +44,6 @@ import type {
 } from "../types";
 import {
 	clearStreamingPartialJson,
-	copyCursorExecResolved,
 	getStreamingPartialJson,
 	type StreamingPartialJsonCarrier,
 	setStreamingPartialJson,
@@ -57,7 +56,6 @@ function cloneToolCall(source: StreamingToolCall): StreamingToolCall {
 	const block: StreamingToolCall = { ...source, arguments: source.arguments };
 	const partialJson = getStreamingPartialJson(source);
 	if (partialJson !== undefined) setStreamingPartialJson(block, partialJson);
-	copyCursorExecResolved(block, source);
 	return block;
 }
 
@@ -66,7 +64,6 @@ function syncToolCall(target: StreamingToolCall, source: StreamingToolCall): voi
 	const partialJson = getStreamingPartialJson(source);
 	if (partialJson === undefined) clearStreamingPartialJson(target);
 	else setStreamingPartialJson(target, partialJson);
-	copyCursorExecResolved(target, source);
 }
 
 /**
@@ -177,6 +174,8 @@ class LeakedThinkingProjector {
 	#thinking: OpenBlock;
 	/** Visible text consumed per source block, used to recover terminal-only tails. */
 	#fedTextLengths = new Map<number, number>();
+	/** Visible text already emitted, regardless of source-index shifts during terminal reconciliation. */
+	#fedTextCopies = new Map<string, number>();
 	/** Source text block whose held healer output has not crossed a content boundary. */
 	#activeTextSourceIndex: number | undefined;
 	/** Original terminal content index for every projected block. */
@@ -206,6 +205,7 @@ class LeakedThinkingProjector {
 		}
 		this.#activeTextSourceIndex = srcIndex;
 		this.#fedTextLengths.set(srcIndex, (this.#fedTextLengths.get(srcIndex) ?? 0) + delta.length);
+		this.#fedTextCopies.set(delta, (this.#fedTextCopies.get(delta) ?? 0) + 1);
 		if (startsSource || signature !== undefined) this.#lastTextSignature = signature;
 		this.#apply(this.#healer.feed(delta), this.#lastTextSignature, srcIndex);
 	}
@@ -359,6 +359,13 @@ class LeakedThinkingProjector {
 			if (block?.type !== "text") continue;
 			const fedLength = this.#fedTextLengths.get(srcIndex) ?? 0;
 			if (block.text.length <= fedLength) continue;
+			if (fedLength === 0) {
+				const copies = this.#fedTextCopies.get(block.text) ?? 0;
+				if (copies > 0) {
+					this.#fedTextCopies.set(block.text, copies - 1);
+					continue;
+				}
+			}
 			if (this.#activeTextSourceIndex !== undefined && this.#activeTextSourceIndex !== srcIndex) {
 				this.#flushHealer();
 				this.#closeText();

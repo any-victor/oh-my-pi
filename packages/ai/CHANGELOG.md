@@ -15,6 +15,15 @@
 ### Fixed
 
 - Fixed Gemini tool continuations through custom Anthropic Messages proxies and OpenAI Responses relays, preserving tool-call and result associations across multi-turn requests.
+- Fixed race condition causing duplicate manual code prompts during OAuth flows
+- Fixed Gemini tool continuations through custom Anthropic Messages proxies and OpenAI Responses relays, ensuring tool calls and results remain correctly associated across multi-turn requests.
+### Breaking Changes
+
+- Removed the Cursor exec-channel handler types and stream options; Cursor now returns ordinary native tool calls for the caller's existing agent loop to execute.
+
+### Changed
+
+- Changed Cursor inference to the IDE's native `InferenceService/RunInference` HTTP/2 stream, preserving OMP context and reasoning while returning ordinary streamed OMP tool calls instead of delegating execution to Cursor's agent runtime. Repeated terminal text copies are collapsed without dropping signature-only reasoning.
 
 ## [18.1.8] - 2026-09-03
 
