@@ -455,8 +455,9 @@ messages.
   use one collision-resistant, occurrence-aware per-context mapping into Cursor's
   accepted charset and length during replay.
 - **Tool ownership:** active OMP tools are serialized as `InferenceAgentTool`.
-  `toolChoice: "none"` omits the catalog; required and named forcing fail clearly
-  because `RunInference` exposes no equivalent wire control. The server returns
+  `toolChoice: "none"` omits the catalog; required choice degrades to automatic
+  selection and named choice narrows the catalog to that tool because
+  `RunInference` exposes no equivalent forcing field. The server returns
   correlated `toolCallPart` deltas; completed JSON arguments become ordinary
   `ToolCall` blocks and execute only through `agent-loop`.
 - **Model routing:** the outer run carries the stable session identity, routing

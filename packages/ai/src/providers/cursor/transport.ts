@@ -17,7 +17,7 @@ import {
 	RunInferenceServerMessageSchema,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
 import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
-import { isRecord } from "@oh-my-pi/pi-utils";
+import { isRecord, withTimeout } from "@oh-my-pi/pi-utils";
 import * as AIError from "../../error";
 import type { ProviderResponseMetadata } from "../../types";
 import { formatConnectEndStreamError, summarizeConnectErrorDetails } from "../connect-error-detail";
@@ -160,22 +160,6 @@ function cursorInvocationError(error: RunInferenceInvocationError): Error {
 	return status === undefined
 		? new AIError.ProviderResponseError(message, { provider: "cursor", kind: "output" })
 		: new AIError.ProviderHttpError(message, status, { code: String(error.code) });
-}
-
-function waitWithTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-	const { promise: bounded, resolve, reject } = Promise.withResolvers<T>();
-	const timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
-	void promise.then(
-		value => {
-			clearTimeout(timer);
-			resolve(value);
-		},
-		error => {
-			clearTimeout(timer);
-			reject(error);
-		},
-	);
-	return bounded;
 }
 
 function abortError(): DOMException {
@@ -443,7 +427,7 @@ export class CursorInferenceRun {
 	}
 
 	async waitUntilReady(): Promise<RunInferenceRunReady> {
-		return await waitWithTimeout(this.ready, this.#responseTimeoutMs, "Cursor runReady");
+		return await withTimeout(this.ready, this.#responseTimeoutMs, "Cursor runReady timed out");
 	}
 
 	abort(error: unknown): void {
@@ -516,7 +500,7 @@ export class CursorInferenceRun {
 
 	async finish(timeoutMs: number): Promise<void> {
 		if (this.#finishing) {
-			await waitWithTimeout(this.completion, timeoutMs, "Cursor RunInference shutdown");
+			await withTimeout(this.completion, timeoutMs, "Cursor RunInference shutdown timed out");
 			return;
 		}
 		this.#finishing = true;
@@ -540,7 +524,7 @@ export class CursorInferenceRun {
 			}),
 		);
 		this.#request.end();
-		await waitWithTimeout(this.completion, timeoutMs, "Cursor RunInference shutdown");
+		await withTimeout(this.completion, timeoutMs, "Cursor RunInference shutdown timed out");
 	}
 }
 
@@ -660,7 +644,11 @@ export class CursorInferenceRuntime {
 			if (reuseRun && slot?.routeKey === routeKey) return slot.run;
 			if (slot !== undefined) {
 				this.#runs.delete(sessionId);
-				await slot.run.finish(this.#options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS);
+				try {
+					await slot.run.finish(this.#options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS);
+				} catch (error) {
+					slot.run.abort(error);
+				}
 			}
 			const run = await this.#newRun(routeKey, runRequest, callerHeaders, signal);
 			this.#runs.set(sessionId, { routeKey, run });

@@ -213,6 +213,40 @@ describe("Cursor managed-inference transport", () => {
 		await managed.shutdown();
 	});
 
+	test("aborts a stale run and opens its replacement after finish timeout", async () => {
+		let opened = 0;
+		const target = await loopback((message, stream) => {
+			if (message.message.case === "runRequest") {
+				opened++;
+				send(
+					stream,
+					serverMessage({
+						message: {
+							case: "runReady",
+							value: create(RunInferenceRunReadySchema, {
+								resolvedModel: create(InferenceRequestedModelSchema, { modelId: `model-${opened}` }),
+							}),
+						},
+					}),
+				);
+			}
+			if (message.message.case === "invokeModel") send(stream, invocationEnd(message.message.value.invocationId));
+			if (message.message.case === "finishRun" && opened > 1) {
+				stream.end(encodeConnectFrame(new TextEncoder().encode("{}"), CONNECT_FLAG_END_STREAM));
+			}
+		});
+		const managed = runtime(target, { shutdownTimeoutMs: 10 });
+		const request = create(InferenceStreamRequestSchema);
+		const options = { onMessage: () => undefined };
+		await managed.invoke("omp-session", "route-a", clientRun(), "first", request, options);
+		expect(await managed.invoke("omp-session", "route-b", clientRun(), "second", request, options)).toHaveProperty(
+			"invocationId",
+			"second",
+		);
+		expect(opened).toBe(2);
+		await managed.shutdown();
+	});
+
 	test("aborts a new outer run before runReady", async () => {
 		const sawRun = Promise.withResolvers<void>();
 		const target = await loopback(message => {

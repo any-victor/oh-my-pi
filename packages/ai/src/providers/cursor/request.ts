@@ -273,12 +273,25 @@ export function buildInferenceRequest(
 					topP: options.topP,
 					stopSequences: options.stopSequences === undefined ? undefined : [...options.stopSequences],
 				});
-	if (options.toolChoice !== undefined && options.toolChoice !== "auto" && options.toolChoice !== "none") {
-		throw new Error("Cursor RunInference does not support required or named tool choice");
-	}
+	const forcedToolName =
+		typeof options.toolChoice === "object"
+			? options.toolChoice.type === "computer"
+				? "computer"
+				: "function" in options.toolChoice
+					? options.toolChoice.function.name
+					: options.toolChoice.name
+			: undefined;
+	const tools =
+		options.toolChoice === "none"
+			? []
+			: forcedToolName === undefined
+				? (context.tools ?? [])
+				: (context.tools ?? []).filter(
+						tool => tool.name === forcedToolName || tool.customWireName === forcedToolName,
+					);
 	return create(InferenceStreamRequestSchema, {
 		messages,
-		tools: options.toolChoice === "none" ? [] : (context.tools?.map(toolToInference) ?? []),
+		tools: tools.map(toolToInference),
 		modelConfig,
 	});
 }

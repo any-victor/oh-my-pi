@@ -183,14 +183,17 @@ describe("Cursor managed-inference request", () => {
 		expect(resultIds).toEqual(["reused-id", "reused-id_dup1"]);
 	});
 
-	test("omits tools for none and rejects unsupported forced choices", () => {
+	test("omits tools for none and safely narrows unsupported forced choices", () => {
 		expect(buildInferenceRequest(history(), { toolChoice: "none" }).tools).toEqual([]);
-		expect(() => buildInferenceRequest(history(), { toolChoice: "required" })).toThrow(
-			"does not support required or named tool choice",
-		);
-		expect(() => buildInferenceRequest(history(), { toolChoice: { type: "tool", name: TOOL.name } })).toThrow(
-			"does not support required or named tool choice",
-		);
+		expect(buildInferenceRequest(history(), { toolChoice: "required" }).tools.map(tool => tool.name)).toEqual([
+			TOOL.name,
+		]);
+		expect(
+			buildInferenceRequest(
+				{ ...history(), tools: [TOOL, { ...TOOL, name: "other" }] },
+				{ toolChoice: { type: "tool", name: TOOL.name } },
+			).tools.map(tool => tool.name),
+		).toEqual([TOOL.name]);
 	});
 
 	test("preserves ordered user image parts exactly as the extracted adapter sends them", () => {
