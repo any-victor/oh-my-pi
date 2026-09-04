@@ -2,11 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- GitHub Copilot sign-in now requests only basic profile access, restoring login for Enterprise organizations that reject repository, gist, and Codespaces permissions ([#10656](https://github.com/can1357/oh-my-pi/issues/10656)).
-
-## [18.1.9] - 2026-09-04
 ### Breaking Changes
 
 - Removed the Cursor exec-channel handler types and stream options; Cursor now returns ordinary native tool calls for the caller's existing agent loop to execute.
@@ -17,6 +12,7 @@
 
 ### Fixed
 
+- GitHub Copilot sign-in now requests only basic profile access, restoring login for Enterprise organizations that reject repository, gist, and Codespaces permissions ([#10656](https://github.com/can1357/oh-my-pi/issues/10656)).
 - Fixed concurrent Cursor callers with different credentials shutting down one another, concurrent first use creating duplicate runtimes, generic Connect and invocation errors hiding structured diagnostic details, unbounded host-identity commands, HTTP/2 sessions leaking when connection completed after shutdown, cross-provider tool IDs violating Cursor's charset, colliding after normalization, or repeating across turns, public stop-sequence/tool-choice options being dropped or agent-generated forced choices terminating turns, authoritative final text corrections being lost by the leaked-thinking wrapper, later user turns reusing stale routing conversations, generic GPT routing forcing a 272K context value instead of the selected catalog context, concurrent fallback-identity creation reading partial files, stale routed runs or blocked shutdown control writes surviving the complete shutdown timeout, terminal-only native tool calls being dropped by the leaked-thinking wrapper, and orphan or incomplete tool-result windows producing malformed Cursor history.
 - Fixed final Cursor error metadata replacing authentication, quota, overload, and output-limit classifications from typed stream errors.
 - Fixed foreign provider reasoning being replayed as Cursor-native reasoning, orphan results splitting pending tool-call windows, and aborted invocations waiting for cancellation writes to drain.
