@@ -443,6 +443,29 @@ describe("Cursor managed-inference request", () => {
 		expect(resultIds).toEqual(["reused-id", "reused-id_dup1"]);
 	});
 
+	test("pulls a delayed real tool result before the boundary that closed its call window", () => {
+		const context = history();
+		const assistant = context.messages[1];
+		const result = context.messages[2];
+		if (assistant?.role !== "assistant" || result?.role !== "toolResult") {
+			throw new Error("tool history missing");
+		}
+		result.content = [{ type: "text", text: "delayed real output" }];
+		const request = buildInferenceRequest(cursorModel(), {
+			messages: [assistant, { role: "user", content: "boundary", timestamp: 3 }, { ...result, timestamp: 4 }],
+		});
+
+		expect(request.messages.map(message => message.role)).toEqual([
+			InferenceMessageRole.ASSISTANT,
+			InferenceMessageRole.TOOL,
+			InferenceMessageRole.USER,
+		]);
+		const toolContent = request.messages[1]?.content;
+		if (toolContent?.case !== "toolContent") throw new Error("delayed tool result missing");
+		expect(decodeJsonValue(toolContent.value.parts[0]?.result ?? new Uint8Array())).toBe("delayed real output");
+		expect(toolContent.value.parts[0]?.isError).toBe(false);
+	});
+
 	test("keeps custom Cursor-provider reasoning and parallel calls on replay", () => {
 		const context = history();
 		const assistant = context.messages[1];

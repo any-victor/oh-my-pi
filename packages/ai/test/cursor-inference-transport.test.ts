@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { ClientHttp2Session, Http2Server, ServerHttp2Session, ServerHttp2Stream } from "node:http2";
 import { connect, createServer } from "node:http2";
+import * as net from "node:net";
 import {
 	InferenceRequestedModelSchema,
 	InferenceStreamRequestSchema,
@@ -333,6 +334,41 @@ describe("Cursor managed-inference transport", () => {
 			blockedRunWrite.resolve();
 			sendSpy.mockRestore();
 			await managed.shutdown();
+		}
+	});
+
+	test("bounds and destroys a stalled initial HTTP/2 connection", async () => {
+		const stalledServer = net.createServer(() => undefined);
+		const listening = Promise.withResolvers<void>();
+		stalledServer.listen(0, "127.0.0.1", listening.resolve);
+		await listening.promise;
+		const address = stalledServer.address();
+		if (address === null || typeof address === "string") throw new Error("stalled server has no port");
+		let stalledSession: ClientHttp2Session | undefined;
+		const managed = runtime(
+			{ origin: `https://127.0.0.1:${address.port}` },
+			{
+				responseTimeoutMs: 20,
+				connect: authority => {
+					stalledSession = connect(authority, { rejectUnauthorized: false });
+					return stalledSession;
+				},
+			},
+		);
+		try {
+			const pending = managed.invoke(
+				"omp-session",
+				"route",
+				clientRun(),
+				"stalled-connect",
+				create(InferenceStreamRequestSchema),
+				{ onMessage: () => undefined },
+			);
+			expect(await rejection(pending)).toHaveProperty("message", "Cursor HTTP/2 connection timed out");
+			expect(stalledSession?.destroyed).toBe(true);
+		} finally {
+			await managed.shutdown();
+			stalledServer.close();
 		}
 	});
 

@@ -127,6 +127,54 @@ export function toolCallPairingKey(id: string, originScope: ToolCallOriginScope)
 	return originScope.responsesComponents.has(prefix) ? prefix : id;
 }
 
+export interface ToolResultLookahead {
+	take(id: string, afterIndex: number, beforeIndex?: number): ToolResultMessage | undefined;
+	consume(message: ToolResultMessage): void;
+	isConsumed(message: ToolResultMessage): boolean;
+}
+
+/** Index real results once so repair passes can pull a delayed result into its call window. */
+export function createToolResultLookahead(
+	messages: readonly Message[],
+	originScope = collectToolCallOriginScope(messages),
+): ToolResultLookahead {
+	type IndexedResult = { readonly index: number; readonly message: ToolResultMessage; consumed: boolean };
+	const resultsByKey = new Map<string, IndexedResult[]>();
+	const resultsByMessage = new Map<ToolResultMessage, IndexedResult>();
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index];
+		if (message.role !== "toolResult") continue;
+		const entry: IndexedResult = { index, message, consumed: false };
+		const key = toolCallPairingKey(message.toolCallId, originScope);
+		const entries = resultsByKey.get(key) ?? [];
+		entries.push(entry);
+		resultsByKey.set(key, entries);
+		resultsByMessage.set(message, entry);
+	}
+	return {
+		take(id, afterIndex, beforeIndex) {
+			const entry = resultsByKey
+				.get(toolCallPairingKey(id, originScope))
+				?.find(
+					candidate =>
+						!candidate.consumed &&
+						candidate.index > afterIndex &&
+						(beforeIndex === undefined || candidate.index < beforeIndex),
+				);
+			if (entry === undefined) return undefined;
+			entry.consumed = true;
+			return entry.message;
+		},
+		consume(message) {
+			const entry = resultsByMessage.get(message);
+			if (entry !== undefined) entry.consumed = true;
+		},
+		isConsumed(message) {
+			return resultsByMessage.get(message)?.consumed === true;
+		},
+	};
+}
+
 function appendDuplicateSuffix(originalId: string, suffix: string, maxLength: number): string {
 	// Responses-family ids are composites (`callId|itemId`): the wire call_id is
 	// the FIRST segment (normalizeResponsesToolCallId splits on `|`), so the
@@ -1018,31 +1066,10 @@ export function transformMessages<TApi extends Api>(
 	// All real tool results, keyed by id, in document order. One id can map to
 	// more than one result: compaction can fold an assistant `tool_use` into a
 	// summary string while its `tool_result` survives, and a later turn may reuse
-	// the id. `takeRealToolResult` pulls the earliest unconsumed result positioned
-	// AFTER the call's assistant turn, so an orphaned earlier result is never
-	// pulled forward onto a later call (which would surface a prior turn's output).
-	type IndexedToolResult = { index: number; msg: ToolResultMessage; consumed: boolean };
-	const realToolResultsById = new Map<string, IndexedToolResult[]>();
-	for (let index = 0; index < transformed.length; index++) {
-		const msg = transformed[index];
-		if (msg.role === "toolResult") {
-			const entry: IndexedToolResult = { index, msg, consumed: false };
-			const key = toolCallPairingKey(msg.toolCallId, originScope);
-			const entries = realToolResultsById.get(key);
-			if (entries) entries.push(entry);
-			else realToolResultsById.set(key, [entry]);
-		}
-	}
-	const takeRealToolResult = (id: string, afterIndex: number): ToolResultMessage | undefined => {
-		const entries = realToolResultsById.get(toolCallPairingKey(id, originScope));
-		if (!entries) return undefined;
-		for (const entry of entries) {
-			if (entry.consumed || entry.index <= afterIndex) continue;
-			entry.consumed = true;
-			return entry.msg;
-		}
-		return undefined;
-	};
+	// the id. The lookahead pulls the earliest unconsumed result positioned AFTER
+	// the call's assistant turn, so an orphaned earlier result is never pulled
+	// forward onto a later call (which would surface a prior turn's output).
+	const realToolResults = createToolResultLookahead(transformed, originScope);
 
 	// Anthropic rejects `tool_result` blocks whose `tool_use_id` does not appear in a prior
 	// `tool_use` block. After handoff/compaction folds an assistant turn into a summary
@@ -1076,7 +1103,7 @@ export function transformMessages<TApi extends Api>(
 		for (const tc of pendingToolCalls) {
 			const statusKey = toolCallPairingKey(tc.id, originScope);
 			if (toolCallStatus.has(statusKey)) continue;
-			const realToolResult = takeRealToolResult(tc.id, pendingToolCallsStartIndex);
+			const realToolResult = realToolResults.take(tc.id, pendingToolCallsStartIndex);
 			if (realToolResult) {
 				result.push(realToolResult);
 				toolCallStatus.set(statusKey, ToolCallStatus.Resolved);
@@ -1100,7 +1127,7 @@ export function transformMessages<TApi extends Api>(
 		for (const tc of pendingAbortedToolCalls.values()) {
 			const statusKey = toolCallPairingKey(tc.id, originScope);
 			if (toolCallStatus.has(statusKey)) continue;
-			const realToolResult = takeRealToolResult(tc.id, pendingAbortedStartIndex);
+			const realToolResult = realToolResults.take(tc.id, pendingAbortedStartIndex);
 			if (realToolResult) {
 				result.push(realToolResult);
 				toolCallStatus.set(statusKey, ToolCallStatus.Resolved);

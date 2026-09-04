@@ -39,6 +39,7 @@ import { normalizeSystemPrompts, normalizeToolCallId } from "../../utils";
 import { toolWireSchema } from "../../utils/schema";
 import {
 	collectToolCallOriginScope,
+	createToolResultLookahead,
 	sanitizeMalformedToolCalls,
 	toolCallPairingKey,
 	type ToolCallOriginScope,
@@ -294,14 +295,34 @@ interface PendingCursorToolCall {
 	readonly id: string;
 	readonly name: string;
 	readonly timestamp: number;
+	readonly startIndex: number;
 }
 
 function repairToolResultPairing(messages: readonly Message[]): Message[] {
 	const pending: PendingCursorToolCall[] = [];
 	const repaired: Message[] = [];
 	const originScope = collectToolCallOriginScope(messages);
+	const realToolResults = createToolResultLookahead(messages, originScope);
+	const callIndicesByKey = new Map<string, number[]>();
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index];
+		if (message.role !== "assistant") continue;
+		for (const part of message.content) {
+			if (part.type !== "toolCall") continue;
+			const key = toolCallPairingKey(part.id, originScope);
+			const indices = callIndicesByKey.get(key) ?? [];
+			indices.push(index);
+			callIndicesByKey.set(key, indices);
+		}
+	}
 	const flushPending = (): void => {
 		for (const call of pending.splice(0)) {
+			const nextCallIndex = callIndicesByKey.get(call.key)?.find(index => index > call.startIndex);
+			const realResult = realToolResults.take(call.id, call.startIndex, nextCallIndex);
+			if (realResult !== undefined) {
+				repaired.push(realResult);
+				continue;
+			}
 			repaired.push({
 				role: "toolResult",
 				toolCallId: call.id,
@@ -312,12 +333,15 @@ function repairToolResultPairing(messages: readonly Message[]): Message[] {
 			});
 		}
 	};
-	for (const message of messages) {
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index];
 		if (message.role === "toolResult") {
+			if (realToolResults.isConsumed(message)) continue;
 			const key = pendingResultKey(new Map(pending.map(call => [call.key, true])), message.toolCallId, originScope);
-			const index = pending.findIndex(call => call.key === key);
-			if (index >= 0) {
-				pending.splice(index, 1);
+			const pendingIndex = pending.findIndex(call => call.key === key);
+			if (pendingIndex >= 0) {
+				pending.splice(pendingIndex, 1);
+				realToolResults.consume(message);
 				repaired.push(message);
 				continue;
 			}
@@ -345,6 +369,7 @@ function repairToolResultPairing(messages: readonly Message[]): Message[] {
 				id: part.id,
 				name: part.name,
 				timestamp: message.timestamp,
+				startIndex: index,
 			});
 		}
 	}

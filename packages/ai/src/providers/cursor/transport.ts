@@ -548,17 +548,28 @@ export class CursorInferenceRuntime {
 	async #getSession(): Promise<ClientHttp2Session> {
 		if (this.#closed) throw new Error("Cursor managed-inference runtime is shut down");
 		if (this.#session !== undefined && !this.#session.destroyed && !this.#session.closed) return this.#session;
-		this.#sessionPromise ??= Promise.resolve(
+		if (this.#sessionPromise !== undefined) return await this.#sessionPromise;
+
+		let expired = false;
+		let connectingSession: ClientHttp2Session | undefined;
+		const establish = Promise.resolve(
 			(this.#options.connect ?? (authority => connect(authority)))(this.#backend.origin),
+		).then(async session => {
+			connectingSession = session;
+			if (expired || this.#closed) {
+				session.destroy();
+				throw new Error(
+					this.#closed ? "Cursor managed-inference runtime is shut down" : "Cursor HTTP/2 connection timed out",
+				);
+			}
+			this.#connectingSession = session;
+			return await waitForHttp2Connect(session);
+		});
+		const attempt = withTimeout(
+			establish,
+			this.#options.responseTimeoutMs ?? RESPONSE_TIMEOUT_MS,
+			"Cursor HTTP/2 connection timed out",
 		)
-			.then(session => {
-				if (this.#closed) {
-					session.destroy();
-					throw new Error("Cursor managed-inference runtime is shut down");
-				}
-				this.#connectingSession = session;
-				return waitForHttp2Connect(session);
-			})
 			.then(session => {
 				if (this.#connectingSession === session) this.#connectingSession = undefined;
 				if (this.#closed) {
@@ -566,7 +577,7 @@ export class CursorInferenceRuntime {
 					throw new Error("Cursor managed-inference runtime is shut down");
 				}
 				this.#session = session;
-				this.#sessionPromise = undefined;
+				if (this.#sessionPromise === attempt) this.#sessionPromise = undefined;
 				const clear = (): void => {
 					if (this.#session === session) this.#session = undefined;
 				};
@@ -576,12 +587,14 @@ export class CursorInferenceRuntime {
 				return session;
 			})
 			.catch(error => {
-				this.#connectingSession?.destroy();
-				this.#connectingSession = undefined;
-				this.#sessionPromise = undefined;
+				expired = true;
+				connectingSession?.destroy();
+				if (this.#connectingSession === connectingSession) this.#connectingSession = undefined;
+				if (this.#sessionPromise === attempt) this.#sessionPromise = undefined;
 				throw error;
 			});
-		return await this.#sessionPromise;
+		this.#sessionPromise = attempt;
+		return await attempt;
 	}
 
 	async #newRun(
