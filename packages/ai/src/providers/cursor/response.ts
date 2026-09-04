@@ -126,22 +126,16 @@ export class CursorInferenceMapper {
 				return;
 			case "textPart": {
 				const part = response.response.value;
-				if (part.text !== "" && part.isFinal && this.#text?.block.text === part.text) {
+				// Cursor 3.18.9's managed adapter maps final text parts to a finish
+				// marker. The authoritative completed text comes from responseInfo.
+				if (part.isFinal) {
 					this.#endText();
-					return;
-				}
-				if (
-					part.text !== "" &&
-					this.#text === undefined &&
-					this.#output.content.some(block => block.type === "text" && block.text === part.text)
-				) {
 					return;
 				}
 				if (part.text !== "") {
 					this.#onFirstToken();
 					this.#appendText(part.text);
 				}
-				if (part.isFinal) this.#endText();
 				return;
 			}
 			case "toolCallPart":

@@ -103,7 +103,7 @@ function stableHeaderKey(headers: Record<string, string> | undefined): string {
 	);
 }
 
-function mapH2TransportError(error: unknown, baseUrl: string): unknown {
+export function mapH2TransportError(error: unknown, baseUrl: string): unknown {
 	const code = (error as { code?: unknown } | null)?.code;
 	const message = error instanceof Error ? error.message : String(error);
 	if (code === "ERR_HTTP2_ERROR" && /h2 is not supported/i.test(message)) {
@@ -124,13 +124,15 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (model, context, raw
 	const startTime = performance.now();
 	const output = outputFor(model, Date.now());
 	let firstTokenTime: number | undefined;
+	let ephemeralState: CursorRuntimeState | undefined;
 
 	void (async () => {
-		const { state, ephemeral } = getCursorRuntimeState(options?.providerSessionState);
 		try {
 			stream.push({ type: "start", partial: output });
 			const apiKey = options?.apiKey;
 			if (!apiKey) throw new AIError.MissingApiKeyError(undefined, "Cursor API key (access token) is required");
+			const { state, ephemeral } = getCursorRuntimeState(options?.providerSessionState);
+			if (ephemeral) ephemeralState = state;
 			const sessionId = options.sessionId ?? crypto.randomUUID();
 
 			const requestedModel = { wireModelId: options.wireModelId, maxMode: model.cursorMaxMode === true };
@@ -196,7 +198,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (model, context, raw
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		} finally {
-			if (ephemeral) state.close();
+			ephemeralState?.close();
 		}
 	})();
 

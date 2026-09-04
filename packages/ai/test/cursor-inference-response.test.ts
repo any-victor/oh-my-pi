@@ -12,6 +12,7 @@ import {
 	InferenceTextStreamPartSchema,
 	InferenceThinkingStreamPartSchema,
 	InferenceToolCallStreamPartSchema,
+	InferenceUsageInfoSchema,
 	RunInferenceInvocationResponseSchema,
 	RunInferenceServerMessageSchema,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
@@ -199,7 +200,114 @@ describe("Cursor managed-inference response", () => {
 		expect(result.usage).toMatchObject({ input: 10, output: 4, cacheRead: 3, cacheWrite: 2, totalTokens: 19 });
 	});
 
-	test("deduplicates repeated final answer copies", async () => {
+	test("uses ordinary usage only until extended usage arrives", async () => {
+		const { result } = await map([
+			response({
+				response: {
+					case: "usage",
+					value: create(InferenceUsageInfoSchema, { promptTokens: 8, completionTokens: 3 }),
+				},
+			}),
+		]);
+		expect(result.usage).toMatchObject({ input: 8, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 11 });
+	});
+
+	test("accepts an empty success and turns an output limit with content into length", async () => {
+		const empty = await map([]);
+		expect(empty.terminal).toEqual({ stopReason: "stop" });
+		expect(empty.result.content).toEqual([]);
+
+		const limited = await map([
+			response({
+				response: {
+					case: "textPart",
+					value: create(InferenceTextStreamPartSchema, { text: "partial", isFinal: false }),
+				},
+			}),
+			response({
+				response: {
+					case: "error",
+					value: create(InferenceStreamErrorSchema, {
+						message: "output cap",
+						errorType: InferenceStreamErrorType.OUTPUT_TOKEN_LIMIT,
+					}),
+				},
+			}),
+		]);
+		expect(limited.terminal).toEqual({ stopReason: "length" });
+		expect(limited.result.content).toEqual([{ type: "text", text: "partial" }]);
+	});
+
+	test("preserves interleaved tool calls and rejects malformed or unadvertised calls", async () => {
+		const messages = [
+			{ id: "first", left: "A", complete: false },
+			{ id: "second", left: "C", complete: false },
+			{ id: "first", left: "A", complete: true },
+			{ id: "second", left: "C", complete: true },
+		].map(({ id, left, complete }) =>
+			response({
+				response: {
+					case: "toolCallPart",
+					value: create(InferenceToolCallStreamPartSchema, {
+						toolCallId: id,
+						toolName: TOOL,
+						args: `{"left":"${left}","right":"B"}`,
+						isComplete: complete,
+					}),
+				},
+			}),
+		);
+		const interleaved = await map(messages);
+		expect(interleaved.terminal.stopReason).toBe("toolUse");
+		expect(interleaved.result.content).toEqual([
+			{ type: "toolCall", id: "first", name: TOOL, arguments: { left: "A", right: "B" } },
+			{ type: "toolCall", id: "second", name: TOOL, arguments: { left: "C", right: "B" } },
+		]);
+
+		const stream = new AssistantMessageEventStream();
+		const malformed = new CursorInferenceMapper(stream, output(), new Set([TOOL]), "invocation", () => undefined);
+		expect(() =>
+			malformed.handle(
+				response({
+					response: {
+						case: "toolCallPart",
+						value: create(InferenceToolCallStreamPartSchema, {
+							toolCallId: "bad",
+							toolName: TOOL,
+							args: "{",
+							isComplete: true,
+						}),
+					},
+				}),
+			),
+		).toThrow("invalid JSON arguments");
+		const unadvertised = new CursorInferenceMapper(stream, output(), new Set(), "invocation", () => undefined);
+		expect(() =>
+			unadvertised.handle(
+				response({
+					response: {
+						case: "toolCallPart",
+						value: create(InferenceToolCallStreamPartSchema, {
+							toolCallId: "unknown",
+							toolName: "unknown_tool",
+						}),
+					},
+				}),
+			),
+		).toThrow("unadvertised tool 'unknown_tool'");
+		stream.end();
+	});
+
+	test("rejects a nested invocation id that disagrees with its outer envelope", () => {
+		const stream = new AssistantMessageEventStream();
+		const mapper = new CursorInferenceMapper(stream, output(), new Set(), "invocation", () => undefined);
+		expect(() =>
+			mapper.handle(response({ response: { case: "invocationId", value: { invocationId: "other" } } })),
+		).toThrow("nested invocation identity disagrees");
+		stream.end();
+	});
+
+	test("preserves repeated final response messages instead of guessing they are transport copies", async () => {
 		const { result } = await map([
 			response({
 				response: {
@@ -226,10 +334,44 @@ describe("Cursor managed-inference response", () => {
 		expect(result.content).toEqual([
 			{ type: "thinking", thinking: "", thinkingSignature: "opaque" },
 			{ type: "text", text: "answer" },
+			{ type: "text", text: "answer" },
 		]);
 	});
 
-	test("suppresses a repeated text frame after opaque thinking", async () => {
+	test("preserves equal streamed text blocks separated by opaque thinking", async () => {
+		const { result, events } = await map([
+			response({
+				response: {
+					case: "textPart",
+					value: create(InferenceTextStreamPartSchema, { text: "answer", isFinal: false }),
+				},
+			}),
+			response({
+				response: {
+					case: "thinkingPart",
+					value: create(InferenceThinkingStreamPartSchema, {
+						text: "pause",
+						signature: "opaque",
+						isFinal: true,
+					}),
+				},
+			}),
+			response({
+				response: {
+					case: "textPart",
+					value: create(InferenceTextStreamPartSchema, { text: "answer", isFinal: false }),
+				},
+			}),
+		]);
+		expect(result.content).toEqual([
+			{ type: "text", text: "answer" },
+			{ type: "thinking", thinking: "pause", thinkingSignature: "opaque" },
+			{ type: "text", text: "answer" },
+		]);
+		expect(events.filter(event => event.type === "text_delta")).toHaveLength(2);
+	});
+
+	test("ignores a final text marker before a later non-final text delta", async () => {
 		const { result, events } = await map([
 			response({
 				response: {
@@ -254,7 +396,7 @@ describe("Cursor managed-inference response", () => {
 		expect(events.filter(event => event.type === "text_delta")).toHaveLength(1);
 	});
 
-	test("suppresses a cumulative final copy of an open text block", async () => {
+	test("treats a cumulative final text frame as a finish marker", async () => {
 		const { result, events } = await map([
 			response({
 				response: {

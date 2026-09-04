@@ -37,22 +37,19 @@ describe("Cursor final response reconciliation", () => {
 		expect(reconcileFinalContent([{ type: "text", text: "stream" }], [])).toEqual([{ type: "text", text: "stream" }]);
 	});
 
-	test("removes exact duplicate text copies", () => {
+	test("preserves equal text blocks when their positions are semantically distinct", () => {
 		expect(
 			reconcileFinalContent(
-				[
-					{ type: "text", text: "answer" },
-					{ type: "text", text: "answer" },
-				],
+				[{ type: "text", text: "answer" }, thinking("pause"), { type: "text", text: "answer" }],
 				undefined,
 			),
-		).toEqual([{ type: "text", text: "answer" }]);
+		).toEqual([{ type: "text", text: "answer" }, thinking("pause"), { type: "text", text: "answer" }]);
 		expect(
 			reconcileFinalContent(
-				[],
+				[{ type: "text", text: "streamed copy" }],
 				[{ type: "text", text: "answer" }, thinking("", "opaque"), { type: "text", text: "answer" }],
 			),
-		).toEqual([thinking("", "opaque"), { type: "text", text: "answer" }]);
+		).toEqual([thinking("", "opaque"), { type: "text", text: "answer" }, { type: "text", text: "answer" }]);
 	});
 
 	test("attaches one exact opaque signature only when one streamed block is unambiguous", () => {

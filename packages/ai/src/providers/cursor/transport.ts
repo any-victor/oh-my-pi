@@ -156,6 +156,59 @@ function waitWithTimeout<T>(promise: Promise<T>, timeoutMs: number, label: strin
 	return bounded;
 }
 
+function abortError(): DOMException {
+	return new DOMException("Aborted", "AbortError");
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+	if (signal?.aborted === true) throw abortError();
+}
+
+function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+	if (signal === undefined) return promise;
+	if (signal.aborted) return Promise.reject(abortError());
+	const { promise: bounded, resolve, reject } = Promise.withResolvers<T>();
+	const abort = (): void => reject(abortError());
+	signal.addEventListener("abort", abort, { once: true });
+	void promise.then(
+		value => {
+			signal.removeEventListener("abort", abort);
+			resolve(value);
+		},
+		error => {
+			signal.removeEventListener("abort", abort);
+			reject(error);
+		},
+	);
+	return bounded;
+}
+
+function waitForHttp2Connect(session: ClientHttp2Session): Promise<ClientHttp2Session> {
+	if (!session.connecting) return Promise.resolve(session);
+	const { promise, resolve, reject } = Promise.withResolvers<ClientHttp2Session>();
+	const cleanup = (): void => {
+		session.off("connect", connected);
+		session.off("error", failed);
+		session.off("close", closed);
+	};
+	const connected = (): void => {
+		cleanup();
+		resolve(session);
+	};
+	const failed = (error: Error): void => {
+		cleanup();
+		reject(error);
+	};
+	const closed = (): void => {
+		cleanup();
+		reject(new Error("Cursor HTTP/2 session closed before connecting"));
+	};
+	session.once("connect", connected);
+	session.once("error", failed);
+	session.once("close", closed);
+	return promise;
+}
+
 function responseMetadata(headers: IncomingHttpHeaders): ProviderResponseMetadata {
 	const normalized: Record<string, string> = {};
 	for (const [name, value] of Object.entries(headers)) {
@@ -384,6 +437,7 @@ export class CursorInferenceRun {
 	): Promise<CursorInferenceInvocation> {
 		if (this.#finishing) throw new Error("Cursor RunInference run is finishing");
 		await this.waitUntilReady();
+		throwIfAborted(options.signal);
 		await options.onResponse?.(await this.response);
 		if (this.#pending.size >= MAX_PENDING_INVOCATIONS)
 			throw new Error("Cursor RunInference has too many pending invocations");
@@ -499,6 +553,7 @@ export class CursorInferenceRuntime {
 		this.#sessionPromise ??= Promise.resolve(
 			(this.#options.connect ?? (authority => connect(authority)))(this.#backend.origin),
 		)
+			.then(waitForHttp2Connect)
 			.catch(error => {
 				this.#sessionPromise = undefined;
 				throw error;
@@ -521,6 +576,7 @@ export class CursorInferenceRuntime {
 		routeKey: string,
 		runRequest: RunInferenceClientMessage,
 		callerHeaders: Record<string, string> | undefined,
+		signal: AbortSignal | undefined,
 	): Promise<CursorInferenceRun> {
 		const requestId = (this.#options.createRequestId ?? (() => crypto.randomUUID()))();
 		const headers = inferenceRequestHeaders({
@@ -533,7 +589,11 @@ export class CursorInferenceRuntime {
 			nowMs: (this.#options.now ?? Date.now)(),
 			timezone: (this.#options.timezone ?? (() => Intl.DateTimeFormat().resolvedOptions().timeZone))(),
 		});
-		const run = new CursorInferenceRun(await this.#getSession(), routeKey, headers, this.#options.responseTimeoutMs);
+		const session = await waitWithSignal(this.#getSession(), signal);
+		const run = new CursorInferenceRun(session, routeKey, headers, this.#options.responseTimeoutMs);
+		const abort = (): void => run.abort(abortError());
+		if (signal?.aborted === true) abort();
+		else signal?.addEventListener("abort", abort, { once: true });
 		try {
 			await run.send(runRequest);
 			await run.waitUntilReady();
@@ -541,6 +601,8 @@ export class CursorInferenceRuntime {
 		} catch (error) {
 			run.abort(error);
 			throw error;
+		} finally {
+			signal?.removeEventListener("abort", abort);
 		}
 	}
 
@@ -549,6 +611,7 @@ export class CursorInferenceRuntime {
 		routeKey: string,
 		runRequest: RunInferenceClientMessage,
 		callerHeaders?: Record<string, string>,
+		signal?: AbortSignal,
 	): Promise<CursorInferenceRun> {
 		if (sessionId === "") throw new Error("Cursor managed inference requires a stable session id");
 		const previous = this.#runLocks.get(sessionId) ?? Promise.resolve();
@@ -563,7 +626,7 @@ export class CursorInferenceRuntime {
 				this.#runs.delete(sessionId);
 				await slot.run.finish(this.#options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS);
 			}
-			const run = await this.#newRun(routeKey, runRequest, callerHeaders);
+			const run = await this.#newRun(routeKey, runRequest, callerHeaders, signal);
 			this.#runs.set(sessionId, { routeKey, run });
 			const removeRun = (): void => {
 				if (this.#runs.get(sessionId)?.run === run) this.#runs.delete(sessionId);
@@ -584,7 +647,7 @@ export class CursorInferenceRuntime {
 		request: InferenceStreamRequest,
 		options: CursorInferenceInvokeOptions,
 	): Promise<CursorInferenceInvocation> {
-		const run = await this.runFor(sessionId, routeKey, runRequest, options.callerHeaders);
+		const run = await this.runFor(sessionId, routeKey, runRequest, options.callerHeaders, options.signal);
 		return await run.invoke(invocationId, request, options);
 	}
 

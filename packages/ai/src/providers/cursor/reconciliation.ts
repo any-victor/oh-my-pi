@@ -22,16 +22,6 @@ function toolBlocks(content: Content): ToolCall[] {
 	return content.filter(block => block.type === "toolCall");
 }
 
-function deduplicateTextCopies(content: Content): Content {
-	const seen = new Set<string>();
-	return content.filter(block => {
-		if (block.type !== "text") return true;
-		if (seen.has(block.text)) return false;
-		seen.add(block.text);
-		return true;
-	});
-}
-
 function signature(block: ThinkingContent): string | undefined {
 	return block.thinkingSignature === undefined || block.thinkingSignature === "" ? undefined : block.thinkingSignature;
 }
@@ -154,7 +144,7 @@ function compareTools(streamed: readonly ToolCall[], final: readonly ToolCall[])
 export function reconcileFinalContent(streamed: Content, final?: Content): Content {
 	if (final === undefined) {
 		indexedTools(toolBlocks(streamed), "streamed");
-		return deduplicateTextCopies(streamed);
+		return streamed;
 	}
 	const streamedText = textBlocks(streamed);
 	const finalText = textBlocks(final);
@@ -166,12 +156,12 @@ export function reconcileFinalContent(streamed: Content, final?: Content): Conte
 	const reasoning = reconcileReasoning(reasoningBlocks(streamed), reasoningBlocks(final));
 	const finalHasNonReasoning = finalText.length > 0 || finalTools.length > 0;
 	if (finalText.length === 0 && finalTools.length > 0 && streamedText.length > 0) {
-		return deduplicateTextCopies([...reasoning, ...streamedText, ...finalTools]);
+		return [...reasoning, ...streamedText, ...finalTools];
 	}
-	return deduplicateTextCopies([
+	return [
 		...reasoning,
 		...(finalHasNonReasoning
 			? final.filter(block => block.type !== "thinking" && block.type !== "redactedThinking")
 			: streamed.filter(block => block.type !== "thinking" && block.type !== "redactedThinking")),
-	]);
+	];
 }

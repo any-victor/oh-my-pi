@@ -105,6 +105,14 @@ test("Cursor streamed tool calls execute once through the normal agent loop and 
 					cursorResponse({
 						response: {
 							case: "textPart",
+							value: create(InferenceTextStreamPartSchema, { text: "joined", isFinal: false }),
+						},
+					}),
+				);
+				mapper.handle(
+					cursorResponse({
+						response: {
+							case: "textPart",
 							value: create(InferenceTextStreamPartSchema, { text: "joined", isFinal: true }),
 						},
 					}),

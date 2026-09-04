@@ -70,6 +70,10 @@ describe("Cursor managed-inference wire", () => {
 		const prefix = new Uint8Array(5);
 		new DataView(prefix.buffer).setUint32(1, CONNECT_MAX_FRAME_BYTES + 1, false);
 		expect(() => new ConnectFrameDecoder().push(prefix)).toThrow("exceeds");
+
+		const truncated = new ConnectFrameDecoder();
+		truncated.push(encodeConnectFrame(text("tail")).subarray(0, 7));
+		expect(() => truncated.end()).toThrow("mid-frame");
 	});
 
 	test("builds the exact IDE identity headers while rejecting caller overrides", () => {
@@ -116,6 +120,7 @@ describe("Cursor managed-inference wire", () => {
 		expect(deriveMacMachineId({ interfaces: () => interfaces })).toBe(
 			"4ede89a251930543e704b69f048db754f41e528296cf963d8ba66238781e429b",
 		);
+		expect(deriveMacMachineId({ interfaces: () => ({ loopback: [{ mac: "00:00:00:00:00:00" }] }) })).toBeUndefined();
 	});
 
 	test("persists one owner-only fallback and rejects corrupt identity", async () => {
