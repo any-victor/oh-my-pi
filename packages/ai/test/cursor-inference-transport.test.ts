@@ -344,13 +344,14 @@ describe("Cursor managed-inference transport", () => {
 		await listening.promise;
 		const address = stalledServer.address();
 		if (address === null || typeof address === "string") throw new Error("stalled server has no port");
+		const stalledOrigin = `https://127.0.0.1:${address.port}`;
 		let stalledSession: ClientHttp2Session | undefined;
 		const managed = runtime(
-			{ origin: `https://127.0.0.1:${address.port}` },
+			{ origin: stalledOrigin },
 			{
 				responseTimeoutMs: 20,
-				connect: authority => {
-					stalledSession = connect(authority, { rejectUnauthorized: false });
+				connect: () => {
+					stalledSession = connect(stalledOrigin, { rejectUnauthorized: false });
 					return stalledSession;
 				},
 			},
