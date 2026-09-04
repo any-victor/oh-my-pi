@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { InferenceMessageRole } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
 import { decodeJsonStruct, decodeJsonValue } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 import type { Context, Model, Tool } from "../src/types";
 import { buildInferenceRequest, buildInferenceRunRequest, inferenceRoutingKey } from "../src/providers/cursor/request";
@@ -84,6 +85,7 @@ describe("Cursor managed-inference request", () => {
 		expect(request.messages.map(message => message.role)).toEqual([4, 1, 2, 3]);
 		const assistant = request.messages[2];
 		expect(assistant?.content).toEqual({ case: "text", value: "Calling now." });
+		expect(assistant?.reasoningParts).toEqual([]);
 		expect(assistant?.modelProviderMessageId).toBe("response-1");
 		expect(decodeJsonStruct(assistant?.toolCalls[0]?.args ?? new Uint8Array())).toEqual({ left: "A", right: "B" });
 		const result = request.messages[3]?.content;
@@ -281,6 +283,36 @@ describe("Cursor managed-inference request", () => {
 			content: { case: "text", value: expect.stringContaining("retained output") },
 		});
 		expect(request.messages[0]?.content.case).not.toBe("toolContent");
+	});
+
+	test("drops an orphan result inside a pending tool-call window", () => {
+		const context = history();
+		const assistant = context.messages[1];
+		const result = context.messages[2];
+		if (assistant?.role !== "assistant" || result?.role !== "toolResult") {
+			throw new Error("tool history missing");
+		}
+		const request = buildInferenceRequest(cursorModel(), {
+			messages: [
+				assistant,
+				{
+					role: "toolResult",
+					toolCallId: "orphan",
+					toolName: "read",
+					content: [{ type: "text", text: "must not split the open window" }],
+					isError: false,
+					timestamp: 3,
+				},
+				result,
+			],
+		});
+		expect(request.messages.map(message => message.role)).toEqual([
+			InferenceMessageRole.ASSISTANT,
+			InferenceMessageRole.TOOL,
+		]);
+		const toolContent = request.messages[1]?.content;
+		if (toolContent?.case !== "toolContent") throw new Error("paired tool result missing");
+		expect(toolContent.value.parts[0]?.toolCallId).toBe(request.messages[0]?.toolCalls[0]?.toolCallId);
 	});
 
 	test("closes missing tool results before later reused ids", () => {

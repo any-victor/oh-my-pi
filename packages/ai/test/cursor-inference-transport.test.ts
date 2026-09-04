@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { ClientHttp2Session, Http2Server, ServerHttp2Session, ServerHttp2Stream } from "node:http2";
 import { connect, createServer } from "node:http2";
 import {
@@ -17,7 +17,11 @@ import {
 } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
 import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 import { CONNECT_FLAG_END_STREAM, ConnectFrameDecoder, encodeConnectFrame } from "../src/providers/cursor/connect";
-import { CursorInferenceRuntime, type CursorInferenceRuntimeOptions } from "../src/providers/cursor/transport";
+import {
+	CursorInferenceRun,
+	CursorInferenceRuntime,
+	type CursorInferenceRuntimeOptions,
+} from "../src/providers/cursor/transport";
 import type { RunInferenceClientMessage, RunInferenceServerMessage } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
 
 const IDENTITY = {
@@ -267,6 +271,59 @@ describe("Cursor managed-inference transport", () => {
 		const error = await rejection(pending);
 		expect(error).toHaveProperty("name", "AbortError");
 		await managed.shutdown();
+	});
+
+	test("settles an aborted invocation before its cancellation write drains", async () => {
+		const invocationReady = Promise.withResolvers<void>();
+		const target = await loopback((message, stream) => {
+			if (message.message.case === "runRequest") {
+				send(
+					stream,
+					serverMessage({
+						message: {
+							case: "runReady",
+							value: create(RunInferenceRunReadySchema, {
+								resolvedModel: create(InferenceRequestedModelSchema, { modelId: "composer-2.5" }),
+							}),
+						},
+					}),
+				);
+			}
+			if (message.message.case === "invokeModel") invocationReady.resolve();
+			if (message.message.case === "finishRun") {
+				stream.end(encodeConnectFrame(new TextEncoder().encode("{}"), CONNECT_FLAG_END_STREAM));
+			}
+		});
+		const originalSend = CursorInferenceRun.prototype.send;
+		const blockedCancellation = Promise.withResolvers<void>();
+		const sendSpy = spyOn(CursorInferenceRun.prototype, "send").mockImplementation(function (
+			this: CursorInferenceRun,
+			message: RunInferenceClientMessage,
+		) {
+			return message.message.case === "cancelInvocation"
+				? blockedCancellation.promise
+				: originalSend.call(this, message);
+		});
+		const managed = runtime(target);
+		try {
+			const controller = new AbortController();
+			const pending = managed.invoke(
+				"omp-session",
+				"route",
+				clientRun(),
+				"cancelled",
+				create(InferenceStreamRequestSchema),
+				{ signal: controller.signal, onMessage: () => undefined },
+			);
+			await invocationReady.promise;
+			controller.abort();
+			const outcome = await Promise.race([rejection(pending), Bun.sleep(100).then(() => "still pending")]);
+			expect(outcome).toHaveProperty("name", "AbortError");
+		} finally {
+			blockedCancellation.resolve();
+			sendSpy.mockRestore();
+			await managed.shutdown();
+		}
 	});
 
 	test("cancels one ready invocation without cancelling its sibling", async () => {

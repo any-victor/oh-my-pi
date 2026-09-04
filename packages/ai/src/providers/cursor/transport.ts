@@ -454,6 +454,7 @@ export class CursorInferenceRun {
 			if (pending === undefined) return;
 			this.#pending.delete(invocationId);
 			this.#cancelled.add(invocationId);
+			result.reject(abortError());
 			void this.send(
 				create(RunInferenceClientMessageSchema, {
 					message: {
@@ -461,13 +462,7 @@ export class CursorInferenceRun {
 						value: create(RunInferenceCancelInvocationSchema, { invocationId }),
 					},
 				}),
-			).then(
-				() => result.reject(new DOMException("Aborted", "AbortError")),
-				error => {
-					result.reject(error);
-					this.#fail(error);
-				},
-			);
+			).catch(error => this.#fail(error));
 		};
 		this.#pending.set(invocationId, {
 			onMessage: options.onMessage,

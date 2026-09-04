@@ -131,15 +131,17 @@ export function messageToInference(message: Message, toolCallIds: ReadonlyMap<ob
 					visibleParts.push(part);
 					break;
 				case "thinking":
+					if (message.provider !== "cursor") break;
 					reasoningParts.push(
 						create(InferenceReasoningPartSchema, {
 							text: part.thinking,
 							signature: part.thinkingSignature,
-							modelName: message.provider === "cursor" ? message.upstreamModel : undefined,
+							modelName: message.upstreamModel,
 						}),
 					);
 					break;
 				case "redactedThinking":
+					if (message.provider !== "cursor") break;
 					reasoningParts.push(
 						create(InferenceReasoningPartSchema, { isRedacted: true, text: "", redactedData: part.data }),
 					);
@@ -295,6 +297,7 @@ function repairToolResultPairing(messages: readonly Message[]): Message[] {
 				repaired.push(message);
 				continue;
 			}
+			if (pending.length > 0) continue;
 			const text = message.content
 				.flatMap(part => (part.type === "text" && part.text.trim() !== "" ? [part.text] : []))
 				.join("\n");
