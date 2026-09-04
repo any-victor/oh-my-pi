@@ -151,4 +151,27 @@ describe("Cursor managed-inference wire", () => {
 			);
 		});
 	});
+
+	test("serializes concurrent fallback identity creation", async () => {
+		await withTempDir(async directory => {
+			let nextUuid = 0;
+			const identities = await Promise.all(
+				Array.from({ length: 8 }, () =>
+					loadCursorMachineIdentity(
+						directory,
+						dependencies({
+							platform: "aix",
+							interfaces: () => ({}),
+							createUuid: () => `123e4567-e89b-42d3-a456-${String(++nextUuid).padStart(12, "0")}`,
+						}),
+					),
+				),
+			);
+			expect(new Set(identities.map(identity => identity.machineId))).toEqual(
+				new Set(["123e4567-e89b-42d3-a456-000000000001"]),
+			);
+			const identityPath = join(directory, "cursor", "identity.json");
+			expect((await stat(identityPath)).mode & 0o777).toBe(0o600);
+		});
+	});
 });

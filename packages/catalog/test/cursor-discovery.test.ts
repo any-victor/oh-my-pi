@@ -254,6 +254,22 @@ describe("Cursor complete catalog join", () => {
 		});
 	});
 
+	it("strips KDL-authored effort labels from fallback display names", () => {
+		const usable = create(GetUsableModelsResponseSchema, {
+			models: [
+				model("claude-opus-5-thinking-xhigh-fast", {
+					displayName: "Claude Opus 5 Extra High Fast",
+				}),
+			],
+		});
+		const availableModels = create(AvailableModelsResponseSchema, {
+			models: [available("claude-opus-5-thinking-fast", { thinking: true, context: 300_000 })],
+		});
+		const defaultModel = create(GetDefaultModelForCliResponseSchema, { model: usable.models[0] });
+		const models = cursorCatalogModels(availableModels, usable, defaultModel, "https://api2.cursor.sh", new Map());
+		expect(models[0]?.name).toBe("Claude Opus 5 Fast");
+	});
+
 	it("publishes distinct normal and Max rows with exact context parameters", () => {
 		const models = builtCatalog();
 		expect(models.find(candidate => candidate.id === "gpt-5.6-sol")).toMatchObject({

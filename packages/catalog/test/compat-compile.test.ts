@@ -87,8 +87,8 @@ describe("compat compiler grammar", () => {
 			text: [
 				"behavior {",
 				'\tcursor-effort family-marker="gpt-" {',
-				'\t\ttier "none" level="off"',
-				'\t\ttier "medium" level="medium"',
+				'\t\ttier "none" level="off" display="None"',
+				'\t\ttier "medium" level="medium" display="Medium"',
 				'\t\tprefer "medium" "none"',
 				'\t\tparameter "reasoning" source="tier"',
 				'\t\tparameter "fast" source="fast"',
@@ -99,8 +99,8 @@ describe("compat compiler grammar", () => {
 		expect(compiled.cursorEffort).toEqual({
 			familyMarker: "gpt-",
 			tiers: [
-				{ suffix: "none", level: "off" },
-				{ suffix: "medium", level: "medium" },
+				{ suffix: "none", level: "off", display: "None" },
+				{ suffix: "medium", level: "medium", display: "Medium" },
 			],
 			preferredTiers: ["medium", "none"],
 			parameters: [

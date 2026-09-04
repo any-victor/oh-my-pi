@@ -20,7 +20,7 @@ import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/pro
 import { isRecord } from "@oh-my-pi/pi-utils";
 import * as AIError from "../../error";
 import type { ProviderResponseMetadata } from "../../types";
-import { formatConnectEndStreamError } from "../connect-error-detail";
+import { formatConnectEndStreamError, summarizeConnectErrorDetails } from "../connect-error-detail";
 import { CONNECT_FLAG_COMPRESSED, CONNECT_MAX_FRAME_BYTES, ConnectFrameDecoder, encodeConnectFrame } from "./connect";
 import { inferenceRequestHeaders } from "./headers";
 import type { CursorMachineIdentity } from "./identity";
@@ -143,7 +143,14 @@ function parseTrailer(body: Uint8Array): ConnectTrailer {
 }
 
 export function cursorInvocationErrorMessage(error: RunInferenceInvocationError): string {
-	return error.message.trim() === "" ? `Cursor invocation error ${error.code}` : error.message;
+	const message = error.message.trim() === "" ? `Cursor invocation error ${error.code}` : error.message;
+	const detail = summarizeConnectErrorDetails(
+		error.details.map(entry => ({
+			type: entry.type,
+			value: new TextDecoder().decode(entry.value),
+		})),
+	);
+	return detail === undefined ? message : `${message} [details: ${detail}]`;
 }
 
 function cursorInvocationError(error: RunInferenceInvocationError): Error {

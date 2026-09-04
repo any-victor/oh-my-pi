@@ -234,14 +234,14 @@ behavior {
     }
     model-operations provider="openai" { exact "o3"; prefix "gpt-"; operation "generate_image" }
     cursor-effort family-marker="gpt-" {
-        tier "none" level="off"
-        tier "minimal" level="minimal"
-        tier "low" level="low"
-        tier "medium" level="medium"
-        tier "high" level="high"
-        tier "xhigh" level="xhigh"
-        tier "extra-high" level="xhigh"
-        tier "max" level="max"
+        tier "none" level="off" display="None"
+        tier "minimal" level="minimal" display="Minimal"
+        tier "low" level="low" display="Low"
+        tier "medium" level="medium" display="Medium"
+        tier "high" level="high" display="High"
+        tier "xhigh" level="xhigh" display="Extra High"
+        tier "extra-high" level="xhigh" display="Extra High"
+        tier "max" level="max" display="Max"
         prefer "medium" "high" "low" "minimal" "xhigh" "max" "none" "extra-high"
         parameter "reasoning" source="tier"
         parameter "fast" source="fast"

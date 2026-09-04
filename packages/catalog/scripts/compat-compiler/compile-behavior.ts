@@ -322,11 +322,12 @@ export function compileBehavior(source: { file: string; text: string } | undefin
 				const parameterNodes = children.filter(child => child.name === "parameter");
 				if (!familyMarker || tierNodes.length === 0 || preferredNodes.length !== 1) malformed(node);
 				const tiers = tierNodes.map(child => {
-					ensureLeaf(child, ["level"]);
+					ensureLeaf(child, ["level", "display"]);
 					const values = positionalStrings(child);
 					const level = requiredProp(child, "level");
-					if (values.length !== 1 || !values[0] || !level) malformed(child);
-					return { suffix: values[0], level };
+					const display = requiredProp(child, "display");
+					if (values.length !== 1 || !values[0] || !level || !display) malformed(child);
+					return { suffix: values[0], level, display };
 				});
 				const preferredNode = preferredNodes[0];
 				ensureLeaf(preferredNode, []);

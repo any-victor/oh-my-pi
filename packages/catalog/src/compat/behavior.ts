@@ -96,6 +96,16 @@ export function cursorEffortPreference(): readonly string[] {
 	return behavior.cursorEffort?.preferredTiers ?? [];
 }
 
+/** Cursor effort display labels, longest first for unambiguous fallback-name stripping. */
+export function cursorEffortDisplayLabels(): readonly string[] {
+	return [
+		...new Set(
+			behavior.cursorEffort?.tiers.map(tier => tier.display).toSorted((left, right) => right.length - left.length) ??
+				[],
+		),
+	];
+}
+
 /** KDL-authored local effort level for one Cursor wire-id suffix. */
 export function cursorEffortLevel(tier: string): string | undefined {
 	return behavior.cursorEffort?.tiers.find(candidate => candidate.suffix === tier)?.level;

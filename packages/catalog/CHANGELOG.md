@@ -19,7 +19,7 @@
 ### Changed
 
 - Added the reconstructed Cursor `RunInference` protocol closure and removed the AgentService-only tool-schema projection flag from Cursor catalog models.
-- Moved Cursor effort-family discovery suffixes, normalized levels, and representative-tier preference into the compiled KDL policy.
+- Moved Cursor effort-family discovery suffixes, normalized levels, display labels, representative-tier preference, and generic route parameters into the compiled KDL policy.
 
 ### Fixed
 

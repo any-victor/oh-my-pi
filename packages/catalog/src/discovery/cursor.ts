@@ -1,6 +1,7 @@
 import * as http2 from "node:http2";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import {
+	cursorEffortDisplayLabels,
 	cursorEffortLevel,
 	cursorEffortPreference,
 	cursorEffortTierSuffix,
@@ -289,6 +290,16 @@ function displayName(model: ModelDetails): string {
 	return model.displayName || model.displayNameShort || model.displayModelId || model.modelId;
 }
 
+function stripEffortDisplayLabel(name: string): string {
+	for (const label of cursorEffortDisplayLabels()) {
+		const beforeFast = ` ${label} Fast`;
+		if (name.endsWith(beforeFast)) return `${name.slice(0, -beforeFast.length)} Fast`;
+		const suffix = ` ${label}`;
+		if (name.endsWith(suffix)) return name.slice(0, -suffix.length);
+	}
+	return name;
+}
+
 function familyReference(
 	family: ModelFamily,
 	references: ReadonlyMap<string, ModelSpec<"cursor-agent">>,
@@ -320,9 +331,7 @@ function providerModel(
 	const reference = familyReference(family, references);
 	const capturedName =
 		base.clientDisplayName === undefined || base.clientDisplayName === ""
-			? displayName(representative.model)
-					.replace(/ (?:None|Minimal|Low|Medium|High|Extra High|Max)(?= Fast$|$)/u, "")
-					.trim()
+			? stripEffortDisplayLabel(displayName(representative.model)).trim()
 			: base.clientDisplayName;
 	const cursorContext = variantContext(base, maxMode);
 	return {

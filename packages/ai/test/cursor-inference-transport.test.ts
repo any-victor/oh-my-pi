@@ -7,7 +7,9 @@ import {
 	InferenceStreamResponseSchema,
 	InferenceTextStreamPartSchema,
 	RunInferenceClientMessageSchema,
+	RunInferenceErrorDetailSchema,
 	RunInferenceInvocationEndSchema,
+	RunInferenceInvocationErrorSchema,
 	RunInferenceInvocationResponseSchema,
 	RunInferenceRunReadySchema,
 	RunInferenceRunRequestSchema,
@@ -398,6 +400,58 @@ describe("Cursor managed-inference transport", () => {
 					}),
 				);
 				stream.end(encodeConnectFrame(trailer, CONNECT_FLAG_END_STREAM));
+			}
+		});
+		const managed = runtime(target);
+		const error = await rejection(
+			managed.invoke("omp-session", "route", clientRun(), "failed", create(InferenceStreamRequestSchema), {
+				onMessage: () => undefined,
+			}),
+		);
+		expect(error).toHaveProperty("message", expect.stringContaining('cursor.quota: {"reason":"plan_limit"}'));
+		await managed.shutdown();
+	});
+
+	test("preserves structured details from invocation errors", async () => {
+		const target = await loopback((message, stream) => {
+			if (message.message.case === "runRequest") {
+				send(
+					stream,
+					serverMessage({
+						message: {
+							case: "runReady",
+							value: create(RunInferenceRunReadySchema, {
+								resolvedModel: create(InferenceRequestedModelSchema, { modelId: "composer-2.5" }),
+							}),
+						},
+					}),
+				);
+			}
+			if (message.message.case === "invokeModel") {
+				send(
+					stream,
+					serverMessage({
+						message: {
+							case: "invocationEnd",
+							value: create(RunInferenceInvocationEndSchema, {
+								invocationId: message.message.value.invocationId,
+								error: create(RunInferenceInvocationErrorSchema, {
+									code: 8,
+									message: "Error",
+									details: [
+										create(RunInferenceErrorDetailSchema, {
+											type: "cursor.quota",
+											value: new TextEncoder().encode('{"reason":"plan_limit"}'),
+										}),
+									],
+								}),
+							}),
+						},
+					}),
+				);
+			}
+			if (message.message.case === "finishRun") {
+				stream.end(encodeConnectFrame(new TextEncoder().encode("{}"), CONNECT_FLAG_END_STREAM));
 			}
 		});
 		const managed = runtime(target);

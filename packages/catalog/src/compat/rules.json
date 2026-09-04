@@ -15286,35 +15286,43 @@
 			"tiers": [
 				{
 					"suffix": "none",
-					"level": "off"
+					"level": "off",
+					"display": "None"
 				},
 				{
 					"suffix": "minimal",
-					"level": "minimal"
+					"level": "minimal",
+					"display": "Minimal"
 				},
 				{
 					"suffix": "low",
-					"level": "low"
+					"level": "low",
+					"display": "Low"
 				},
 				{
 					"suffix": "medium",
-					"level": "medium"
+					"level": "medium",
+					"display": "Medium"
 				},
 				{
 					"suffix": "high",
-					"level": "high"
+					"level": "high",
+					"display": "High"
 				},
 				{
 					"suffix": "xhigh",
-					"level": "xhigh"
+					"level": "xhigh",
+					"display": "Extra High"
 				},
 				{
 					"suffix": "extra-high",
-					"level": "xhigh"
+					"level": "xhigh",
+					"display": "Extra High"
 				},
 				{
 					"suffix": "max",
-					"level": "max"
+					"level": "max",
+					"display": "Max"
 				}
 			],
 			"preferredTiers": [

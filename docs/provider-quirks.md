@@ -491,7 +491,8 @@ messages.
   and commit headers. If host identity cannot be derived, OMP persists one
   owner-only UUID fallback under the agent directory and logs the fallback. Host
   lookup runs through the shared supervised process utility with a five-second
-  deadline and concurrent stdout/stderr draining.
+  deadline and concurrent stdout/stderr draining; fallback creation uses the
+  shared cross-process file lock before any winning-file read.
 - **PKCE OAuth:** the existing browser login, polling, and refresh flow remains in
   `packages/ai/src/registry/oauth/cursor.ts`.
 - **Usage:** `packages/ai/src/usage/cursor.ts` continues to combine the standard
@@ -517,7 +518,7 @@ messages.
   context windows come from `AvailableModels`; effort routing comes from usable
   family members; bundled references supply stable cost and output-token data.
   Effort suffixes, normalized levels, representative-tier preference, and generic
-  route parameters come from the compiled `cursor-effort` KDL policy rather than
+  display labels, and route parameters come from the compiled `cursor-effort` KDL policy rather than
   discovery or request code. Context is sent only when the selected catalog
   variant provides an authoritative `cursorContext` value.
 - A distinct Max catalog row is emitted only when Cursor reports a real
