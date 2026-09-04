@@ -36,7 +36,15 @@ behavior {
 	// family marker uses a `gpt-` prefix followed immediately by an ASCII
 	// version digit.
 	cursor-effort family-marker="gpt-" {
-		tier "none" "minimal" "low" "medium" "high" "xhigh" "extra-high" "max"
+		tier "none" level="off"
+		tier "minimal" level="minimal"
+		tier "low" level="low"
+		tier "medium" level="medium"
+		tier "high" level="high"
+		tier "xhigh" level="xhigh"
+		tier "extra-high" level="xhigh"
+		tier "max" level="max"
+		prefer "medium" "high" "low" "minimal" "xhigh" "max" "none" "extra-high"
 	}
 	// Exact fixed parameters observed outside effort-suffixed families.
 	cursor-model-parameter model="auto-smart" id="optimize_for" value="balanced"

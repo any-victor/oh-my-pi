@@ -15284,14 +15284,48 @@
 		"cursorEffort": {
 			"familyMarker": "gpt-",
 			"tiers": [
-				"none",
-				"minimal",
-				"low",
+				{
+					"suffix": "none",
+					"level": "off"
+				},
+				{
+					"suffix": "minimal",
+					"level": "minimal"
+				},
+				{
+					"suffix": "low",
+					"level": "low"
+				},
+				{
+					"suffix": "medium",
+					"level": "medium"
+				},
+				{
+					"suffix": "high",
+					"level": "high"
+				},
+				{
+					"suffix": "xhigh",
+					"level": "xhigh"
+				},
+				{
+					"suffix": "extra-high",
+					"level": "xhigh"
+				},
+				{
+					"suffix": "max",
+					"level": "max"
+				}
+			],
+			"preferredTiers": [
 				"medium",
 				"high",
+				"low",
+				"minimal",
 				"xhigh",
-				"extra-high",
-				"max"
+				"max",
+				"none",
+				"extra-high"
 			]
 		}
 	},

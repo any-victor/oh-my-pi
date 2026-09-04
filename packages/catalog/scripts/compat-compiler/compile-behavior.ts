@@ -317,13 +317,30 @@ export function compileBehavior(source: { file: string; text: string } | undefin
 				if (behavior.cursorEffort) malformed(node);
 				const children = ensureContainer(node, ["family-marker"]);
 				const familyMarker = requiredProp(node, "family-marker");
-				if (!familyMarker || children.length !== 1 || children[0].name !== "tier" || children[0].children) {
+				const tierNodes = children.filter(child => child.name === "tier");
+				const preferredNodes = children.filter(child => child.name === "prefer");
+				if (!familyMarker || tierNodes.length === 0 || preferredNodes.length !== 1) malformed(node);
+				const tiers = tierNodes.map(child => {
+					ensureLeaf(child, ["level"]);
+					const values = positionalStrings(child);
+					const level = requiredProp(child, "level");
+					if (values.length !== 1 || !values[0] || !level) malformed(child);
+					return { suffix: values[0], level };
+				});
+				const preferredNode = preferredNodes[0];
+				ensureLeaf(preferredNode, []);
+				const preferredTiers = positionalStrings(preferredNode);
+				const suffixes = tiers.map(tier => tier.suffix);
+				if (
+					children.length !== tiers.length + 1 ||
+					preferredTiers.length !== tiers.length ||
+					new Set(suffixes).size !== suffixes.length ||
+					new Set(preferredTiers).size !== preferredTiers.length ||
+					preferredTiers.some(tier => !suffixes.includes(tier))
+				) {
 					malformed(node);
 				}
-				validateProps(children[0], []);
-				const tiers = positionalStrings(children[0]);
-				if (tiers.length === 0) malformed(node);
-				behavior.cursorEffort = { familyMarker, tiers };
+				behavior.cursorEffort = { familyMarker, tiers, preferredTiers };
 				break;
 			}
 			case "cursor-model-parameter": {

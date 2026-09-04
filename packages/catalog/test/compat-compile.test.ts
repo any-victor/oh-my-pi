@@ -81,6 +81,29 @@ describe("compat compiler grammar", () => {
 		).toThrow(/malformed value/);
 	});
 
+	test("cursor-effort compiles suffix normalization and preference order", () => {
+		const compiled = compileBehavior({
+			file: "runtime/behavior.kdl",
+			text: [
+				"behavior {",
+				'\tcursor-effort family-marker="gpt-" {',
+				'\t\ttier "none" level="off"',
+				'\t\ttier "medium" level="medium"',
+				'\t\tprefer "medium" "none"',
+				"\t}",
+				"}",
+			].join("\n"),
+		});
+		expect(compiled.cursorEffort).toEqual({
+			familyMarker: "gpt-",
+			tiers: [
+				{ suffix: "none", level: "off" },
+				{ suffix: "medium", level: "medium" },
+			],
+			preferredTiers: ["medium", "none"],
+		});
+	});
+
 	test("duplicate axis in one block is rejected", () => {
 		expect(() =>
 			compileCascade([

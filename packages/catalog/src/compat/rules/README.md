@@ -233,7 +233,17 @@ behavior {
         exclude-substring "embedding"
     }
     model-operations provider="openai" { exact "o3"; prefix "gpt-"; operation "generate_image" }
-    cursor-effort family-marker="gpt-" { tier "minimal" "low" "medium" "high" "xhigh" "max" }
+    cursor-effort family-marker="gpt-" {
+        tier "none" level="off"
+        tier "minimal" level="minimal"
+        tier "low" level="low"
+        tier "medium" level="medium"
+        tier "high" level="high"
+        tier "xhigh" level="xhigh"
+        tier "extra-high" level="xhigh"
+        tier "max" level="max"
+        prefer "medium" "high" "low" "minimal" "xhigh" "max" "none" "extra-high"
+    }
     cursor-model-parameter model="composer-2.5" id="fast" value="false"
     cursor-model-route model="gemini-3.7-flash-high" target="gemini-3.7-flash" {
         parameter "effort" "high"

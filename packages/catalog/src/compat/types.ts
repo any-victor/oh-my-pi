@@ -242,7 +242,8 @@ export interface CompiledModelOperations {
 /** Cursor effort-suffix sibling vocabulary. */
 export interface CompiledCursorEffort {
 	familyMarker: string;
-	tiers: string[];
+	tiers: { suffix: string; level: string }[];
+	preferredTiers: string[];
 }
 
 /** One fixed Cursor `requestedModel` parameter. */

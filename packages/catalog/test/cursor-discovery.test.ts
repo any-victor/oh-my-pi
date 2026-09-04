@@ -213,6 +213,18 @@ describe("Cursor complete catalog join", () => {
 		expect(grok[0]).toMatchObject({ contextWindow: 256_000, cursorMaxMode: false });
 	});
 
+	it("does not collapse undeclared effort-looking model families", () => {
+		const usable = create(GetUsableModelsResponseSchema, {
+			models: [model("future-model-low"), model("future-model-high")],
+		});
+		const availableModels = create(AvailableModelsResponseSchema, {
+			models: [available("future-model-low"), available("future-model-high")],
+		});
+		const defaultModel = create(GetDefaultModelForCliResponseSchema, { model: usable.models[1] });
+		const models = cursorCatalogModels(availableModels, usable, defaultModel, "https://api2.cursor.sh", new Map());
+		expect(models.map(candidate => candidate.id)).toEqual(["future-model-low", "future-model-high"]);
+	});
+
 	it("publishes distinct normal and Max rows with exact context parameters", () => {
 		const models = builtCatalog();
 		expect(models.find(candidate => candidate.id === "gpt-5.6-sol")).toMatchObject({

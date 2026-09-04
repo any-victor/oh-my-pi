@@ -1,7 +1,8 @@
 import * as http2 from "node:http2";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { cursorEffortLevel, cursorEffortPreference, cursorEffortSuffix, cursorModelRoute } from "../compat/behavior";
 import { classifyModel } from "../compat/taxonomy";
-import { Effort } from "../effort";
+import { Effort, THINKING_EFFORTS } from "../effort";
 import { getBundledModels } from "../models";
 import { toModelSpec } from "../provider-models/bundled-references";
 import type { Model, ModelSpec } from "../types";
@@ -30,35 +31,6 @@ const CURSOR_GET_DEFAULT_MODEL_PATH = "/agent.v1.AgentService/GetDefaultModelFor
 const CURSOR_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024;
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 64_000;
-const CURSOR_EFFORT_SUFFIX = /^(.*)-(none|minimal|low|medium|high|xhigh|extra-high|max)(-fast)?$/u;
-
-const LEVEL_BY_TOKEN: Readonly<Record<string, Effort | "off">> = {
-	none: "off",
-	minimal: Effort.Minimal,
-	low: Effort.Low,
-	medium: Effort.Medium,
-	high: Effort.High,
-	xhigh: Effort.XHigh,
-	"extra-high": Effort.XHigh,
-	max: Effort.Max,
-};
-const PREFERRED_LEVELS: readonly (Effort | "off")[] = [
-	Effort.Medium,
-	Effort.High,
-	Effort.Low,
-	Effort.Minimal,
-	Effort.XHigh,
-	Effort.Max,
-	"off",
-];
-const THINKING_LEVELS: readonly Effort[] = [
-	Effort.Minimal,
-	Effort.Low,
-	Effort.Medium,
-	Effort.High,
-	Effort.XHigh,
-	Effort.Max,
-];
 
 /** Options for fetching and joining Cursor's three model-catalog surfaces. */
 export interface CursorModelDiscoveryOptions {
@@ -193,12 +165,35 @@ function createCursorReferenceMap(): Map<string, ModelSpec<"cursor-agent">> {
 	return references;
 }
 
+function localEffortLevel(value: string | undefined): Effort | "off" | undefined {
+	if (value === "off") return "off";
+	return THINKING_EFFORTS.find(effort => effort === value);
+}
+
+function routedEffortSuffix(
+	modelId: string,
+): { readonly base: string; readonly level: Effort | "off"; readonly fast: boolean } | undefined {
+	const route = cursorModelRoute(modelId);
+	const routedLevel = localEffortLevel(route?.parameters.find(parameter => parameter.id === "effort")?.value);
+	if (route === undefined || routedLevel === undefined) return undefined;
+	const fast = route.parameters.some(parameter => parameter.id === "fast" && parameter.value === "true");
+	const candidate = fast && modelId.endsWith("-fast") ? modelId.slice(0, -"-fast".length) : modelId;
+	for (const tier of cursorEffortPreference()) {
+		if (localEffortLevel(cursorEffortLevel(tier)) !== routedLevel || !candidate.endsWith(`-${tier}`)) continue;
+		return { base: candidate.slice(0, -tier.length - 1), level: routedLevel, fast };
+	}
+	return undefined;
+}
+
 function familyFor(model: ModelDetails): { readonly id: string; readonly level: Effort | "off" } {
-	const match = CURSOR_EFFORT_SUFFIX.exec(model.modelId);
-	const base = match?.[1];
-	const level = LEVEL_BY_TOKEN[match?.[2] ?? ""];
-	if (base === undefined || level === undefined) return { id: model.modelId, level: "off" };
-	return { id: `${base}${match?.[3] === "-fast" ? "-fast" : ""}`, level };
+	const generic = cursorEffortSuffix(model.modelId);
+	const genericLevel = localEffortLevel(generic?.level);
+	const matched =
+		generic !== undefined && genericLevel !== undefined
+			? { base: generic.base, level: genericLevel, fast: generic.fast }
+			: routedEffortSuffix(model.modelId);
+	if (matched === undefined) return { id: model.modelId, level: "off" };
+	return { id: `${matched.base}${matched.fast ? "-fast" : ""}`, level: matched.level };
 }
 
 function modelFamilies(models: readonly ModelDetails[]): ModelFamily[] {
@@ -294,12 +289,14 @@ function providerModel(
 	references: ReadonlyMap<string, ModelSpec<"cursor-agent">>,
 ): ModelSpec<"cursor-agent"> {
 	const representative =
-		PREFERRED_LEVELS.flatMap(level => family.members.filter(member => member.level === level))[0] ??
-		family.members[0];
+		cursorEffortPreference().flatMap(tier => {
+			const level = localEffortLevel(cursorEffortLevel(tier));
+			return level === undefined ? [] : family.members.filter(member => member.level === level);
+		})[0] ?? family.members[0];
 	if (representative === undefined) throw new Error(`Cursor model family '${family.id}' is empty`);
 	const effortRouting: Partial<Record<Effort | "off", string>> = {};
 	for (const member of family.members) effortRouting[member.level] = member.model.modelId;
-	const efforts = THINKING_LEVELS.filter(level => effortRouting[level] !== undefined);
+	const efforts = THINKING_EFFORTS.filter(level => effortRouting[level] !== undefined);
 	const reasoning = base.supportsThinking === true;
 	const reference = familyReference(family, references);
 	const capturedName =

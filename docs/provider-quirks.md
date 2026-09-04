@@ -458,10 +458,11 @@ messages.
 - **Model routing:** the outer run carries the stable session identity, routing
   conversation, and resolved Cursor model parameters. A model/header routing
   change cleanly finishes the old run before opening another.
-- **Multiplexing:** one account-scoped runtime reuses its HTTP/2 session and keeps
-  independent routed runs per OMP session. Invocation responses are correlated by
-  exact ID, delivered in order per invocation, bounded in count/bytes, and
-  cancellable without cancelling sibling invocations.
+- **Multiplexing:** one credential/base/proxy-scoped runtime reuses its HTTP/2
+  session and keeps independent routed runs per OMP session. Concurrent runtime
+  creation is serialized per scope, while different credentials remain isolated.
+  Invocation responses are correlated by exact ID, delivered in order per
+  invocation, bounded in count/bytes, and cancellable without cancelling siblings.
 - **Connect framing:** messages use five-byte Connect envelopes, gzip for larger
   client frames, a 16 MiB frame cap, and a required JSON end-stream trailer.
 - **Final reconciliation:** completed streamed tools must equal the final response
@@ -502,6 +503,8 @@ messages.
 - Dynamic models keep the public `cursor-agent` API identifier. Capabilities and
   context windows come from `AvailableModels`; effort routing comes from usable
   family members; bundled references supply stable cost and output-token data.
+  Effort suffixes, normalized levels, and representative-tier preference come
+  from the compiled `cursor-effort` KDL policy rather than discovery code.
 - A distinct Max catalog row is emitted only when Cursor reports a real
   non-Max/Max difference. The selected row carries `cursorMaxMode` and the
   variant's exact `cursorContext` value, which `RunInference` sends with the
