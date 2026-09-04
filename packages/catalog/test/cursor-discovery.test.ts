@@ -214,10 +214,11 @@ describe("Cursor complete catalog join", () => {
 		expect(second.cacheProviderId).not.toBe(first.cacheProviderId);
 		expect(alternate.cacheProviderId).not.toBe(first.cacheProviderId);
 		expect(first.dynamicModelsAuthoritative).toBe(true);
+		expect(first.dynamicModelCapabilitiesAuthoritative).toBe(true);
 		expect(isCredentialScopedModelCacheProvider("cursor")).toBe(true);
 	});
 
-	it("applies authoritative discovered capabilities without provider-specific policy", async () => {
+	it("applies explicitly authoritative discovered capabilities without provider-specific branches", async () => {
 		const base = {
 			id: "account-scoped-route",
 			name: "Account-scoped Route",
@@ -233,6 +234,7 @@ describe("Cursor complete catalog join", () => {
 			staticModels: [{ ...base, reasoning: true, input: ["text", "image"] }],
 			fetchDynamicModels: async () => [{ ...base, reasoning: false, input: ["text"] }],
 			dynamicModelsAuthoritative: true,
+			dynamicModelCapabilitiesAuthoritative: true,
 			cacheDbPath: ":memory:",
 		});
 

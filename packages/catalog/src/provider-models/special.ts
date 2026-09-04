@@ -121,6 +121,7 @@ export function cursorModelManagerOptions(config: CursorModelManagerConfig = {})
 		providerId: "cursor",
 		cacheProviderId: resolveModelCacheProviderId("cursor", { apiKey, baseUrl }),
 		dynamicModelsAuthoritative: true,
+		dynamicModelCapabilitiesAuthoritative: true,
 		...(apiKey
 			? {
 					fetchDynamicModels: async () => {

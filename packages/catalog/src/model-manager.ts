@@ -42,6 +42,13 @@ export interface ModelManagerOptions<TApi extends Api = Api, TModelsDevPayload =
 	cacheTtlMs?: number;
 	/** When true, a successful dynamic fetch is the complete provider catalog and prunes static-only models. */
 	dynamicModelsAuthoritative?: boolean;
+	/**
+	 * When true, a successful dynamic row's reasoning and input modalities replace
+	 * same-id catalog metadata instead of being conservatively combined with it.
+	 * Use only for endpoints whose schema reports the complete capability set;
+	 * ID-only authoritative catalogs must leave this false so models.dev can enrich them.
+	 */
+	dynamicModelCapabilitiesAuthoritative?: boolean;
 	/** Cached model ids whose presence forces refresh when the static or migration-policy fingerprint changes. */
 	dropCachedModelIdsOnStaticMismatch?: readonly string[];
 	/**
@@ -215,8 +222,13 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const usableCachedModels = restoredCache.models.filter(model => !restoredCache.unresolvedModelIds.has(model.id));
 	const cacheHasUnresolvedHeaders = restoredCache.unresolvedModelIds.size > 0;
 	const dynamicModelsAuthoritative = options.dynamicModelsAuthoritative ?? false;
+	const dynamicModelCapabilitiesAuthoritative = options.dynamicModelCapabilitiesAuthoritative ?? false;
 	const cacheDropIds = options.dropCachedModelIdsOnStaticMismatch;
-	const staticCatalogFingerprint = fingerprintStaticModels(staticModels, dynamicModelsAuthoritative);
+	const staticCatalogFingerprint = fingerprintStaticModels(
+		staticModels,
+		dynamicModelsAuthoritative,
+		dynamicModelCapabilitiesAuthoritative,
+	);
 	// Endpoint-migration policy is cache identity: adding an id must invalidate
 	// matching-static-catalog caches written by the prior resolver.
 	const staticFingerprint =
@@ -317,9 +329,10 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const mergedWithCatalogMetrics = additiveStaticModelIds
 		? mergeCatalogMetrics(mergedWithModelsDev, catalogMetricsSource)
 		: mergedWithModelsDev;
-	// Shared catalog rows enrich costs and limits, but a successful authoritative
-	// provider catalog still owns each route's explicit capability set.
-	const dynamicCapabilitiesAuthoritative = authoritativeDynamicFetchSucceeded;
+	// Shared catalog rows enrich costs, limits, and capabilities by default. A
+	// provider with a complete capability schema may explicitly keep its dynamic
+	// reasoning and modality values authoritative while still taking catalog metrics.
+	const dynamicCapabilitiesAuthoritative = authoritativeDynamicFetchSucceeded && dynamicModelCapabilitiesAuthoritative;
 	const mergedModels = mergeDynamicModels(mergedWithCatalogMetrics, dynamicModels, dynamicCapabilitiesAuthoritative);
 	const models = collapseBuiltVariants(
 		authoritativeDynamicFetchSucceeded ? retainModelIds(mergedModels, dynamicModels) : mergedModels,
@@ -529,10 +542,12 @@ type ModelArrayWithFingerprint = readonly (ModelSpec<Api> | Model<Api>)[] & { [k
 export function fingerprintStaticModels<TApi extends Api>(
 	models: readonly (ModelSpec<TApi> | Model<TApi>)[],
 	dynamicModelsAuthoritative = false,
+	dynamicModelCapabilitiesAuthoritative = false,
 ): string {
-	if (models.length === 0) return `${MODEL_CACHE_FINGERPRINT_VERSION}:empty`;
+	const capabilityScope = dynamicModelCapabilitiesAuthoritative ? ":capabilities" : "";
+	if (models.length === 0) return `${MODEL_CACHE_FINGERPRINT_VERSION}${capabilityScope}:empty`;
 	if (dynamicModelsAuthoritative)
-		return `${MODEL_CACHE_FINGERPRINT_VERSION}:authoritative:${fingerprintStaticModels(models)}`;
+		return `${MODEL_CACHE_FINGERPRINT_VERSION}:authoritative${capabilityScope}:${fingerprintStaticModels(models)}`;
 	const tagged = models as ModelArrayWithFingerprint;
 	const cached = tagged[kStaticFingerprint];
 	if (cached !== undefined) return cached;
