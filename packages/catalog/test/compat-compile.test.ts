@@ -90,6 +90,8 @@ describe("compat compiler grammar", () => {
 				'\t\ttier "none" level="off"',
 				'\t\ttier "medium" level="medium"',
 				'\t\tprefer "medium" "none"',
+				'\t\tparameter "reasoning" source="tier"',
+				'\t\tparameter "fast" source="fast"',
 				"\t}",
 				"}",
 			].join("\n"),
@@ -101,6 +103,10 @@ describe("compat compiler grammar", () => {
 				{ suffix: "medium", level: "medium" },
 			],
 			preferredTiers: ["medium", "none"],
+			parameters: [
+				{ id: "reasoning", source: "tier" },
+				{ id: "fast", source: "fast" },
+			],
 		});
 	});
 

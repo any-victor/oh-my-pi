@@ -15326,6 +15326,16 @@
 				"max",
 				"none",
 				"extra-high"
+			],
+			"parameters": [
+				{
+					"id": "reasoning",
+					"source": "tier"
+				},
+				{
+					"id": "fast",
+					"source": "fast"
+				}
 			]
 		}
 	},

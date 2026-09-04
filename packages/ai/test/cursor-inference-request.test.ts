@@ -114,6 +114,41 @@ describe("Cursor managed-inference request", () => {
 		expect(toolContent.value.parts[0]?.toolCallId).toBe("call_123_fc_456");
 	});
 
+	test("keeps colliding normalized tool-call ids unique", () => {
+		const context = history();
+		const assistant = context.messages[1];
+		const firstResult = context.messages[2];
+		if (assistant?.role !== "assistant" || firstResult?.role !== "toolResult") {
+			throw new Error("tool history missing");
+		}
+		const firstCall = assistant.content.find(part => part.type === "toolCall");
+		if (firstCall?.type !== "toolCall") throw new Error("tool call missing");
+		firstCall.id = "call:a";
+		firstResult.toolCallId = "call:a";
+		assistant.content.push({
+			type: "toolCall",
+			id: "call/a",
+			name: TOOL.name,
+			arguments: { left: "C", right: "D" },
+		});
+		context.messages.push({
+			role: "toolResult",
+			toolCallId: "call/a",
+			toolName: TOOL.name,
+			content: [{ type: "text", text: "CD" }],
+			isError: false,
+			timestamp: 4,
+		});
+
+		const request = buildInferenceRequest(context);
+		expect(request.messages[2]?.toolCalls.map(call => call.toolCallId)).toEqual(["call_a", "call_a_dup1"]);
+		const resultIds = request.messages.slice(3).map(message => {
+			if (message.content?.case !== "toolContent") throw new Error("tool result missing");
+			return message.content.value.parts[0]?.toolCallId;
+		});
+		expect(resultIds).toEqual(["call_a", "call_a_dup1"]);
+	});
+
 	test("omits tools for none and rejects unsupported forced choices", () => {
 		expect(buildInferenceRequest(history(), { toolChoice: "none" }).tools).toEqual([]);
 		expect(() => buildInferenceRequest(history(), { toolChoice: "required" })).toThrow(
@@ -218,7 +253,6 @@ describe("Cursor managed-inference request", () => {
 			modelId: "gpt-5.6-sol",
 			maxMode: false,
 			parameters: [
-				{ id: "context", value: "272k" },
 				{ id: "reasoning", value: "high" },
 				{ id: "fast", value: "false" },
 			],

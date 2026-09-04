@@ -243,6 +243,8 @@ behavior {
         tier "extra-high" level="xhigh"
         tier "max" level="max"
         prefer "medium" "high" "low" "minimal" "xhigh" "max" "none" "extra-high"
+        parameter "reasoning" source="tier"
+        parameter "fast" source="fast"
     }
     cursor-model-parameter model="composer-2.5" id="fast" value="false"
     cursor-model-route model="gemini-3.7-flash-high" target="gemini-3.7-flash" {

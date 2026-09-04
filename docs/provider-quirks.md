@@ -452,15 +452,17 @@ messages.
   tool-call, and tool-result message is projected into `InferenceCoreMessage`.
   Cross-provider history, reasoning signatures, redacted reasoning, images, and
   image-bearing tool results remain in context. Tool-call and matching result IDs
-  are normalized to Cursor's accepted charset and length during replay.
+  use one collision-resistant per-context mapping into Cursor's accepted charset
+  and length during replay.
 - **Tool ownership:** active OMP tools are serialized as `InferenceAgentTool`.
   `toolChoice: "none"` omits the catalog; required and named forcing fail clearly
   because `RunInference` exposes no equivalent wire control. The server returns
   correlated `toolCallPart` deltas; completed JSON arguments become ordinary
   `ToolCall` blocks and execute only through `agent-loop`.
 - **Model routing:** the outer run carries the stable session identity, routing
-  conversation, and resolved Cursor model parameters. A model/header routing
-  change cleanly finishes the old run before opening another.
+  conversation, and resolved Cursor model parameters. Tool-result continuations
+  reuse that run; each later user turn cleanly finishes it and opens a new run so
+  updated routing conversation can select a different model.
 - **Multiplexing:** one credential/base/proxy-scoped runtime reuses its HTTP/2
   session and keeps independent routed runs per OMP session. Concurrent runtime
   creation is serialized per scope, while different credentials remain isolated.
@@ -514,8 +516,10 @@ messages.
 - Dynamic models keep the public `cursor-agent` API identifier. Capabilities and
   context windows come from `AvailableModels`; effort routing comes from usable
   family members; bundled references supply stable cost and output-token data.
-  Effort suffixes, normalized levels, and representative-tier preference come
-  from the compiled `cursor-effort` KDL policy rather than discovery code.
+  Effort suffixes, normalized levels, representative-tier preference, and generic
+  route parameters come from the compiled `cursor-effort` KDL policy rather than
+  discovery or request code. Context is sent only when the selected catalog
+  variant provides an authoritative `cursorContext` value.
 - A distinct Max catalog row is emitted only when Cursor reports a real
   non-Max/Max difference. The selected row carries `cursorMaxMode` and the
   variant's exact `cursorContext` value, which `RunInference` sends with the

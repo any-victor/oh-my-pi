@@ -101,6 +101,16 @@ export function cursorEffortLevel(tier: string): string | undefined {
 	return behavior.cursorEffort?.tiers.find(candidate => candidate.suffix === tier)?.level;
 }
 
+/** KDL-authored parameters for a generic Cursor effort-suffixed model. */
+export function cursorEffortParameters(tier: string, fast: boolean): readonly { id: string; value: string }[] {
+	return (
+		behavior.cursorEffort?.parameters.map(parameter => ({
+			id: parameter.id,
+			value: parameter.source === "tier" ? tier : String(fast),
+		})) ?? []
+	);
+}
+
 /** Exact source-measured Cursor requested-model route declared in behavior KDL. */
 export function cursorModelRoute(
 	model: string,

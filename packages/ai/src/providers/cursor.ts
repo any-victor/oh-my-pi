@@ -7,6 +7,7 @@ import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import * as AIError from "../error";
 import type {
 	AssistantMessage,
+	Context,
 	Model,
 	ProviderSessionState,
 	StreamFunction,
@@ -115,6 +116,10 @@ function outputFor(model: Model<"cursor-agent">, timestamp: number): AssistantMe
 	};
 }
 
+function isToolContinuation(context: Context): boolean {
+	return context.messages.at(-1)?.role === "toolResult";
+}
+
 function stableHeaderKey(headers: Record<string, string> | undefined): string {
 	return JSON.stringify(
 		Object.entries(sanitizeCursorCallerHeaders(headers)).sort(([left], [right]) => left.localeCompare(right)),
@@ -185,6 +190,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (model, context, raw
 			const runtime = await state.runtimeFor(apiKey, baseUrl, model.provider);
 			const routeKey = `${inferenceRoutingKey(model, requestedModel)}\0${stableHeaderKey(options.headers)}`;
 			await runtime.invoke(sessionId, routeKey, runRequest, invocationId, request, {
+				reuseRun: isToolContinuation(context),
 				signal: options.signal,
 				callerHeaders: options.headers,
 				onResponse: metadata => options.onResponse?.(metadata, model),

@@ -57,6 +57,8 @@ export interface CursorInferenceRuntimeOptions {
 }
 
 export interface CursorInferenceInvokeOptions {
+	/** Reuse the current outer run only for a tool-result continuation of the same turn. */
+	readonly reuseRun?: boolean;
 	readonly signal?: AbortSignal;
 	readonly callerHeaders?: Record<string, string>;
 	readonly onResponse?: (response: ProviderResponseMetadata) => void | Promise<void>;
@@ -638,6 +640,7 @@ export class CursorInferenceRuntime {
 		runRequest: RunInferenceClientMessage,
 		callerHeaders?: Record<string, string>,
 		signal?: AbortSignal,
+		reuseRun = true,
 	): Promise<CursorInferenceRun> {
 		if (sessionId === "") throw new Error("Cursor managed inference requires a stable session id");
 		const previous = this.#runLocks.get(sessionId) ?? Promise.resolve();
@@ -647,7 +650,7 @@ export class CursorInferenceRuntime {
 		await previous;
 		try {
 			const slot = this.#runs.get(sessionId);
-			if (slot?.routeKey === routeKey) return slot.run;
+			if (reuseRun && slot?.routeKey === routeKey) return slot.run;
 			if (slot !== undefined) {
 				this.#runs.delete(sessionId);
 				await slot.run.finish(this.#options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS);
@@ -673,7 +676,14 @@ export class CursorInferenceRuntime {
 		request: InferenceStreamRequest,
 		options: CursorInferenceInvokeOptions,
 	): Promise<CursorInferenceInvocation> {
-		const run = await this.runFor(sessionId, routeKey, runRequest, options.callerHeaders, options.signal);
+		const run = await this.runFor(
+			sessionId,
+			routeKey,
+			runRequest,
+			options.callerHeaders,
+			options.signal,
+			options.reuseRun,
+		);
 		return await run.invoke(invocationId, request, options);
 	}
 

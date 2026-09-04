@@ -37,7 +37,12 @@ import {
 import type { Context, ImageContent, Message, Model, TextContent, Tool, ToolChoice } from "../../types";
 import { normalizeSystemPrompts, normalizeToolCallId } from "../../utils";
 import { toolWireSchema } from "../../utils/schema";
-import { cursorEffortSuffix, cursorModelParameters, cursorModelRoute } from "@oh-my-pi/pi-catalog/compat/behavior";
+import {
+	cursorEffortParameters,
+	cursorEffortSuffix,
+	cursorModelParameters,
+	cursorModelRoute,
+} from "@oh-my-pi/pi-catalog/compat/behavior";
 
 export interface CursorInferenceRequestOptions {
 	readonly maxTokens?: number;
@@ -108,7 +113,7 @@ function toolResultExperimentalContent(message: Extract<Message, { role: "toolRe
 	return message.content.map(part => (part.type === "text" ? textPart(part.text) : imagePart(part)));
 }
 
-export function messageToInference(message: Message): InferenceCoreMessage {
+export function messageToInference(message: Message, toolCallIds: ReadonlyMap<string, string>): InferenceCoreMessage {
 	if (message.role === "user" || message.role === "developer") {
 		return create(InferenceCoreMessageSchema, {
 			role: message.role === "user" ? InferenceMessageRole.USER : InferenceMessageRole.SYSTEM,
@@ -143,7 +148,7 @@ export function messageToInference(message: Message): InferenceCoreMessage {
 					const args = requiredJsonObject(part.arguments, `Cursor inference tool '${part.name}' arguments`);
 					toolCalls.push(
 						create(InferenceToolCallSchema, {
-							toolCallId: normalizeToolCallId(part.id),
+							toolCallId: toolCallIds.get(part.id) ?? normalizeToolCallId(part.id),
 							toolName: part.name,
 							args: encodeJsonStruct(args),
 							rawToolCallArgs: JSON.stringify(args),
@@ -183,7 +188,7 @@ export function messageToInference(message: Message): InferenceCoreMessage {
 			value: create(InferenceToolResultContentSchema, {
 				parts: [
 					create(InferenceToolResultPartSchema, {
-						toolCallId: normalizeToolCallId(message.toolCallId),
+						toolCallId: toolCallIds.get(message.toolCallId) ?? normalizeToolCallId(message.toolCallId),
 						toolName: message.toolName,
 						result: encodeJsonValue(toolResultJson(message)),
 						isError: message.isError,
@@ -206,11 +211,37 @@ function toolToInference(tool: Tool) {
 }
 
 /** Build the complete per-invocation request. Routing and model selection stay on the outer run. */
+function uniqueToolCallIds(context: Context): ReadonlyMap<string, string> {
+	const rawIds = context.messages.flatMap(message =>
+		message.role === "assistant"
+			? message.content.flatMap(part => (part.type === "toolCall" ? [part.id] : []))
+			: message.role === "toolResult"
+				? [message.toolCallId]
+				: [],
+	);
+	const byRawId = new Map<string, string>();
+	const used = new Set<string>();
+	for (const rawId of rawIds) {
+		if (byRawId.has(rawId)) continue;
+		const normalized = normalizeToolCallId(rawId);
+		let candidate = normalized;
+		let duplicate = 1;
+		while (used.has(candidate)) {
+			const suffix = `_dup${duplicate++}`;
+			candidate = `${normalized.slice(0, 64 - suffix.length)}${suffix}`;
+		}
+		used.add(candidate);
+		byRawId.set(rawId, candidate);
+	}
+	return byRawId;
+}
+
 export function buildInferenceRequest(
 	context: Context,
 	options: CursorInferenceRequestOptions = {},
 ): InferenceStreamRequest {
-	const messages = context.messages.map(messageToInference);
+	const toolCallIds = uniqueToolCallIds(context);
+	const messages = context.messages.map(message => messageToInference(message, toolCallIds));
 	for (const prompt of normalizeSystemPrompts(context.systemPrompt).reverse()) {
 		messages.unshift(
 			create(InferenceCoreMessageSchema, {
@@ -254,11 +285,7 @@ function requestedModelFields(modelId: string): RequestedModelFields {
 	if (effort !== undefined) {
 		return {
 			modelId: `${effort.base}${effort.fast ? "-fast" : ""}`,
-			parameters: [
-				{ id: "context", value: "272k" },
-				{ id: "reasoning", value: effort.tier },
-				{ id: "fast", value: String(effort.fast) },
-			],
+			parameters: cursorEffortParameters(effort.tier, effort.fast),
 		};
 	}
 

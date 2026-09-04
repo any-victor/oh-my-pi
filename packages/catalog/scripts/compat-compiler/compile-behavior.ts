@@ -319,6 +319,7 @@ export function compileBehavior(source: { file: string; text: string } | undefin
 				const familyMarker = requiredProp(node, "family-marker");
 				const tierNodes = children.filter(child => child.name === "tier");
 				const preferredNodes = children.filter(child => child.name === "prefer");
+				const parameterNodes = children.filter(child => child.name === "parameter");
 				if (!familyMarker || tierNodes.length === 0 || preferredNodes.length !== 1) malformed(node);
 				const tiers = tierNodes.map(child => {
 					ensureLeaf(child, ["level"]);
@@ -330,17 +331,30 @@ export function compileBehavior(source: { file: string; text: string } | undefin
 				const preferredNode = preferredNodes[0];
 				ensureLeaf(preferredNode, []);
 				const preferredTiers = positionalStrings(preferredNode);
+				const parameters = parameterNodes.map(child => {
+					ensureLeaf(child, ["source"]);
+					const values = positionalStrings(child);
+					const sourceValue = requiredProp(child, "source");
+					if (values.length !== 1 || !values[0] || (sourceValue !== "tier" && sourceValue !== "fast")) {
+						malformed(child);
+					}
+					const source: "tier" | "fast" = sourceValue;
+					return { id: values[0], source };
+				});
 				const suffixes = tiers.map(tier => tier.suffix);
 				if (
-					children.length !== tiers.length + 1 ||
+					children.length !== tiers.length + parameterNodes.length + 1 ||
 					preferredTiers.length !== tiers.length ||
 					new Set(suffixes).size !== suffixes.length ||
 					new Set(preferredTiers).size !== preferredTiers.length ||
-					preferredTiers.some(tier => !suffixes.includes(tier))
+					preferredTiers.some(tier => !suffixes.includes(tier)) ||
+					parameters.length === 0 ||
+					new Set(parameters.map(parameter => parameter.id)).size !== parameters.length ||
+					new Set(parameters.map(parameter => parameter.source)).size !== parameters.length
 				) {
 					malformed(node);
 				}
-				behavior.cursorEffort = { familyMarker, tiers, preferredTiers };
+				behavior.cursorEffort = { familyMarker, tiers, preferredTiers, parameters };
 				break;
 			}
 			case "cursor-model-parameter": {

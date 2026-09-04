@@ -50,6 +50,7 @@ async function loopback(): Promise<{
 	readonly invokeMaxTokens: () => number[];
 	readonly invokeStopSequences: () => string[][];
 	readonly invokeToolCounts: () => number[];
+	readonly sessions: () => number;
 	readonly headers: () => Record<string, string> | undefined;
 }> {
 	let runRequests = 0;
@@ -179,6 +180,7 @@ async function loopback(): Promise<{
 		invokeMaxTokens: () => invokeMaxTokens,
 		invokeStopSequences: () => invokeStopSequences,
 		invokeToolCounts: () => invokeToolCounts,
+		sessions: () => sessions.size,
 		headers: () => capturedHeaders,
 	};
 }
@@ -258,7 +260,7 @@ describe("Cursor provider entrypoint", () => {
 		}
 	});
 
-	test("applies hooks and caller headers while reusing one session-scoped run", async () => {
+	test("applies hooks and caller headers while reopening later user turns", async () => {
 		const target = await loopback();
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const responses: number[] = [];
@@ -301,7 +303,7 @@ describe("Cursor provider entrypoint", () => {
 				stopReason: "stop",
 			});
 			expect(second.result.content).toEqual([{ type: "text", text: "final-2" }]);
-			expect(target.runRequests()).toBe(1);
+			expect(target.runRequests()).toBe(2);
 			expect(target.invocations()).toBe(2);
 			expect(target.invokeMaxTokens()).toEqual([321, 321]);
 			expect(responses).toEqual([200, 200]);
@@ -335,11 +337,27 @@ describe("Cursor provider entrypoint", () => {
 				}),
 			);
 			await collect(
-				streamCursor(model(target.origin), context, {
-					apiKey: "FIRST.PAYLOAD.SIGNATURE",
-					sessionId: "first-session",
-					providerSessionState,
-				}),
+				streamCursor(
+					model(target.origin),
+					{
+						messages: [
+							...context.messages,
+							{
+								role: "toolResult",
+								toolCallId: "call-1",
+								toolName: "read",
+								content: [{ type: "text", text: "done" }],
+								isError: false,
+								timestamp: 2,
+							},
+						],
+					},
+					{
+						apiKey: "FIRST.PAYLOAD.SIGNATURE",
+						sessionId: "first-session",
+						providerSessionState,
+					},
+				),
 			);
 			expect(target.runRequests()).toBe(2);
 			expect(target.invocations()).toBe(3);
@@ -354,7 +372,6 @@ describe("Cursor provider entrypoint", () => {
 		try {
 			const options: CursorOptions = {
 				apiKey: "SHARED.PAYLOAD.SIGNATURE",
-				sessionId: "omp-session",
 				providerSessionState,
 			};
 			await Promise.all([
@@ -362,19 +379,20 @@ describe("Cursor provider entrypoint", () => {
 					streamCursor(
 						model(target.origin),
 						{ messages: [{ role: "user", content: "first", timestamp: 1 }] },
-						options,
+						{ ...options, sessionId: "first-session" },
 					),
 				),
 				collect(
 					streamCursor(
 						model(target.origin),
 						{ messages: [{ role: "user", content: "second", timestamp: 2 }] },
-						options,
+						{ ...options, sessionId: "second-session" },
 					),
 				),
 			]);
-			expect(target.runRequests()).toBe(1);
+			expect(target.runRequests()).toBe(2);
 			expect(target.invocations()).toBe(2);
+			expect(target.sessions()).toBe(1);
 		} finally {
 			closeProviderState(providerSessionState);
 		}

@@ -45,6 +45,8 @@ behavior {
 		tier "extra-high" level="xhigh"
 		tier "max" level="max"
 		prefer "medium" "high" "low" "minimal" "xhigh" "max" "none" "extra-high"
+		parameter "reasoning" source="tier"
+		parameter "fast" source="fast"
 	}
 	// Exact fixed parameters observed outside effort-suffixed families.
 	cursor-model-parameter model="auto-smart" id="optimize_for" value="balanced"

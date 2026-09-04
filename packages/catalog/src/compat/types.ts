@@ -244,6 +244,7 @@ export interface CompiledCursorEffort {
 	familyMarker: string;
 	tiers: { suffix: string; level: string }[];
 	preferredTiers: string[];
+	parameters: { id: string; source: "tier" | "fast" }[];
 }
 
 /** One fixed Cursor `requestedModel` parameter. */
