@@ -5,6 +5,7 @@ import * as zlib from "node:zlib";
 import { Effort } from "../src/effort";
 import { buildModel } from "../src/build";
 import { cursorCatalogModels, fetchCursorUsableModels, resolveCursorInput } from "../src/discovery/cursor";
+import { createModelManager } from "../src/model-manager";
 import { isCredentialScopedModelCacheProvider } from "../src/provider-models/cache-provider-id";
 import { cursorModelManagerOptions } from "../src/provider-models/special";
 import type { AvailableModelsResponse_ModelVariantConfig, ModelDetails } from "../src/discovery/cursor-proto";
@@ -200,6 +201,31 @@ describe("Cursor complete catalog join", () => {
 		expect(alternate.cacheProviderId).not.toBe(first.cacheProviderId);
 		expect(first.dynamicModelsAuthoritative).toBe(true);
 		expect(isCredentialScopedModelCacheProvider("cursor")).toBe(true);
+	});
+
+	it("keeps account-discovered capabilities authoritative during model merge", async () => {
+		const base = {
+			id: "future-cursor-route",
+			name: "Future Cursor Route",
+			provider: "cursor" as const,
+			api: "cursor-agent" as const,
+			baseUrl: "https://api2.cursor.sh",
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 32_000,
+		};
+		const manager = createModelManager({
+			providerId: "cursor",
+			staticModels: [{ ...base, reasoning: true, input: ["text", "image"] }],
+			fetchDynamicModels: async () => [{ ...base, reasoning: false, input: ["text"] }],
+			dynamicModelsAuthoritative: true,
+			cacheDbPath: ":memory:",
+		});
+
+		const { models } = await manager.refresh("online");
+		expect(models).toHaveLength(1);
+		expect(models[0]).toMatchObject({ input: ["text"], reasoning: false });
+		expect(models[0]?.thinking).toBeUndefined();
 	});
 
 	it("uses the authoritative 1M Gemini window instead of the 200k fallback", () => {

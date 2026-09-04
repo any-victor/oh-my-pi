@@ -69,12 +69,12 @@ function responsesCallComponent(id: string): string {
  * bucket, which would collapse two distinct opaque calls and steer a lone
  * `call_A|second` result onto the wrong call.
  */
-interface ToolCallOriginScope {
+export interface ToolCallOriginScope {
 	responsesComponents: ReadonlySet<string>;
 	opaqueCompositeCallIds: ReadonlySet<string>;
 }
 
-function collectToolCallOriginScope(messages: readonly Message[]): ToolCallOriginScope {
+export function collectToolCallOriginScope(messages: readonly Message[]): ToolCallOriginScope {
 	const responsesComponents = new Set<string>();
 	const opaqueCompositeCallIds = new Set<string>();
 	for (const msg of messages) {
@@ -119,7 +119,7 @@ function collectToolCallOriginScope(messages: readonly Message[]): ToolCallOrigi
  * and genuine cross-turn id reuse is `_dup`-suffixed on the call_ segment by
  * `deduplicateToolCallIds` (which this key preserves).
  */
-function toolCallPairingKey(id: string, originScope: ToolCallOriginScope): string {
+export function toolCallPairingKey(id: string, originScope: ToolCallOriginScope): string {
 	const pipe = id.indexOf("|");
 	if (pipe <= 0) return id;
 	if (originScope.opaqueCompositeCallIds.has(id)) return id;

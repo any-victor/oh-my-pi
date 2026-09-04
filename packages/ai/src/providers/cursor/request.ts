@@ -37,6 +37,7 @@ import {
 import type { Context, ImageContent, Message, Model, TextContent, Tool, ToolChoice } from "../../types";
 import { normalizeSystemPrompts, normalizeToolCallId } from "../../utils";
 import { toolWireSchema } from "../../utils/schema";
+import { collectToolCallOriginScope, toolCallPairingKey, type ToolCallOriginScope } from "../transform-messages";
 import {
 	cursorEffortParameters,
 	cursorEffortSuffix,
@@ -216,6 +217,7 @@ function toolToInference(tool: Tool) {
 function uniqueToolCallIds(context: Context): ReadonlyMap<object, string> {
 	const assignments = new Map<object, string>();
 	const pending = new Map<string, string[]>();
+	const originScope = collectToolCallOriginScope(context.messages);
 	const used = new Set<string>();
 	const allocate = (rawId: string): string => {
 		const normalized = normalizeToolCallId(rawId);
@@ -234,7 +236,7 @@ function uniqueToolCallIds(context: Context): ReadonlyMap<object, string> {
 				if (part.type !== "toolCall") continue;
 				const assigned = allocate(part.id);
 				assignments.set(part, assigned);
-				const key = responsesToolPairingKey(part.id, message.api);
+				const key = toolCallPairingKey(part.id, originScope);
 				const queue = pending.get(key) ?? [];
 				queue.push(assigned);
 				pending.set(key, queue);
@@ -242,7 +244,7 @@ function uniqueToolCallIds(context: Context): ReadonlyMap<object, string> {
 			continue;
 		}
 		if (message.role !== "toolResult") continue;
-		const key = pendingResultKey(pending, message.toolCallId);
+		const key = pendingResultKey(pending, message.toolCallId, originScope);
 		const queue = pending.get(key);
 		const assigned = queue?.shift() ?? allocate(message.toolCallId);
 		assignments.set(message, assigned);
@@ -251,19 +253,10 @@ function uniqueToolCallIds(context: Context): ReadonlyMap<object, string> {
 	return assignments;
 }
 
-function responsesToolPairingKey(id: string, api?: string): string {
-	if (api !== "openai-responses" && api !== "openai-codex-responses" && api !== "azure-openai-responses") {
-		return id;
-	}
-	const separator = id.indexOf("|");
-	return separator > 0 ? id.slice(0, separator) : id;
-}
-
-function pendingResultKey(pending: ReadonlyMap<string, unknown>, id: string): string {
+function pendingResultKey(pending: ReadonlyMap<string, unknown>, id: string, originScope: ToolCallOriginScope): string {
 	if (pending.has(id)) return id;
-	const separator = id.indexOf("|");
-	const prefix = separator > 0 ? id.slice(0, separator) : id;
-	return pending.has(prefix) ? prefix : id;
+	const pairingKey = toolCallPairingKey(id, originScope);
+	return pending.has(pairingKey) ? pairingKey : id;
 }
 
 interface PendingCursorToolCall {
@@ -276,6 +269,7 @@ interface PendingCursorToolCall {
 function repairToolResultPairing(messages: readonly Message[]): Message[] {
 	const pending: PendingCursorToolCall[] = [];
 	const repaired: Message[] = [];
+	const originScope = collectToolCallOriginScope(messages);
 	const flushPending = (): void => {
 		for (const call of pending.splice(0)) {
 			repaired.push({
@@ -290,7 +284,7 @@ function repairToolResultPairing(messages: readonly Message[]): Message[] {
 	};
 	for (const message of messages) {
 		if (message.role === "toolResult") {
-			const key = pendingResultKey(new Map(pending.map(call => [call.key, true])), message.toolCallId);
+			const key = pendingResultKey(new Map(pending.map(call => [call.key, true])), message.toolCallId, originScope);
 			const index = pending.findIndex(call => call.key === key);
 			if (index >= 0) {
 				pending.splice(index, 1);
@@ -315,8 +309,9 @@ function repairToolResultPairing(messages: readonly Message[]): Message[] {
 		if (message.role !== "assistant") continue;
 		for (const part of message.content) {
 			if (part.type !== "toolCall") continue;
+			const key = toolCallPairingKey(part.id, originScope);
 			pending.push({
-				key: responsesToolPairingKey(part.id, message.api),
+				key,
 				id: part.id,
 				name: part.name,
 				timestamp: message.timestamp,

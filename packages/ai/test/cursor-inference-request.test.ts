@@ -315,6 +315,42 @@ describe("Cursor managed-inference request", () => {
 		expect(toolContent.value.parts[0]?.toolCallId).toBe(request.messages[0]?.toolCalls[0]?.toolCallId);
 	});
 
+	test("does not pair composite orphan results with opaque non-Responses calls", () => {
+		const context = history();
+		const assistant = context.messages[1];
+		const result = context.messages[2];
+		if (assistant?.role !== "assistant" || result?.role !== "toolResult") {
+			throw new Error("tool history missing");
+		}
+		assistant.api = "openai-completions";
+		const call = assistant.content.find(part => part.type === "toolCall");
+		if (call?.type !== "toolCall") throw new Error("tool call missing");
+		call.id = "opaque-call";
+		result.toolCallId = "opaque-call";
+		result.content = [{ type: "text", text: "real result" }];
+
+		const request = buildInferenceRequest(cursorModel(), {
+			...context,
+			messages: [
+				assistant,
+				{
+					role: "toolResult",
+					toolCallId: "opaque-call|unrelated-item",
+					toolName: "wrong-tool",
+					content: [{ type: "text", text: "orphan payload" }],
+					isError: false,
+					timestamp: 3,
+				},
+				result,
+			],
+		});
+		const toolContent = request.messages.find(message => message.content.case === "toolContent")?.content;
+		if (toolContent?.case !== "toolContent") throw new Error("paired tool result missing");
+		expect(toolContent.value.parts).toHaveLength(1);
+		expect(toolContent.value.parts[0]?.toolName).toBe(TOOL.name);
+		expect(decodeJsonValue(toolContent.value.parts[0]?.result ?? new Uint8Array())).toBe("real result");
+	});
+
 	test("closes missing tool results before later reused ids", () => {
 		const context = history();
 		const firstAssistant = context.messages[1];

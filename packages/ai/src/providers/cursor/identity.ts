@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
-import { networkInterfaces } from "node:os";
+import * as os from "node:os";
 import * as path from "node:path";
 import { arch, env, platform } from "node:process";
-import { getAgentDir, isRecord, logger, ptree, withFileLock } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isRecord, logger, ptree, withFileLock, writeFileAtomic } from "@oh-my-pi/pi-utils";
 
 export const CURSOR_IDE_VERSION = "3.18.9";
 export const CURSOR_IDE_COMMIT = "2ba48ff3f7514cc4643c52ca9f7b3173d9b66130";
@@ -51,7 +51,7 @@ const DEFAULT_DEPENDENCIES: IdentityDependencies = {
 	arch,
 	env,
 	execute: executeIdentityCommand,
-	interfaces: networkInterfaces,
+	interfaces: os.networkInterfaces,
 	createUuid: randomUUID,
 };
 
@@ -162,12 +162,7 @@ async function loadOrCreateFallbackIdentity(agentDir: string, createUuid: () => 
 		}
 		const machineId = createUuid();
 		if (!UUID_PATTERN.test(machineId)) throw new Error("Generated Cursor fallback identity is invalid");
-		const file = await fs.open(identityPath, "wx", 0o600);
-		try {
-			await file.writeFile(`${JSON.stringify({ machineId })}\n`, "utf8");
-		} finally {
-			await file.close();
-		}
+		await writeFileAtomic(identityPath, `${JSON.stringify({ machineId })}\n`, { mode: 0o600, directoryMode: 0o700 });
 		return machineId;
 	});
 }

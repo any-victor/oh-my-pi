@@ -551,12 +551,14 @@ function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamic
 	// row shares the single DeepInfra endpoint, so `endpointChanged` never fires
 	// there: without this carve-out a model that dropped those tags would keep
 	// the bundled reference's image support and the agent would go on sending
-	// images to a now text-only route.
+	// images to a now text-only route. Cursor's account catalog likewise reports
+	// the exact per-route capability rather than omitting it.
 	const endpointChanged = existingModel.baseUrl !== dynamicModel.baseUrl;
 	const dynamicInputAuthoritative =
 		endpointChanged ||
 		(existingModel.provider === "github-copilot" && dynamicModel.provider === "github-copilot") ||
-		(existingModel.provider === "deepinfra" && dynamicModel.provider === "deepinfra");
+		(existingModel.provider === "deepinfra" && dynamicModel.provider === "deepinfra") ||
+		(existingModel.provider === "cursor" && dynamicModel.provider === "cursor");
 	const supportsImage = dynamicInputAuthoritative
 		? dynamicModel.input.includes("image")
 		: existingModel.input.includes("image") || dynamicModel.input.includes("image");
@@ -565,10 +567,11 @@ function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamic
 	// whole truth: when the wire advertises only the `none` off-state the
 	// mapper emits `reasoning: false`, and OR-ing the bundled reference's
 	// stale `reasoning: true` back would re-arm an effort dial the route
-	// doesn't expose. Other providers keep the OR so a bundled reasoning flag
-	// survives a discovery row that simply omits the capability.
+	// doesn't expose. Cursor also reports `supportsThinking` explicitly for
+	// every available route.
 	const dynamicReasoningAuthoritative =
-		existingModel.provider === "synthetic" && dynamicModel.provider === "synthetic";
+		(existingModel.provider === "synthetic" && dynamicModel.provider === "synthetic") ||
+		(existingModel.provider === "cursor" && dynamicModel.provider === "cursor");
 	const reasoning = dynamicReasoningAuthoritative
 		? dynamicModel.reasoning
 		: existingModel.reasoning || dynamicModel.reasoning;

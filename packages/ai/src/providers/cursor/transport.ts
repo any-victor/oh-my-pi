@@ -430,6 +430,14 @@ export class CursorInferenceRun {
 		return await withTimeout(this.ready, this.#responseTimeoutMs, "Cursor runReady timed out");
 	}
 
+	async start(message: RunInferenceClientMessage): Promise<RunInferenceRunReady> {
+		return await withTimeout(
+			this.send(message).then(async () => await this.ready),
+			this.#responseTimeoutMs,
+			"Cursor runReady timed out",
+		);
+	}
+
 	abort(error: unknown): void {
 		this.#fail(error);
 	}
@@ -475,21 +483,20 @@ export class CursorInferenceRun {
 		if (options.signal?.aborted === true) abort();
 		else options.signal?.addEventListener("abort", abort, { once: true });
 		if (this.#cancelled.has(invocationId)) return await result.promise;
-		try {
-			await this.send(
-				create(RunInferenceClientMessageSchema, {
-					message: {
-						case: "invokeModel",
-						value: create(RunInferenceInvokeModelSchema, { invocationId, request }),
-					},
-				}),
-			);
-		} catch (error) {
+		const send = this.send(
+			create(RunInferenceClientMessageSchema, {
+				message: {
+					case: "invokeModel",
+					value: create(RunInferenceInvokeModelSchema, { invocationId, request }),
+				},
+			}),
+		).catch(error => {
 			this.#pending.delete(invocationId);
 			options.signal?.removeEventListener("abort", abort);
 			result.reject(error);
 			this.#fail(error);
-		}
+		});
+		await Promise.race([send, result.promise]);
 		return await result.promise;
 	}
 
@@ -618,8 +625,7 @@ export class CursorInferenceRuntime {
 		if (signal?.aborted === true) abort();
 		else signal?.addEventListener("abort", abort, { once: true });
 		try {
-			await run.send(runRequest);
-			await run.waitUntilReady();
+			await run.start(runRequest);
 			return run;
 		} catch (error) {
 			run.abort(error);
