@@ -3,6 +3,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { streamCursor } from "../src/providers/cursor";
 import type { AssistantMessage, Context, Model, ProviderSessionState } from "../src/types";
 import { e2eApiKey, resolveApiKey } from "./oauth";
+import { fetchCursorUsableModels } from "@oh-my-pi/pi-catalog/discovery/cursor";
 
 const token = (await resolveApiKey("cursor")) ?? e2eApiKey("CURSOR_ACCESS_TOKEN");
 const liveEnabled = Bun.env.CI === undefined && token !== undefined && token !== "";
@@ -18,8 +19,17 @@ const model: Model<"cursor-agent"> = buildModel({
 	reasoning: true,
 	input: ["text", "image"],
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-	contextWindow: 200_000,
+	contextWindow: 1_000_000,
 	maxTokens: 64_000,
+});
+
+const maxModel: Model<"cursor-agent"> = buildModel({
+	...model,
+	id: "gpt-5.6-sol-1m",
+	name: "GPT-5.6 Sol Max",
+	contextWindow: 1_000_000,
+	cursorMaxMode: true,
+	cursorContext: "1m",
 });
 
 const tool = {
@@ -76,6 +86,67 @@ function closeProviderState(state: Map<string, ProviderSessionState>): void {
 }
 
 describe.skipIf(!liveEnabled)("Cursor managed inference live", () => {
+	test(
+		"joins authoritative context and Max Mode metadata from all three catalog surfaces",
+		async () => {
+			if (token === undefined || token === "") throw new Error("Cursor live token is required");
+			const models = await fetchCursorUsableModels({ apiKey: token });
+			if (models === null) throw new Error("Cursor live catalog fetch failed");
+			expect(models.find(candidate => candidate.id === "gemini-3.7-flash")).toMatchObject({
+				contextWindow: 1_000_000,
+				cursorMaxMode: false,
+			});
+			expect(models.find(candidate => candidate.id === "cursor-grok-4.6")).toMatchObject({
+				contextWindow: 256_000,
+				cursorMaxMode: false,
+			});
+			expect(models.find(candidate => candidate.id === "gpt-5.6-sol")).toMatchObject({
+				contextWindow: 272_000,
+				cursorContext: "272k",
+				cursorMaxMode: false,
+			});
+			expect(models.find(candidate => candidate.id === "gpt-5.6-sol-1m")).toMatchObject({
+				contextWindow: 1_000_000,
+				cursorContext: "1m",
+				cursorMaxMode: true,
+			});
+		},
+		{ timeout: 120_000 },
+	);
+
+	test(
+		"runs the distinct 1M Max route with one authoritative answer",
+		async () => {
+			if (token === undefined || token === "") throw new Error("Cursor live token is required");
+			const stream = streamCursor(
+				maxModel,
+				{
+					messages: [
+						{
+							role: "user",
+							content: "Reply exactly CURSOR_MAX_OK.",
+							timestamp: Date.now(),
+						},
+					],
+				},
+				{
+					apiKey: token,
+					sessionId: `omp-cursor-max-${crypto.randomUUID()}`,
+					wireModelId: "gpt-5.6-sol-high",
+					maxTokens: 256,
+				},
+			);
+			for await (const _event of stream) {
+				// Drain the complete paid response before asserting its final form.
+			}
+			const result = await stream.result();
+			expectSuccess(result);
+			expect(result.model).toBe("gpt-5.6-sol-1m");
+			expect(visibleText(result)).toBe("CURSOR_MAX_OK");
+		},
+		{ retry: 1, timeout: 120_000 },
+	);
+
 	test(
 		"retains visible thinking and one authoritative final answer",
 		async () => {

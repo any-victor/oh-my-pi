@@ -1110,8 +1110,10 @@ export interface Model<TApi extends Api = Api> {
 	supportsComputerUseConfig?: boolean;
 	/** GitLab Duo Workflow root namespace selected during catalog discovery. */
 	gitlabDuoWorkflowRootNamespaceId?: string;
-	/** Cursor `max_mode` request flag returned by `GetUsableModels` for premium models that require max mode. */
+	/** Cursor `max_mode` request flag selected from the complete Cursor catalog. */
 	cursorMaxMode?: boolean;
+	/** Cursor catalog variant `context` parameter (for example `272k`, `300k`, or `1m`). */
+	cursorContext?: string;
 	cost: ModelCost;
 	/** Premium Copilot requests charged per user-initiated request (defaults to 1). */
 	premiumMultiplier?: number;

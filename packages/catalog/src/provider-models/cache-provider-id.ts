@@ -54,10 +54,10 @@ export function resolveModelCacheProviderId(providerId: string, options: ModelCa
 		case "ollama":
 			return resolveOllamaModelCacheProviderId(providerId, options.baseUrl);
 		case "cursor":
-			// v4: Grok 4.5/4.6 rows cached before the effort-less default-tier fix
-			// carry `requestModelId: *-low`, which the Start plan refuses; refetch
-			// so the collapsed default is re-pointed to `-medium` (issue #9478).
-			return "cursor:default-effort-v4";
+			// v5: GetUsableModels-only rows lacked authoritative context windows,
+			// image/thinking capabilities, variant context, and distinct Max Mode
+			// entries. Refetch through the complete three-surface catalog join.
+			return "cursor:complete-catalog-v5";
 		case "litellm": {
 			const baseUrl = options.baseUrl ?? getDefaultModelDiscoveryBaseUrl(providerId)!;
 			// rich-v8 invalidates rows whose `compatConfig` retained a colliding

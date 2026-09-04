@@ -223,6 +223,19 @@ describe("Cursor managed-inference request", () => {
 				{ id: "fast", value: "false" },
 			],
 		});
+
+		const max = cursorModel("gpt-5.6-sol");
+		max.cursorMaxMode = true;
+		max.cursorContext = "1m";
+		expect(JSON.parse(inferenceRoutingKey(max, { wireModelId: "gpt-5.6-sol-high" }))).toEqual({
+			modelId: "gpt-5.6-sol",
+			maxMode: true,
+			parameters: [
+				{ id: "context", value: "1m" },
+				{ id: "reasoning", value: "high" },
+				{ id: "fast", value: "false" },
+			],
+		});
 	});
 
 	test("forwards request limits and rejects malformed schemas before transport", () => {

@@ -20,6 +20,10 @@
 
 - Added the reconstructed Cursor `RunInference` protocol closure and removed the AgentService-only tool-schema projection flag from Cursor catalog models.
 
+### Fixed
+
+- Restored Cursor's authoritative model context windows, image/thinking capabilities, and distinct Max Mode rows from the complete Available/Usable/Default catalog join.
+
 ## [18.1.8] - 2026-09-03
 
 ### Added

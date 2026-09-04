@@ -74,6 +74,111 @@ export const ApiKeyCredentialsSchema: MessageCodec<ApiKeyCredentials> = pb<ApiKe
 	{ no: 2, name: "baseUrl", kind: "string", optional: true },
 ]);
 
+/** Cursor message aiserver.v1.AvailableModelsRequest. */
+export interface AvailableModelsRequest extends ProtoMessage {
+	useModelParameters?: boolean;
+	doNotUseMarkdown?: boolean;
+}
+
+export const AvailableModelsRequestSchema: MessageCodec<AvailableModelsRequest> = pb<AvailableModelsRequest>("aiserver.v1.AvailableModelsRequest", [
+	{ no: 5, name: "useModelParameters", kind: "bool", optional: true },
+	{ no: 7, name: "doNotUseMarkdown", kind: "bool", optional: true },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse. */
+export interface AvailableModelsResponse extends ProtoMessage {
+	models: AvailableModelsResponse_AvailableModel[];
+}
+
+export const AvailableModelsResponseSchema: MessageCodec<AvailableModelsResponse> = pb<AvailableModelsResponse>("aiserver.v1.AvailableModelsResponse", [
+	{ no: 2, name: "models", kind: "message", T: () => AvailableModelsResponse_AvailableModelSchema, repeat: true },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_AvailableModel. */
+export interface AvailableModelsResponse_AvailableModel extends ProtoMessage {
+	name: string;
+	tooltipData?: AvailableModelsResponse_TooltipData;
+	supportsThinking?: boolean;
+	supportsImages?: boolean;
+	supportsMaxMode?: boolean;
+	contextTokenLimit?: number;
+	contextTokenLimitForMaxMode?: number;
+	clientDisplayName?: string;
+	serverModelName?: string;
+	supportsNonMaxMode?: boolean;
+	tooltipDataForMaxMode?: AvailableModelsResponse_TooltipData;
+	parameterDefinitions: ModelParameterDefinition[];
+	variants: AvailableModelsResponse_ModelVariantConfig[];
+	legacySlugs: string[];
+	idAliases: string[];
+}
+
+export const AvailableModelsResponse_AvailableModelSchema: MessageCodec<AvailableModelsResponse_AvailableModel> = pb<AvailableModelsResponse_AvailableModel>("aiserver.v1.AvailableModelsResponse_AvailableModel", [
+	{ no: 1, name: "name", kind: "string" },
+	{ no: 8, name: "tooltipData", kind: "message", T: () => AvailableModelsResponse_TooltipDataSchema },
+	{ no: 9, name: "supportsThinking", kind: "bool", optional: true },
+	{ no: 10, name: "supportsImages", kind: "bool", optional: true },
+	{ no: 14, name: "supportsMaxMode", kind: "bool", optional: true },
+	{ no: 15, name: "contextTokenLimit", kind: "int32", optional: true },
+	{ no: 16, name: "contextTokenLimitForMaxMode", kind: "int32", optional: true },
+	{ no: 17, name: "clientDisplayName", kind: "string", optional: true },
+	{ no: 18, name: "serverModelName", kind: "string", optional: true },
+	{ no: 19, name: "supportsNonMaxMode", kind: "bool", optional: true },
+	{ no: 20, name: "tooltipDataForMaxMode", kind: "message", T: () => AvailableModelsResponse_TooltipDataSchema },
+	{ no: 29, name: "parameterDefinitions", kind: "message", T: () => ModelParameterDefinitionSchema, repeat: true },
+	{ no: 30, name: "variants", kind: "message", T: () => AvailableModelsResponse_ModelVariantConfigSchema, repeat: true },
+	{ no: 36, name: "legacySlugs", kind: "string", repeat: true },
+	{ no: 37, name: "idAliases", kind: "string", repeat: true },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_ModelVariantConfig. */
+export interface AvailableModelsResponse_ModelVariantConfig extends ProtoMessage {
+	parameterValues: RequestedModel_ModelParameterbytes[];
+	displayName: string;
+	isMaxMode: boolean;
+	isDefaultMaxConfig?: boolean;
+	isDefaultNonMaxConfig?: boolean;
+	tooltipData?: AvailableModelsResponse_TooltipData;
+	tagline?: string;
+	displayNameOutsidePicker?: string;
+	variantStringRepresentation?: string;
+	legacySlug?: string;
+}
+
+export const AvailableModelsResponse_ModelVariantConfigSchema: MessageCodec<AvailableModelsResponse_ModelVariantConfig> = pb<AvailableModelsResponse_ModelVariantConfig>("aiserver.v1.AvailableModelsResponse_ModelVariantConfig", [
+	{ no: 1, name: "parameterValues", kind: "message", T: () => RequestedModel_ModelParameterbytesSchema, repeat: true },
+	{ no: 2, name: "displayName", kind: "string" },
+	{ no: 3, name: "isMaxMode", kind: "bool" },
+	{ no: 4, name: "isDefaultMaxConfig", kind: "bool", optional: true },
+	{ no: 5, name: "isDefaultNonMaxConfig", kind: "bool", optional: true },
+	{ no: 6, name: "tooltipData", kind: "message", T: () => AvailableModelsResponse_TooltipDataSchema },
+	{ no: 7, name: "tagline", kind: "string", optional: true },
+	{ no: 8, name: "displayNameOutsidePicker", kind: "string", optional: true },
+	{ no: 9, name: "variantStringRepresentation", kind: "string", optional: true },
+	{ no: 11, name: "legacySlug", kind: "string", optional: true },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_TooltipData. */
+export interface AvailableModelsResponse_TooltipData extends ProtoMessage {
+	primaryText: string;
+	secondaryText: string;
+	secondaryWarningText: boolean;
+	icon: string;
+	tertiaryText: string;
+	tertiaryTextUrl: string;
+	markdownContent?: string;
+}
+
+export const AvailableModelsResponse_TooltipDataSchema: MessageCodec<AvailableModelsResponse_TooltipData> = pb<AvailableModelsResponse_TooltipData>("aiserver.v1.AvailableModelsResponse_TooltipData", [
+	{ no: 1, name: "primaryText", kind: "string" },
+	{ no: 2, name: "secondaryText", kind: "string" },
+	{ no: 3, name: "secondaryWarningText", kind: "bool" },
+	{ no: 4, name: "icon", kind: "string" },
+	{ no: 5, name: "tertiaryText", kind: "string" },
+	{ no: 6, name: "tertiaryTextUrl", kind: "string" },
+	{ no: 7, name: "markdownContent", kind: "string", optional: true },
+]);
+
 /** Cursor message agent.v1.AzureCredentials. */
 export interface AzureCredentials extends ProtoMessage {
 	apiKey: string;
@@ -100,6 +205,22 @@ export const BedrockCredentialsSchema: MessageCodec<BedrockCredentials> = pb<Bed
 	{ no: 2, name: "secretKey", kind: "string" },
 	{ no: 3, name: "region", kind: "string" },
 	{ no: 4, name: "sessionToken", kind: "string", optional: true },
+]);
+
+/** Cursor message agent.v1.GetDefaultModelForCliRequest. */
+export interface GetDefaultModelForCliRequest extends ProtoMessage {
+}
+
+export const GetDefaultModelForCliRequestSchema: MessageCodec<GetDefaultModelForCliRequest> = pb<GetDefaultModelForCliRequest>("agent.v1.GetDefaultModelForCliRequest", [
+]);
+
+/** Cursor message agent.v1.GetDefaultModelForCliResponse. */
+export interface GetDefaultModelForCliResponse extends ProtoMessage {
+	model?: ModelDetails;
+}
+
+export const GetDefaultModelForCliResponseSchema: MessageCodec<GetDefaultModelForCliResponse> = pb<GetDefaultModelForCliResponse>("agent.v1.GetDefaultModelForCliResponse", [
+	{ no: 1, name: "model", kind: "message", T: () => ModelDetailsSchema },
 ]);
 
 /** Cursor message agent.v1.GetUsableModelsRequest. */
@@ -727,6 +848,30 @@ export const ModelDetailsSchema: MessageCodec<ModelDetails> = pb<ModelDetails>("
 			{ no: 10, name: "bedrockCredentials", kind: "message", T: () => BedrockCredentialsSchema },
 		],
 	},
+]);
+
+/** Cursor message aiserver.v1.ModelParameterDefinition. */
+export interface ModelParameterDefinition extends ProtoMessage {
+	id: string;
+	name: string;
+	markdownTooltip?: string;
+}
+
+export const ModelParameterDefinitionSchema: MessageCodec<ModelParameterDefinition> = pb<ModelParameterDefinition>("aiserver.v1.ModelParameterDefinition", [
+	{ no: 1, name: "id", kind: "string" },
+	{ no: 2, name: "name", kind: "string" },
+	{ no: 3, name: "markdownTooltip", kind: "string", optional: true },
+]);
+
+/** Cursor message agent.v1.RequestedModel_ModelParameterbytes. */
+export interface RequestedModel_ModelParameterbytes extends ProtoMessage {
+	id: string;
+	value: string;
+}
+
+export const RequestedModel_ModelParameterbytesSchema: MessageCodec<RequestedModel_ModelParameterbytes> = pb<RequestedModel_ModelParameterbytes>("agent.v1.RequestedModel_ModelParameterbytes", [
+	{ no: 1, name: "id", kind: "string" },
+	{ no: 2, name: "value", kind: "string" },
 ]);
 
 /** Cursor message aiserver.v1.RunInferenceCancelInvocation. */

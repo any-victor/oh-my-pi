@@ -261,6 +261,15 @@ function requestedModelFields(modelId: string): RequestedModelFields {
 	return { modelId, parameters: cursorModelParameters(modelId) };
 }
 
+function withCursorContext(
+	parameters: readonly { readonly id: string; readonly value: string }[],
+	context: string | undefined,
+): readonly { readonly id: string; readonly value: string }[] {
+	if (context === undefined) return parameters;
+	const retained = parameters.filter(parameter => parameter.id !== "context");
+	return [{ id: "context", value: context }, ...retained];
+}
+
 export function inferenceRequestedModel(
 	model: Model<"cursor-agent">,
 	options: CursorRequestedModelOptions = {},
@@ -270,7 +279,9 @@ export function inferenceRequestedModel(
 	return create(InferenceRequestedModelSchema, {
 		modelId: requested.modelId,
 		maxMode: options.maxMode ?? model.cursorMaxMode === true,
-		parameters: requested.parameters.map(parameter => create(InferenceModelParameterValueSchema, parameter)),
+		parameters: withCursorContext(requested.parameters, model.cursorContext).map(parameter =>
+			create(InferenceModelParameterValueSchema, parameter),
+		),
 	});
 }
 

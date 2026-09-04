@@ -1,415 +1,276 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import * as fs from "node:fs/promises";
+import { afterEach, describe, expect, it } from "bun:test";
 import * as http2 from "node:http2";
 import type * as net from "node:net";
-import * as os from "node:os";
-import * as path from "node:path";
+import { Effort } from "../src/effort";
 import { buildModel } from "../src/build";
-// Import from source, not the package specifier: the workspace `node_modules`
-// copy resolves to the primary checkout, not this worktree.
-import { fetchCursorUsableModels } from "../src/discovery/cursor";
-import { GetUsableModelsResponseSchema, ModelDetailsSchema } from "../src/discovery/cursor-proto";
-import { create, toBinary } from "../src/discovery/protobuf";
-import { resolveProviderModels } from "../src/model-manager";
+import { cursorCatalogModels, fetchCursorUsableModels, resolveCursorInput } from "../src/discovery/cursor";
 import { cursorModelManagerOptions } from "../src/provider-models/special";
-import type { ModelSpec } from "../src/types";
-
-const FIXTURE_MODEL_IDS = [
-	// Reference-less ids from families whose native catalogs are multimodal.
-	"claude-opus-4-8-99999999",
-	"gpt-5.5-codex-20991231",
-	"gemini-4-pro-exp",
-	// Cursor-only families verified to accept direct image attachments.
-	"kimi-k3-high",
-	"kimi-k3-low",
-	"kimi-k3-max",
-	"cursor-grok-4.5",
-	"cursor-grok-4.5-fast",
-	"cursor-grok-4.6",
-	"cursor-grok-4.6-fast",
-	"composer-2.5",
-	"composer-2.5-fast",
-	// Similar but unverified ids must not inherit image routing.
-	"composer-3",
-	"composer-2.50",
-	"cursor-grok-5",
-	"grok-code-fast-2",
-	"k3-256k",
-	// Versioned Cursor Grok siblings: the id marks them reasoning.
-	"cursor-grok-4.5-high",
-	"cursor-grok-4.6-xhigh",
-	// Bundled-reference ids: the reference stays authoritative.
-	"claude-4.5-opus-high",
-	"claude-4.6-opus-high",
-	"composer-1",
-];
-
-let server: http2.Http2Server;
-let baseUrl: string;
-
-beforeAll(async () => {
-	const response = create(GetUsableModelsResponseSchema, {
-		models: FIXTURE_MODEL_IDS.map(modelId => create(ModelDetailsSchema, { modelId })),
-	});
-	const payload = Buffer.from(toBinary(GetUsableModelsResponseSchema, response));
-
-	server = http2.createServer();
-	server.on("stream", (stream: http2.ServerHttp2Stream, headers: http2.IncomingHttpHeaders) => {
-		stream.on("data", () => {});
-		stream.on("end", () => {
-			if (headers[":path"] !== "/agent.v1.AgentService/GetUsableModels") {
-				stream.respond({ ":status": 404 });
-				stream.end();
-				return;
-			}
-			stream.respond({ ":status": 200, "content-type": "application/proto" });
-			stream.end(payload);
-		});
-	});
-	await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-	const address = server.address();
-	if (!address || typeof address === "string") {
-		throw new Error("expected http2 fixture server to bind a tcp port");
-	}
-	baseUrl = `http://127.0.0.1:${address.port}`;
-});
-
-afterAll(() => {
-	server?.close();
-});
-
-async function discover(): Promise<Map<string, ModelSpec<"cursor-agent">>> {
-	const models = await fetchCursorUsableModels({ apiKey: "test-key", baseUrl });
-	expect(models).not.toBeNull();
-	return new Map((models ?? []).map(model => [model.id, model]));
-}
-
-describe("cursor discovery input modalities (issue #4726)", () => {
-	it("classifies reference-less multimodal-family models as text+image", async () => {
-		const byId = await discover();
-		expect(byId.get("claude-opus-4-8-99999999")?.input).toEqual(["text", "image"]);
-		expect(byId.get("gpt-5.5-codex-20991231")?.input).toEqual(["text", "image"]);
-		expect(byId.get("gemini-4-pro-exp")?.input).toEqual(["text", "image"]);
-	});
-
-	it("keeps unverified Cursor-only families text-only", async () => {
-		const byId = await discover();
-		expect(byId.get("composer-3")?.input).toEqual(["text"]);
-		expect(byId.get("composer-2.50")?.input).toEqual(["text"]);
-		expect(byId.get("cursor-grok-5")?.input).toEqual(["text"]);
-		expect(byId.get("grok-code-fast-2")?.input).toEqual(["text"]);
-		expect(byId.get("k3-256k")?.input).toEqual(["text"]);
-	});
-
-	it("recognizes reference-less Kimi K3 effort variants as reasoning models", async () => {
-		const byId = await discover();
-		expect(byId.get("kimi-k3-high")?.reasoning).toBe(true);
-		expect(byId.get("kimi-k3-low")?.reasoning).toBe(true);
-		expect(byId.get("kimi-k3-max")?.reasoning).toBe(true);
-	});
-
-	it("routes verified Cursor-only model variants as text+image", async () => {
-		const byId = await discover();
-		const verifiedIds = [
-			"kimi-k3-high",
-			"kimi-k3-low",
-			"kimi-k3-max",
-			"cursor-grok-4.5",
-			"cursor-grok-4.5-fast",
-			"cursor-grok-4.6",
-			"cursor-grok-4.6-fast",
-			"composer-2.5",
-			"composer-2.5-fast",
-		];
-		for (const id of verifiedIds) {
-			expect(byId.get(id)?.input).toEqual(["text", "image"]);
-		}
-	});
-
-	it("marks versioned Cursor Grok ids as reasoning despite reasoning:false references (issue #8803)", async () => {
-		const byId = await discover();
-		expect(byId.get("cursor-grok-4.5-high")?.reasoning).toBe(true);
-		expect(byId.get("cursor-grok-4.6-xhigh")?.reasoning).toBe(true);
-		// grok-code-* coding models lack the version digit and stay non-reasoning.
-		expect(byId.get("grok-code-fast-2")?.reasoning).toBe(false);
-	});
-
-	it("keeps bundled references authoritative outside verified image families", async () => {
-		const byId = await discover();
-		// The id-based native-family inference must not override bundled
-		// classifications in either direction.
-		expect(byId.get("claude-4.5-opus-high")?.input).toEqual(["text", "image"]);
-		expect(byId.get("claude-4.6-opus-high")?.input).toEqual(["text"]);
-		expect(byId.get("composer-1")?.input).toEqual(["text"]);
-	});
-
-	it("preserves fallback defaults for reference-less models", async () => {
-		const byId = await discover();
-		const spec = byId.get("claude-opus-4-8-99999999");
-		expect(spec?.provider).toBe("cursor");
-		expect(spec?.api).toBe("cursor-agent");
-		expect(spec?.contextWindow).toBe(200_000);
-		expect(spec?.maxTokens).toBe(64_000);
-		expect(spec?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-	});
-});
+import type { AvailableModelsResponse_ModelVariantConfig, ModelDetails } from "../src/discovery/cursor-proto";
+import {
+	AvailableModelsResponse_AvailableModelSchema,
+	AvailableModelsResponse_ModelVariantConfigSchema,
+	AvailableModelsResponseSchema,
+	GetDefaultModelForCliResponseSchema,
+	GetUsableModelsResponseSchema,
+	ModelDetailsSchema,
+	RequestedModel_ModelParameterbytesSchema,
+} from "../src/discovery/cursor-proto";
+import { create, toBinary } from "../src/discovery/protobuf";
 
 const servers = new Set<http2.Http2Server>();
-const tempDirs = new Set<string>();
 
 afterEach(async () => {
 	await Promise.all(
-		[...servers].map(srv => {
+		[...servers].map(server => {
 			const { promise, resolve, reject } = Promise.withResolvers<void>();
-			srv.close(error => {
-				if (error) {
-					reject(error);
-					return;
-				}
-				resolve();
-			});
+			server.close(error => (error ? reject(error) : resolve()));
 			return promise;
 		}),
 	);
-	await Promise.all([...tempDirs].map(dir => fs.rm(dir, { recursive: true, force: true })));
 	servers.clear();
-	tempDirs.clear();
 });
 
 function requireTcpAddress(address: string | net.AddressInfo | null): net.AddressInfo {
-	if (!address || typeof address === "string") {
-		throw new Error("HTTP/2 test server did not bind to a TCP address");
-	}
+	if (!address || typeof address === "string") throw new Error("HTTP/2 test server did not bind to a TCP address");
 	return address;
 }
 
-function startCursorDiscoveryServer(body: Uint8Array): Promise<string> {
+function model(id: string, fields: Partial<ModelDetails> = {}) {
+	return create(ModelDetailsSchema, { modelId: id, displayName: id, ...fields });
+}
+
+function parameter(id: string, value: string) {
+	return create(RequestedModel_ModelParameterbytesSchema, { id, value });
+}
+
+function variant(
+	context: string | undefined,
+	options: { readonly max?: boolean; readonly defaultNormal?: boolean; readonly defaultMax?: boolean },
+) {
+	return create(AvailableModelsResponse_ModelVariantConfigSchema, {
+		parameterValues: context === undefined ? [] : [parameter("context", context)],
+		isMaxMode: options.max ?? false,
+		isDefaultNonMaxConfig: options.defaultNormal,
+		isDefaultMaxConfig: options.defaultMax,
+	});
+}
+
+function available(
+	name: string,
+	options: {
+		readonly displayName?: string;
+		readonly aliases?: string[];
+		readonly legacySlugs?: string[];
+		readonly thinking?: boolean;
+		readonly images?: boolean;
+		readonly supportsMax?: boolean;
+		readonly supportsNonMax?: boolean;
+		readonly context?: number;
+		readonly maxContext?: number;
+		readonly variants?: AvailableModelsResponse_ModelVariantConfig[];
+	} = {},
+) {
+	return create(AvailableModelsResponse_AvailableModelSchema, {
+		name,
+		clientDisplayName: options.displayName,
+		idAliases: options.aliases ?? [],
+		legacySlugs: options.legacySlugs ?? [],
+		supportsThinking: options.thinking,
+		supportsImages: options.images,
+		supportsMaxMode: options.supportsMax,
+		supportsNonMaxMode: options.supportsNonMax,
+		contextTokenLimit: options.context,
+		contextTokenLimitForMaxMode: options.maxContext,
+		variants: options.variants ?? [],
+	});
+}
+
+function catalogFixture() {
+	const usable = create(GetUsableModelsResponseSchema, {
+		models: [
+			model("gemini-3.7-flash-low"),
+			model("gemini-3.7-flash-medium"),
+			model("gemini-3.7-flash-high"),
+			model("cursor-grok-4.6-low"),
+			model("cursor-grok-4.6-medium"),
+			model("cursor-grok-4.6-high"),
+			model("cursor-grok-4.6-xhigh"),
+			model("gpt-5.6-sol-none"),
+			model("gpt-5.6-sol-low"),
+			model("gpt-5.6-sol-medium"),
+			model("gpt-5.6-sol-high"),
+			model("claude-opus-5-thinking-low"),
+			model("claude-opus-5-thinking-medium"),
+			model("claude-opus-5-thinking-high"),
+		],
+	});
+	const availableModels = create(AvailableModelsResponseSchema, {
+		models: [
+			available("gemini-3.7-flash", {
+				displayName: "Gemini 3.7 Flash",
+				thinking: true,
+				images: true,
+				context: 1_000_000,
+			}),
+			available("cursor-grok-4.6", {
+				displayName: "Cursor Grok 4.6",
+				thinking: true,
+				images: true,
+				supportsMax: true,
+				supportsNonMax: true,
+				context: 256_000,
+				maxContext: 256_000,
+			}),
+			available("gpt-5.6-sol", {
+				displayName: "GPT-5.6 Sol",
+				thinking: true,
+				images: true,
+				supportsMax: true,
+				supportsNonMax: true,
+				context: 272_000,
+				maxContext: 1_000_000,
+				variants: [variant("272k", { defaultNormal: true }), variant("1m", { max: true, defaultMax: true })],
+			}),
+			available("claude-opus-5-thinking", {
+				displayName: "Claude Opus 5",
+				thinking: true,
+				images: true,
+				supportsMax: true,
+				supportsNonMax: true,
+				context: 300_000,
+				maxContext: 1_000_000,
+				variants: [variant("300k", { defaultNormal: true }), variant("1m", { max: true, defaultMax: true })],
+			}),
+		],
+	});
+	const defaultModel = create(GetDefaultModelForCliResponseSchema, { model: usable.models[1] });
+	return { availableModels, usable, defaultModel };
+}
+
+function builtCatalog() {
+	const fixture = catalogFixture();
+	return cursorCatalogModels(
+		fixture.availableModels,
+		fixture.usable,
+		fixture.defaultModel,
+		"https://api2.cursor.sh",
+		new Map(),
+	).map(spec => buildModel(spec));
+}
+
+async function startCursorDiscoveryServer(): Promise<string> {
+	const fixture = catalogFixture();
+	const payloads = new Map([
+		["/aiserver.v1.AiService/AvailableModels", toBinary(AvailableModelsResponseSchema, fixture.availableModels)],
+		["/agent.v1.AgentService/GetUsableModels", toBinary(GetUsableModelsResponseSchema, fixture.usable)],
+		[
+			"/agent.v1.AgentService/GetDefaultModelForCli",
+			toBinary(GetDefaultModelForCliResponseSchema, fixture.defaultModel),
+		],
+	]);
 	const { promise, resolve, reject } = Promise.withResolvers<string>();
-	const srv = http2.createServer();
-	servers.add(srv);
-	srv.once("error", reject);
-	srv.on("stream", (stream: http2.ServerHttp2Stream) => {
+	const server = http2.createServer();
+	servers.add(server);
+	server.once("error", reject);
+	server.on("stream", (stream: http2.ServerHttp2Stream, headers) => {
+		const payload = payloads.get(String(headers[":path"]));
+		if (payload === undefined) {
+			stream.respond({ ":status": 404 });
+			stream.end();
+			return;
+		}
 		stream.respond({ ":status": 200, "content-type": "application/proto" });
-		stream.end(Buffer.from(body));
+		stream.end(Buffer.from(payload));
 	});
-	srv.listen(0, "127.0.0.1", () => {
-		resolve(`http://127.0.0.1:${requireTcpAddress(srv.address()).port}`);
+	server.listen(0, "127.0.0.1", () => {
+		resolve(`http://127.0.0.1:${requireTcpAddress(server.address()).port}`);
 	});
-	return promise;
+	return await promise;
 }
 
-async function createTempCachePath(): Promise<string> {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cursor-cache-"));
-	tempDirs.add(dir);
-	return path.join(dir, "models.db");
-}
-
-function cursorModelSpec(id: string): ModelSpec<"cursor-agent"> {
-	return {
-		id,
-		name: id,
-		api: "cursor-agent",
-		provider: "cursor",
-		baseUrl: "https://api2.cursor.sh",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 200_000,
-		maxTokens: 64_000,
-	};
-}
-
-describe("fetchCursorUsableModels", () => {
-	it("preserves Cursor max-mode metadata from GetUsableModels", async () => {
-		const response = create(GetUsableModelsResponseSchema, {
-			models: [
-				create(ModelDetailsSchema, {
-					modelId: "cursor-composer-max",
-					displayName: "Cursor Composer Max",
-					maxMode: true,
-				}),
-			],
-		});
-		const maxModeBaseUrl = await startCursorDiscoveryServer(toBinary(GetUsableModelsResponseSchema, response));
-
-		const models = await fetchCursorUsableModels({ apiKey: "test-token", baseUrl: maxModeBaseUrl, timeoutMs: 1_000 });
-
-		expect(models).toEqual([
-			expect.objectContaining({
-				id: "cursor-composer-max",
-				name: "Cursor Composer Max",
-				api: "cursor-agent",
-				provider: "cursor",
-				cursorMaxMode: true,
-			}),
-		]);
+describe("Cursor complete catalog join", () => {
+	it("invalidates partial caches and treats the complete account roster as authoritative", () => {
+		const options = cursorModelManagerOptions({ apiKey: "test-token" });
+		expect(options.cacheProviderId).toBe("cursor:complete-catalog-v5");
+		expect(options.dynamicModelsAuthoritative).toBe(true);
 	});
 
-	it("assigns the 1M window from display-name labels across families", async () => {
-		const response = create(GetUsableModelsResponseSchema, {
-			models: [
-				create(ModelDetailsSchema, { modelId: "claude-opus-5-high", displayName: "Opus 5 1M" }),
-				create(ModelDetailsSchema, { modelId: "gpt-5.5-high", displayName: "GPT-5.5 1M High" }),
-				create(ModelDetailsSchema, { modelId: "gpt-5.6-sol-medium", displayName: "GPT-5.6 Sol 1M" }),
-			],
+	it("uses the authoritative 1M Gemini window instead of the 200k fallback", () => {
+		const gemini = builtCatalog().find(candidate => candidate.id === "gemini-3.7-flash");
+		expect(gemini).toMatchObject({
+			contextWindow: 1_000_000,
+			input: ["text", "image"],
+			reasoning: true,
+			requestModelId: "gemini-3.7-flash-medium",
 		});
-		const labeledBaseUrl = await startCursorDiscoveryServer(toBinary(GetUsableModelsResponseSchema, response));
-
-		const models = await fetchCursorUsableModels({ apiKey: "test-token", baseUrl: labeledBaseUrl, timeoutMs: 1_000 });
-
-		expect(models).toEqual([
-			expect.objectContaining({ id: "claude-opus-5-high", contextWindow: 1_000_000 }),
-			expect.objectContaining({ id: "gpt-5.5-high", contextWindow: 1_000_000 }),
-			expect.objectContaining({ id: "gpt-5.6-sol-medium", contextWindow: 1_000_000 }),
-		]);
+		expect(gemini?.thinking?.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High]);
+		expect(gemini?.cursorMaxMode).toBe(false);
 	});
 
-	it("assigns the 1M window to natively 1M families Cursor serves unlabeled", async () => {
-		const response = create(GetUsableModelsResponseSchema, {
-			models: [
-				create(ModelDetailsSchema, { modelId: "kimi-k3-max", displayName: "Kimi K3" }),
-				create(ModelDetailsSchema, { modelId: "moonshotai/kimi-k3", displayName: "Kimi K3" }),
-				create(ModelDetailsSchema, { modelId: "k3", displayName: "K3" }),
-				create(ModelDetailsSchema, { modelId: "kimi/k3", displayName: "K3" }),
-				create(ModelDetailsSchema, { modelId: "glm-5.2-max", displayName: "GLM 5.2 Max" }),
-				create(ModelDetailsSchema, { modelId: "glm-5.10-high", displayName: "GLM 5.10 High" }),
-				create(ModelDetailsSchema, { modelId: "glm-6-max", displayName: "GLM 6 Max" }),
-			],
-		});
-		const nativeBaseUrl = await startCursorDiscoveryServer(toBinary(GetUsableModelsResponseSchema, response));
-
-		const models = await fetchCursorUsableModels({ apiKey: "test-token", baseUrl: nativeBaseUrl, timeoutMs: 1_000 });
-
-		// The bare-`k3` spellings are rule-owned (`providers/cursor.kdl`
-		// context-window-floor) and reach 1M once the spec is built.
-		const built = models?.map(model => buildModel(model));
-		expect(built).toEqual([
-			expect.objectContaining({ id: "glm-5.10-high", contextWindow: 1_000_000 }),
-			expect.objectContaining({ id: "glm-5.2-max", contextWindow: 1_000_000 }),
-			expect.objectContaining({ id: "glm-6-max", contextWindow: 1_000_000 }),
-			expect.objectContaining({ id: "k3", contextWindow: 1_000_000 }),
-			expect.objectContaining({ id: "kimi-k3-max", contextWindow: 1_000_000 }),
-			expect.objectContaining({ id: "kimi/k3", contextWindow: 1_000_000 }),
-			expect.objectContaining({ id: "moonshotai/kimi-k3", contextWindow: 1_000_000 }),
-		]);
+	it("does not invent a redundant Grok Max row when both catalog modes are equivalent", () => {
+		const grok = builtCatalog().filter(candidate => candidate.id.startsWith("cursor-grok-4.6"));
+		expect(grok).toHaveLength(1);
+		expect(grok[0]).toMatchObject({ contextWindow: 256_000, cursorMaxMode: false });
 	});
 
-	it("keeps the default window below the GLM 5.2 floor and outside the coding variants", async () => {
-		const response = create(GetUsableModelsResponseSchema, {
-			models: [
-				create(ModelDetailsSchema, { modelId: "glm-5.1-high", displayName: "GLM 5.1 High" }),
-				create(ModelDetailsSchema, { modelId: "glm-5.2-flash", displayName: "GLM 5.2 Flash" }),
-				create(ModelDetailsSchema, { modelId: "k3-256k", displayName: "K3-256k" }),
-			],
+	it("publishes distinct normal and Max rows with exact context parameters", () => {
+		const models = builtCatalog();
+		expect(models.find(candidate => candidate.id === "gpt-5.6-sol")).toMatchObject({
+			contextWindow: 272_000,
+			cursorContext: "272k",
+			cursorMaxMode: false,
 		});
-		const nativeBaseUrl = await startCursorDiscoveryServer(toBinary(GetUsableModelsResponseSchema, response));
-
-		const models = await fetchCursorUsableModels({ apiKey: "test-token", baseUrl: nativeBaseUrl, timeoutMs: 1_000 });
-
-		expect(models).toEqual([
-			expect.objectContaining({ id: "glm-5.1-high", contextWindow: 200_000 }),
-			expect.objectContaining({ id: "glm-5.2-flash", contextWindow: 200_000 }),
-			expect.objectContaining({ id: "k3-256k", contextWindow: 200_000 }),
-		]);
+		expect(models.find(candidate => candidate.id === "gpt-5.6-sol-1m")).toMatchObject({
+			contextWindow: 1_000_000,
+			cursorContext: "1m",
+			cursorMaxMode: true,
+		});
+		expect(models.find(candidate => candidate.id === "claude-opus-5-thinking")).toMatchObject({
+			contextWindow: 300_000,
+			cursorContext: "300k",
+			cursorMaxMode: false,
+		});
+		expect(models.find(candidate => candidate.id === "claude-opus-5-thinking-1m")).toMatchObject({
+			contextWindow: 1_000_000,
+			cursorContext: "1m",
+			cursorMaxMode: true,
+		});
 	});
 
-	it("assigns the 1M window to unlabeled max-mode Claude models", async () => {
-		const response = create(GetUsableModelsResponseSchema, {
-			models: [
-				create(ModelDetailsSchema, {
-					modelId: "claude-opus-4-8-high-fast",
-					displayName: "Opus 4.8 Fast",
-					maxMode: true,
-				}),
-			],
-		});
-		const maxModeBaseUrl = await startCursorDiscoveryServer(toBinary(GetUsableModelsResponseSchema, response));
-
-		const models = await fetchCursorUsableModels({ apiKey: "test-token", baseUrl: maxModeBaseUrl, timeoutMs: 1_000 });
-
-		expect(models).toEqual([
-			expect.objectContaining({ id: "claude-opus-4-8-high-fast", cursorMaxMode: true, contextWindow: 1_000_000 }),
-		]);
+	it("fetches and joins all three catalog surfaces", async () => {
+		const baseUrl = await startCursorDiscoveryServer();
+		const models = await fetchCursorUsableModels({ apiKey: "test-token", baseUrl, timeoutMs: 1_000 });
+		expect(models).not.toBeNull();
+		expect(models?.find(candidate => candidate.id === "gemini-3.7-flash")?.contextWindow).toBe(1_000_000);
+		expect(models?.find(candidate => candidate.id === "gpt-5.6-sol-1m")?.cursorMaxMode).toBe(true);
 	});
 
-	it("keeps the default window for unlabeled non-max models and max-mode models outside 1M families", async () => {
-		// Unbundled ids: the contract under test is "no 1M signal → fallback
-		// preserved", so neither id may carry a bundled cursor reference whose
-		// snapshot window would replace the 200k default fallback.
-		const response = create(GetUsableModelsResponseSchema, {
-			models: [
-				create(ModelDetailsSchema, { modelId: "cursor-composer-max", maxMode: true }),
-				create(ModelDetailsSchema, { modelId: "claude-opus-9-high", displayName: "Opus 9" }),
-			],
+	it("fails closed when any required catalog surface is unavailable", async () => {
+		const { promise, resolve } = Promise.withResolvers<string>();
+		const server = http2.createServer();
+		servers.add(server);
+		server.on("stream", (stream: http2.ServerHttp2Stream, headers) => {
+			if (headers[":path"] !== "/agent.v1.AgentService/GetUsableModels") {
+				stream.respond({ ":status": 503 });
+				stream.end();
+				return;
+			}
+			const fixture = catalogFixture();
+			stream.respond({ ":status": 200, "content-type": "application/proto" });
+			stream.end(toBinary(GetUsableModelsResponseSchema, fixture.usable));
 		});
-		const defaultBaseUrl = await startCursorDiscoveryServer(toBinary(GetUsableModelsResponseSchema, response));
-
-		const models = await fetchCursorUsableModels({ apiKey: "test-token", baseUrl: defaultBaseUrl, timeoutMs: 1_000 });
-
-		expect(models).toEqual([
-			expect.objectContaining({ id: "claude-opus-9-high", cursorMaxMode: false, contextWindow: 200_000 }),
-			expect.objectContaining({ id: "cursor-composer-max", cursorMaxMode: true, contextWindow: 200_000 }),
-		]);
+		server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${requireTcpAddress(server.address()).port}`));
+		expect(
+			await fetchCursorUsableModels({ apiKey: "test-token", baseUrl: await promise, timeoutMs: 1_000 }),
+		).toBeNull();
 	});
+});
 
-	it("raises a bundled reference window when the reference id is served with a 1M label", async () => {
-		// `claude-4.5-sonnet` is a bundled cursor reference with a 200k window;
-		// served with a 1M display name it must expose the 1M ceiling.
-		const response = create(GetUsableModelsResponseSchema, {
-			models: [create(ModelDetailsSchema, { modelId: "claude-4.5-sonnet", displayName: "Sonnet 4.5 1M" })],
-		});
-		const referenceBaseUrl = await startCursorDiscoveryServer(toBinary(GetUsableModelsResponseSchema, response));
-
-		const models = await fetchCursorUsableModels({
-			apiKey: "test-token",
-			baseUrl: referenceBaseUrl,
-			timeoutMs: 1_000,
-		});
-
-		expect(models).toEqual([expect.objectContaining({ id: "claude-4.5-sonnet", contextWindow: 1_000_000 })]);
-	});
-
-	it("ignores Cursor cache rows written before 1M context windows were persisted", async () => {
-		const cacheDbPath = await createTempCachePath();
-		const staleSpec = { ...cursorModelSpec("claude-opus-4-8-high-fast"), cursorMaxMode: true };
-		await resolveProviderModels(
-			{
-				providerId: "cursor",
-				cacheProviderId: "cursor:max-mode-v2",
-				cacheDbPath,
-				staticModels: [],
-				fetchDynamicModels: async () => [staleSpec],
-				now: () => 1,
-			},
-			"online",
-		);
-
-		const response = create(GetUsableModelsResponseSchema, {
-			models: [
-				create(ModelDetailsSchema, {
-					modelId: staleSpec.id,
-					displayName: staleSpec.name,
-					maxMode: true,
-				}),
-			],
-		});
-		const staleBaseUrl = await startCursorDiscoveryServer(toBinary(GetUsableModelsResponseSchema, response));
-		const result = await resolveProviderModels(
-			{
-				...cursorModelManagerOptions({ apiKey: "test-token", baseUrl: staleBaseUrl }),
-				cacheDbPath,
-				staticModels: [],
-				now: () => 2,
-			},
-			"online-if-uncached",
-		);
-
-		expect(result.models).toEqual([
-			expect.objectContaining({
-				id: staleSpec.id,
-				cursorMaxMode: true,
-				contextWindow: 1_000_000,
-			}),
-		]);
+describe("Cursor fallback input classification", () => {
+	it("keeps known multimodal classes and unknown models conservative", () => {
+		expect(resolveCursorInput("gemini-4-pro-exp")).toEqual(["text", "image"]);
+		expect(resolveCursorInput("claude-opus-9")).toEqual(["text", "image"]);
+		expect(resolveCursorInput("gpt-5.6-sol")).toEqual(["text", "image"]);
+		expect(resolveCursorInput("unknown-cursor-model")).toEqual(["text"]);
 	});
 });

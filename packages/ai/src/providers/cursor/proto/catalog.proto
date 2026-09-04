@@ -1,0 +1,63 @@
+// Minimal catalog closure reconstructed from cursor-agent 2026.09.02-fa0c06e.
+// Only fields used by provider registration and Max Mode decomposition are retained.
+syntax = "proto3";
+
+package aiserver.v1;
+
+import "agent.proto";
+
+message AvailableModelsRequest {
+  optional bool use_model_parameters = 5;
+  optional bool do_not_use_markdown = 7;
+}
+
+message AvailableModelsResponse {
+  repeated AvailableModel models = 2;
+
+  message AvailableModel {
+    string name = 1;
+    optional TooltipData tooltip_data = 8;
+    optional bool supports_thinking = 9;
+    optional bool supports_images = 10;
+    optional bool supports_max_mode = 14;
+    optional int32 context_token_limit = 15;
+    optional int32 context_token_limit_for_max_mode = 16;
+    optional string client_display_name = 17;
+    optional string server_model_name = 18;
+    optional bool supports_non_max_mode = 19;
+    optional TooltipData tooltip_data_for_max_mode = 20;
+    repeated ModelParameterDefinition parameter_definitions = 29;
+    repeated ModelVariantConfig variants = 30;
+    repeated string legacy_slugs = 36;
+    repeated string id_aliases = 37;
+  }
+
+  message ModelVariantConfig {
+    repeated agent.v1.RequestedModel_ModelParameterbytes parameter_values = 1;
+    string display_name = 2;
+    bool is_max_mode = 3;
+    optional bool is_default_max_config = 4;
+    optional bool is_default_non_max_config = 5;
+    optional TooltipData tooltip_data = 6;
+    optional string tagline = 7;
+    optional string display_name_outside_picker = 8;
+    optional string variant_string_representation = 9;
+    optional string legacy_slug = 11;
+  }
+
+  message TooltipData {
+    string primary_text = 1;
+    string secondary_text = 2;
+    bool secondary_warning_text = 3;
+    string icon = 4;
+    string tertiary_text = 5;
+    string tertiary_text_url = 6;
+    optional string markdown_content = 7;
+  }
+}
+
+message ModelParameterDefinition {
+  string id = 1;
+  string name = 2;
+  optional string markdown_tooltip = 3;
+}
