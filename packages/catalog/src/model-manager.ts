@@ -317,10 +317,9 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const mergedWithCatalogMetrics = additiveStaticModelIds
 		? mergeCatalogMetrics(mergedWithModelsDev, catalogMetricsSource)
 		: mergedWithModelsDev;
-	// A successful models.dev lookup remains the capability-enrichment source for
-	// sparse dynamic rosters. Otherwise an authoritative dynamic catalog owns the
-	// complete per-route capability set as well as the selectable model IDs.
-	const dynamicCapabilitiesAuthoritative = authoritativeDynamicFetchSucceeded && !modelsDevFetchSucceeded;
+	// Shared catalog rows enrich costs and limits, but a successful authoritative
+	// provider catalog still owns each route's explicit capability set.
+	const dynamicCapabilitiesAuthoritative = authoritativeDynamicFetchSucceeded;
 	const mergedModels = mergeDynamicModels(mergedWithCatalogMetrics, dynamicModels, dynamicCapabilitiesAuthoritative);
 	const models = collapseBuiltVariants(
 		authoritativeDynamicFetchSucceeded ? retainModelIds(mergedModels, dynamicModels) : mergedModels,

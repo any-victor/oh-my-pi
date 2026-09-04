@@ -16,6 +16,7 @@
 - Fixed Cursor selector variants sending picker aliases as wire model IDs; normal, Max, thinking, effort, context, and Fast selections now use the catalog's base model and complete parameter set.
 - Fixed compressed Cursor catalog responses expanding beyond the catalog response-size limit during gzip or Brotli decompression.
 - Fixed distinct Cursor Max configurations being mislabeled as 1M rows when their authoritative context is smaller or unchanged.
+- Fixed authoritative provider catalogs losing explicit text-only or non-reasoning capabilities when shared catalog enrichment also succeeds.
 
 ## [18.1.9] - 2026-09-04
 
