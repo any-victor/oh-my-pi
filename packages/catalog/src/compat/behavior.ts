@@ -61,7 +61,7 @@ export function cursorEffortTierSuffix(
 	if (!rule) return undefined;
 	const fast = model.endsWith("-fast");
 	const candidate = fast ? model.slice(0, -"-fast".length) : model;
-	for (const tier of rule.tiers) {
+	for (const tier of rule.tiers.toSorted((left, right) => right.suffix.length - left.suffix.length)) {
 		if (!candidate.endsWith(tier.suffix)) continue;
 		const prefix = candidate.slice(0, candidate.length - tier.suffix.length);
 		if (!prefix.endsWith("-")) continue;

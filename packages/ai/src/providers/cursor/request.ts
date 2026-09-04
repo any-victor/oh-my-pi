@@ -113,7 +113,7 @@ function toolResultExperimentalContent(message: Extract<Message, { role: "toolRe
 	return message.content.map(part => (part.type === "text" ? textPart(part.text) : imagePart(part)));
 }
 
-export function messageToInference(message: Message, toolCallIds: ReadonlyMap<string, string>): InferenceCoreMessage {
+export function messageToInference(message: Message, toolCallIds: ReadonlyMap<object, string>): InferenceCoreMessage {
 	if (message.role === "user" || message.role === "developer") {
 		return create(InferenceCoreMessageSchema, {
 			role: message.role === "user" ? InferenceMessageRole.USER : InferenceMessageRole.SYSTEM,
@@ -148,7 +148,7 @@ export function messageToInference(message: Message, toolCallIds: ReadonlyMap<st
 					const args = requiredJsonObject(part.arguments, `Cursor inference tool '${part.name}' arguments`);
 					toolCalls.push(
 						create(InferenceToolCallSchema, {
-							toolCallId: toolCallIds.get(part.id) ?? normalizeToolCallId(part.id),
+							toolCallId: toolCallIds.get(part) ?? normalizeToolCallId(part.id),
 							toolName: part.name,
 							args: encodeJsonStruct(args),
 							rawToolCallArgs: JSON.stringify(args),
@@ -188,7 +188,7 @@ export function messageToInference(message: Message, toolCallIds: ReadonlyMap<st
 			value: create(InferenceToolResultContentSchema, {
 				parts: [
 					create(InferenceToolResultPartSchema, {
-						toolCallId: toolCallIds.get(message.toolCallId) ?? normalizeToolCallId(message.toolCallId),
+						toolCallId: toolCallIds.get(message) ?? normalizeToolCallId(message.toolCallId),
 						toolName: message.toolName,
 						result: encodeJsonValue(toolResultJson(message)),
 						isError: message.isError,
@@ -211,18 +211,11 @@ function toolToInference(tool: Tool) {
 }
 
 /** Build the complete per-invocation request. Routing and model selection stay on the outer run. */
-function uniqueToolCallIds(context: Context): ReadonlyMap<string, string> {
-	const rawIds = context.messages.flatMap(message =>
-		message.role === "assistant"
-			? message.content.flatMap(part => (part.type === "toolCall" ? [part.id] : []))
-			: message.role === "toolResult"
-				? [message.toolCallId]
-				: [],
-	);
-	const byRawId = new Map<string, string>();
+function uniqueToolCallIds(context: Context): ReadonlyMap<object, string> {
+	const assignments = new Map<object, string>();
+	const pending = new Map<string, string[]>();
 	const used = new Set<string>();
-	for (const rawId of rawIds) {
-		if (byRawId.has(rawId)) continue;
+	const allocate = (rawId: string): string => {
 		const normalized = normalizeToolCallId(rawId);
 		let candidate = normalized;
 		let duplicate = 1;
@@ -231,9 +224,27 @@ function uniqueToolCallIds(context: Context): ReadonlyMap<string, string> {
 			candidate = `${normalized.slice(0, 64 - suffix.length)}${suffix}`;
 		}
 		used.add(candidate);
-		byRawId.set(rawId, candidate);
+		return candidate;
+	};
+	for (const message of context.messages) {
+		if (message.role === "assistant") {
+			for (const part of message.content) {
+				if (part.type !== "toolCall") continue;
+				const assigned = allocate(part.id);
+				assignments.set(part, assigned);
+				const queue = pending.get(part.id) ?? [];
+				queue.push(assigned);
+				pending.set(part.id, queue);
+			}
+			continue;
+		}
+		if (message.role !== "toolResult") continue;
+		const queue = pending.get(message.toolCallId);
+		const assigned = queue?.shift() ?? allocate(message.toolCallId);
+		assignments.set(message, assigned);
+		if (queue?.length === 0) pending.delete(message.toolCallId);
 	}
-	return byRawId;
+	return assignments;
 }
 
 export function buildInferenceRequest(

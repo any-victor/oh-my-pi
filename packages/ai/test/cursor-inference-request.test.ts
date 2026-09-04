@@ -149,6 +149,40 @@ describe("Cursor managed-inference request", () => {
 		expect(resultIds).toEqual(["call_a", "call_a_dup1"]);
 	});
 
+	test("deduplicates repeated raw tool ids by call occurrence", () => {
+		const context = history();
+		const firstAssistant = context.messages[1];
+		const firstResult = context.messages[2];
+		if (firstAssistant?.role !== "assistant" || firstResult?.role !== "toolResult") {
+			throw new Error("tool history missing");
+		}
+		const firstCall = firstAssistant.content.find(part => part.type === "toolCall");
+		if (firstCall?.type !== "toolCall") throw new Error("tool call missing");
+		firstCall.id = "reused-id";
+		firstResult.toolCallId = "reused-id";
+		const secondAssistant = structuredClone(firstAssistant);
+		const secondCall = secondAssistant.content.find(part => part.type === "toolCall");
+		if (secondCall?.type !== "toolCall") throw new Error("second tool call missing");
+		secondCall.id = "reused-id";
+		secondAssistant.timestamp = 4;
+		context.messages.push(secondAssistant, {
+			role: "toolResult",
+			toolCallId: "reused-id",
+			toolName: TOOL.name,
+			content: [{ type: "text", text: "second" }],
+			isError: false,
+			timestamp: 5,
+		});
+
+		const request = buildInferenceRequest(context);
+		const callIds = request.messages.flatMap(message => message.toolCalls.map(call => call.toolCallId));
+		const resultIds = request.messages.flatMap(message =>
+			message.content?.case === "toolContent" ? message.content.value.parts.map(result => result.toolCallId) : [],
+		);
+		expect(callIds).toEqual(["reused-id", "reused-id_dup1"]);
+		expect(resultIds).toEqual(["reused-id", "reused-id_dup1"]);
+	});
+
 	test("omits tools for none and rejects unsupported forced choices", () => {
 		expect(buildInferenceRequest(history(), { toolChoice: "none" }).tools).toEqual([]);
 		expect(() => buildInferenceRequest(history(), { toolChoice: "required" })).toThrow(
@@ -254,6 +288,14 @@ describe("Cursor managed-inference request", () => {
 			maxMode: false,
 			parameters: [
 				{ id: "reasoning", value: "high" },
+				{ id: "fast", value: "false" },
+			],
+		});
+		expect(JSON.parse(inferenceRoutingKey(gpt, { wireModelId: "gpt-5.6-sol-extra-high" }))).toEqual({
+			modelId: "gpt-5.6-sol",
+			maxMode: false,
+			parameters: [
+				{ id: "reasoning", value: "extra-high" },
 				{ id: "fast", value: "false" },
 			],
 		});

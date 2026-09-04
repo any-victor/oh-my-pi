@@ -452,8 +452,8 @@ messages.
   tool-call, and tool-result message is projected into `InferenceCoreMessage`.
   Cross-provider history, reasoning signatures, redacted reasoning, images, and
   image-bearing tool results remain in context. Tool-call and matching result IDs
-  use one collision-resistant per-context mapping into Cursor's accepted charset
-  and length during replay.
+  use one collision-resistant, occurrence-aware per-context mapping into Cursor's
+  accepted charset and length during replay.
 - **Tool ownership:** active OMP tools are serialized as `InferenceAgentTool`.
   `toolChoice: "none"` omits the catalog; required and named forcing fail clearly
   because `RunInference` exposes no equivalent wire control. The server returns
