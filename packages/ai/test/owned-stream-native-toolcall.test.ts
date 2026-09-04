@@ -416,6 +416,31 @@ describe("leaked-thinking terminal reconciliation", () => {
 		);
 	});
 
+	it("drops streamed text whose source block is absent from the terminal message", async () => {
+		const source = new AssistantMessageEventStream();
+		const projected = wrapLeakedThinkingStream(source);
+		const message = makeAssistant([]);
+		const first = { type: "text" as const, text: "first draft" };
+		const thinking = { type: "thinking" as const, thinking: "reasoning" };
+		const second = { type: "text" as const, text: "second draft" };
+		message.content.push(first, thinking, second);
+		source.push({ type: "start", partial: message });
+		source.push({ type: "text_start", contentIndex: 0, partial: message });
+		source.push({ type: "text_delta", contentIndex: 0, delta: first.text, partial: message });
+		source.push({ type: "text_end", contentIndex: 0, content: first.text, partial: message });
+		source.push({ type: "thinking_start", contentIndex: 1, partial: message });
+		source.push({ type: "thinking_delta", contentIndex: 1, delta: thinking.thinking, partial: message });
+		source.push({ type: "thinking_end", contentIndex: 1, content: thinking.thinking, partial: message });
+		source.push({ type: "text_start", contentIndex: 2, partial: message });
+		source.push({ type: "text_delta", contentIndex: 2, delta: second.text, partial: message });
+		const final = { type: "text" as const, text: "final" };
+		message.content = [final];
+		source.push({ type: "done", reason: "stop", message });
+
+		const result = await projected.result();
+		expect(result.content.filter(block => block.type === "text")).toEqual([final]);
+	});
+
 	it("retains a terminal-only native tool call", async () => {
 		const source = new AssistantMessageEventStream();
 		const projected = wrapLeakedThinkingStream(source);

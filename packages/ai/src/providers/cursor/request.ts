@@ -52,6 +52,7 @@ import {
 	cursorModelParameters,
 	cursorModelRoute,
 } from "@oh-my-pi/pi-catalog/compat/behavior";
+import missingToolResult from "./missing-tool-result.md" with { type: "text" };
 
 export interface CursorInferenceRequestOptions {
 	readonly maxTokens?: number;
@@ -328,7 +329,7 @@ function repairToolResultPairing(messages: readonly Message[]): Message[] {
 				role: "toolResult",
 				toolCallId: call.id,
 				toolName: call.name,
-				content: [{ type: "text", text: "Tool call ended before a result was available." }],
+				content: [{ type: "text", text: missingToolResult.trimEnd() }],
 				isError: true,
 				timestamp: call.timestamp,
 			});

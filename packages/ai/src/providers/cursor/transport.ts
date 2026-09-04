@@ -163,6 +163,23 @@ function cursorInvocationError(error: RunInferenceInvocationError): Error {
 		: new AIError.ProviderHttpError(message, status, { code: String(error.code) });
 }
 
+function cursorTrailerError(error: ConnectTrailerError): Error {
+	const message = `Cursor RunInference failed: ${formatConnectEndStreamError(error)}`;
+	const status =
+		error.code === "unauthenticated"
+			? 401
+			: error.code === "permission_denied"
+				? 403
+				: error.code === "resource_exhausted"
+					? 429
+					: error.code === "unavailable"
+						? 503
+						: undefined;
+	return status === undefined
+		? new AIError.ProviderResponseError(message, { provider: "cursor", kind: "output" })
+		: new AIError.ProviderHttpError(message, status, { code: error.code });
+}
+
 function abortError(): DOMException {
 	return new DOMException("Aborted", "AbortError");
 }
@@ -287,9 +304,7 @@ export class CursorInferenceRun {
 					if (this.#trailer !== undefined) throw new Error("Cursor sent data after the Connect trailer");
 					if (frame.endOfStream) {
 						this.#trailer = parseTrailer(frame.body);
-						if (this.#trailer.error !== undefined) {
-							throw new Error(`Cursor RunInference failed: ${formatConnectEndStreamError(this.#trailer.error)}`);
-						}
+						if (this.#trailer.error !== undefined) throw cursorTrailerError(this.#trailer.error);
 						continue;
 					}
 					const message = fromBinary(RunInferenceServerMessageSchema, frame.body);

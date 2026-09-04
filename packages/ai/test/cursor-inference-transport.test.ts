@@ -605,6 +605,40 @@ describe("Cursor managed-inference transport", () => {
 			}),
 		);
 		expect(error).toHaveProperty("message", expect.stringContaining('cursor.quota: {"reason":"plan_limit"}'));
+		expect(error).toHaveProperty("status", 429);
+		await managed.shutdown();
+	});
+
+	test("maps Connect authentication trailers to a rotatable HTTP status", async () => {
+		const target = await loopback((message, stream) => {
+			if (message.message.case === "runRequest") {
+				send(
+					stream,
+					serverMessage({
+						message: {
+							case: "runReady",
+							value: create(RunInferenceRunReadySchema, {
+								resolvedModel: create(InferenceRequestedModelSchema, { modelId: "composer-2.5" }),
+							}),
+						},
+					}),
+				);
+			}
+			if (message.message.case === "invokeModel") {
+				const trailer = new TextEncoder().encode(
+					JSON.stringify({ error: { code: "unauthenticated", message: "Login required" } }),
+				);
+				stream.end(encodeConnectFrame(trailer, CONNECT_FLAG_END_STREAM));
+			}
+		});
+		const managed = runtime(target);
+		const error = await rejection(
+			managed.invoke("omp-session", "route", clientRun(), "failed", create(InferenceStreamRequestSchema), {
+				onMessage: () => undefined,
+			}),
+		);
+		expect(error).toHaveProperty("status", 401);
+		expect(error).toHaveProperty("message", expect.stringContaining("unauthenticated"));
 		await managed.shutdown();
 	});
 

@@ -424,6 +424,12 @@ class LeakedThinkingProjector {
 			this.#lastTextSignature = block.textSignature;
 			this.#apply(this.#healer.feed(block.text.slice(replayStart)), this.#lastTextSignature, srcIndex);
 		}
+		for (const candidate of unclaimedText) {
+			const sourceIndex = this.#sourceAnchors.get(candidate);
+			if (sourceIndex === undefined || message.content[sourceIndex]?.type === "text") continue;
+			const contentIndex = this.#partial.content.indexOf(candidate);
+			if (contentIndex >= 0) this.#partial.content.splice(contentIndex, 1);
+		}
 		this.#flushHealer();
 		this.#closeText();
 		this.#closeThinking();
