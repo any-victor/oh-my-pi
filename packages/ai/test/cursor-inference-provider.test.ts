@@ -15,6 +15,7 @@ import {
 	InferenceStreamRequestSchema,
 	InferenceStreamResponseSchema,
 	InferenceTextStreamPartSchema,
+	InferenceToolCallStreamPartSchema,
 	RunInferenceClientMessageSchema,
 	RunInferenceInvocationEndSchema,
 	RunInferenceInvocationResponseSchema,
@@ -43,7 +44,7 @@ function send(stream: ServerHttp2Stream, message: RunInferenceServerMessage): vo
 	stream.write(encodeConnectFrame(toBinary(RunInferenceServerMessageSchema, message)));
 }
 
-async function loopback(): Promise<{
+async function loopback(toolCallName?: string): Promise<{
 	readonly origin: string;
 	readonly runRequests: () => number;
 	readonly invocations: () => number;
@@ -98,6 +99,32 @@ async function loopback(): Promise<{
 								}),
 							},
 						});
+					if (toolCallName !== undefined) {
+						send(
+							stream,
+							response({
+								response: {
+									case: "toolCallPart",
+									value: create(InferenceToolCallStreamPartSchema, {
+										toolCallId: "omitted-tool",
+										toolName: toolCallName,
+										args: "{}",
+										isComplete: true,
+									}),
+								},
+							}),
+						);
+						send(
+							stream,
+							create(RunInferenceServerMessageSchema, {
+								message: {
+									case: "invocationEnd",
+									value: create(RunInferenceInvocationEndSchema, { invocationId }),
+								},
+							}),
+						);
+						continue;
+					}
 					send(
 						stream,
 						response({
@@ -255,6 +282,44 @@ describe("Cursor provider entrypoint", () => {
 			expect(result.content).toEqual([{ type: "text", text: "final-1" }]);
 			expect(target.invokeStopSequences()).toEqual([["STOP"]]);
 			expect(target.invokeToolCounts()).toEqual([0]);
+		} finally {
+			closeProviderState(providerSessionState);
+		}
+	});
+
+	test("rejects tool calls removed by the final payload hook", async () => {
+		const target = await loopback("read");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		try {
+			const { result } = await collect(
+				streamCursor(
+					model(target.origin),
+					{
+						messages: [{ role: "user", content: "do not call the removed tool", timestamp: 1 }],
+						tools: [
+							{
+								name: "read",
+								description: "Read a file.",
+								parameters: { type: "object", properties: {}, additionalProperties: false },
+							},
+						],
+					},
+					{
+						apiKey: "HEADER.PAYLOAD.SIGNATURE",
+						sessionId: "omp-session",
+						providerSessionState,
+						onPayload: payload => {
+							const request = payload as InferenceStreamRequest;
+							return create(InferenceStreamRequestSchema, { ...request, tools: [] });
+						},
+					},
+				),
+			);
+			expect(target.invokeToolCounts()).toEqual([0]);
+			expect(result).toMatchObject({
+				stopReason: "error",
+				errorMessage: expect.stringContaining("unadvertised tool 'read'"),
+			});
 		} finally {
 			closeProviderState(providerSessionState);
 		}
