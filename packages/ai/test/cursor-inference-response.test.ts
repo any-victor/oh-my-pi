@@ -415,6 +415,57 @@ describe("Cursor managed-inference response", () => {
 		expect(events.filter(event => event.type === "text_delta")).toHaveLength(1);
 	});
 
+	test("preserves typed stream error classification when final metadata updates its message", async () => {
+		const authentication = await map([
+			response({
+				response: {
+					case: "error",
+					value: create(InferenceStreamErrorSchema, {
+						message: "generic authentication failure",
+						errorType: InferenceStreamErrorType.AUTHENTICATION,
+					}),
+				},
+			}),
+			response({
+				response: {
+					case: "responseInfo",
+					value: create(InferenceResponseInfoSchema, { errorMessage: "refresh the Cursor credential" }),
+				},
+			}),
+		]);
+		expect(authentication.terminal).toEqual({
+			stopReason: "error",
+			errorMessage: "refresh the Cursor credential",
+			errorStatus: 401,
+		});
+
+		const outputLimit = await map([
+			response({
+				response: {
+					case: "textPart",
+					value: create(InferenceTextStreamPartSchema, { text: "partial", isFinal: false }),
+				},
+			}),
+			response({
+				response: {
+					case: "error",
+					value: create(InferenceStreamErrorSchema, {
+						message: "generic output limit",
+						errorType: InferenceStreamErrorType.OUTPUT_TOKEN_LIMIT,
+					}),
+				},
+			}),
+			response({
+				response: {
+					case: "responseInfo",
+					value: create(InferenceResponseInfoSchema, { errorMessage: "maximum output reached" }),
+				},
+			}),
+		]);
+		expect(outputLimit.terminal).toEqual({ stopReason: "length" });
+		expect(outputLimit.result.content).toEqual([{ type: "text", text: "partial" }]);
+	});
+
 	test("maps structured authentication failures for credential rotation", async () => {
 		const { terminal } = await map([
 			response({

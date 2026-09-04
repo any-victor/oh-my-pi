@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as http2 from "node:http2";
 import type * as net from "node:net";
+import * as zlib from "node:zlib";
 import { Effort } from "../src/effort";
 import { buildModel } from "../src/build";
 import { cursorCatalogModels, fetchCursorUsableModels, resolveCursorInput } from "../src/discovery/cursor";
@@ -301,6 +302,57 @@ describe("Cursor complete catalog join", () => {
 		expect(models?.find(candidate => candidate.id === "gemini-3.7-flash")?.contextWindow).toBe(1_000_000);
 		expect(models?.find(candidate => candidate.id === "gpt-5.6-sol-1m")?.cursorMaxMode).toBe(true);
 	});
+
+	it.each(["gzip", "br"] as const)(
+		"rejects a %s catalog response that expands beyond the size limit",
+		async encoding => {
+			const fixture = catalogFixture();
+			const oversizedAvailable = create(AvailableModelsResponseSchema, {
+				models: [
+					available("gemini-3.7-flash", {
+						displayName: "x".repeat(4 * 1024 * 1024),
+						thinking: true,
+						context: 1_000_000,
+					}),
+				],
+			});
+			const payloads = new Map([
+				["/aiserver.v1.AiService/AvailableModels", toBinary(AvailableModelsResponseSchema, oversizedAvailable)],
+				["/agent.v1.AgentService/GetUsableModels", toBinary(GetUsableModelsResponseSchema, fixture.usable)],
+				[
+					"/agent.v1.AgentService/GetDefaultModelForCli",
+					toBinary(GetDefaultModelForCliResponseSchema, fixture.defaultModel),
+				],
+			]);
+			const { promise, resolve } = Promise.withResolvers<string>();
+			const server = http2.createServer();
+			servers.add(server);
+			server.on("stream", (stream: http2.ServerHttp2Stream, headers) => {
+				const path = String(headers[":path"]);
+				const payload = payloads.get(path);
+				if (payload === undefined) {
+					stream.respond({ ":status": 404 });
+					stream.end();
+					return;
+				}
+				if (path === "/aiserver.v1.AiService/AvailableModels") {
+					const compressed = encoding === "gzip" ? zlib.gzipSync(payload) : zlib.brotliCompressSync(payload);
+					stream.respond({ ":status": 200, "content-type": "application/proto", "content-encoding": encoding });
+					stream.end(compressed);
+					return;
+				}
+				stream.respond({ ":status": 200, "content-type": "application/proto" });
+				stream.end(payload);
+			});
+			server.listen(0, "127.0.0.1", () => {
+				resolve(`http://127.0.0.1:${requireTcpAddress(server.address()).port}`);
+			});
+
+			expect(
+				await fetchCursorUsableModels({ apiKey: "test-token", baseUrl: await promise, timeoutMs: 2_000 }),
+			).toBeNull();
+		},
+	);
 
 	it("fails closed when any required catalog surface is unavailable", async () => {
 		const { promise, resolve } = Promise.withResolvers<string>();

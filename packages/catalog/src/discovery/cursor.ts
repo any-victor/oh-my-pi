@@ -69,8 +69,12 @@ function buildRequestHeaders(options: CursorModelDiscoveryOptions): Record<strin
 }
 
 function decodeBody(body: Uint8Array, encoding: string | undefined): Uint8Array {
-	if (encoding === "gzip") return new Uint8Array(gunzipSync(body));
-	if (encoding === "br") return new Uint8Array(brotliDecompressSync(body));
+	if (encoding === "gzip") {
+		return new Uint8Array(gunzipSync(body, { maxOutputLength: CURSOR_RESPONSE_LIMIT_BYTES }));
+	}
+	if (encoding === "br") {
+		return new Uint8Array(brotliDecompressSync(body, { maxOutputLength: CURSOR_RESPONSE_LIMIT_BYTES }));
+	}
 	return body;
 }
 

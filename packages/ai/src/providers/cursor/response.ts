@@ -161,7 +161,10 @@ export class CursorInferenceMapper {
 				return;
 			case "responseInfo":
 				if (response.response.value.errorMessage) {
-					this.#streamError = { message: response.response.value.errorMessage, outputLimit: false };
+					this.#streamError = {
+						...(this.#streamError ?? { outputLimit: false }),
+						message: response.response.value.errorMessage,
+					};
 				}
 				if (response.response.value.id !== "") this.#output.responseId = response.response.value.id;
 				if (response.response.value.model !== "") this.#output.upstreamModel = response.response.value.model;

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the reconstructed Cursor `RunInference` protocol closure and removed the AgentService-only tool-schema projection flag from Cursor catalog models.
+
+### Changed
+
+- Moved Cursor effort-family discovery suffixes, normalized levels, display labels, representative-tier preference, and generic route parameters into the compiled KDL policy.
+
+### Fixed
+
+- Restored Cursor's authoritative model context windows, image/thinking capabilities, and distinct Max Mode rows from the complete Available/Usable/Default catalog join, with caches isolated by bearer account and endpoint.
+- Fixed compressed Cursor catalog responses expanding beyond the catalog response-size limit during gzip or Brotli decompression.
+
 ## [18.1.9] - 2026-09-04
 
 ### Added
@@ -15,16 +28,6 @@
 ### Fixed
 
 - Fixed `/login zai` for Z.AI GLM Coding Plan by supporting the provider’s updated authentication flow, including local desktop sign-in, remote paste-code completion, and the configurable `ZAI_OAUTH_REDIRECT_URI`.
-- Fixed `/login zai` (Z.AI GLM Coding Plan sign-in) failing after Z.AI stopped registering loopback redirects: local desktops now capture the required `zcode://zai-auth/callback` scheme automatically, remote sessions retain paste-code completion, and `ZAI_OAUTH_REDIRECT_URI` remains configurable ([#10745](https://github.com/can1357/oh-my-pi/issues/10745)).
-### Changed
-
-- Added the reconstructed Cursor `RunInference` protocol closure and removed the AgentService-only tool-schema projection flag from Cursor catalog models.
-- Moved Cursor effort-family discovery suffixes, normalized levels, display labels, representative-tier preference, and generic route parameters into the compiled KDL policy.
-
-### Fixed
-
-- Fixed `/login zai` (Z.AI GLM Coding Plan sign-in) failing after Z.AI stopped registering loopback redirects: local desktops now capture the required `zcode://zai-auth/callback` scheme automatically, remote sessions retain paste-code completion, and `ZAI_OAUTH_REDIRECT_URI` remains configurable ([#10745](https://github.com/can1357/oh-my-pi/issues/10745)).
-- Restored Cursor's authoritative model context windows, image/thinking capabilities, and distinct Max Mode rows from the complete Available/Usable/Default catalog join, with caches isolated by bearer account and endpoint.
 
 ## [18.1.8] - 2026-09-03
 
