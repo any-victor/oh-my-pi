@@ -498,12 +498,7 @@ export class CursorInferenceRun {
 		return await result.promise;
 	}
 
-	async finish(timeoutMs: number): Promise<void> {
-		if (this.#finishing) {
-			await withTimeout(this.completion, timeoutMs, "Cursor RunInference shutdown timed out");
-			return;
-		}
-		this.#finishing = true;
+	async #finishSequence(): Promise<void> {
 		for (const [invocationId, pending] of this.#pending) {
 			this.#pending.delete(invocationId);
 			this.#cancelled.add(invocationId);
@@ -524,7 +519,21 @@ export class CursorInferenceRun {
 			}),
 		);
 		this.#request.end();
-		await withTimeout(this.completion, timeoutMs, "Cursor RunInference shutdown timed out");
+		await this.completion;
+	}
+
+	async finish(timeoutMs: number): Promise<void> {
+		try {
+			if (this.#finishing) {
+				await withTimeout(this.completion, timeoutMs, "Cursor RunInference shutdown timed out");
+				return;
+			}
+			this.#finishing = true;
+			await withTimeout(this.#finishSequence(), timeoutMs, "Cursor RunInference shutdown timed out");
+		} catch (error) {
+			this.abort(error);
+			throw error;
+		}
 	}
 }
 

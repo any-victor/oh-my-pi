@@ -464,7 +464,9 @@ messages.
 - **Model routing:** the outer run carries the stable session identity, routing
   conversation, and resolved Cursor model parameters. Tool-result continuations
   reuse that run; each later user turn cleanly finishes it and opens a new run so
-  updated routing conversation can select a different model.
+  updated routing conversation can select a different model. The shutdown budget
+  covers cancellation writes, `finishRun`, and the terminal trailer; timeout
+  aborts the stale stream before replacement routing proceeds.
 - **Multiplexing:** one credential/base/proxy-scoped runtime reuses its HTTP/2
   session and keeps independent routed runs per OMP session. Concurrent runtime
   creation is serialized per scope, while different credentials remain isolated.

@@ -213,7 +213,7 @@ describe("Cursor managed-inference transport", () => {
 		await managed.shutdown();
 	});
 
-	test("aborts a stale run and opens its replacement after finish timeout", async () => {
+	test("bounds the complete finish sequence, aborts the stale run, and opens its replacement", async () => {
 		let opened = 0;
 		const target = await loopback((message, stream) => {
 			if (message.message.case === "runRequest") {
