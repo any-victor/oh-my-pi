@@ -264,42 +264,63 @@ function pendingResultKey(pending: ReadonlyMap<string, unknown>, id: string): st
 	return pending.has(prefix) ? prefix : id;
 }
 
-function repairOrphanToolResults(messages: readonly Message[]): Message[] {
-	const pending = new Map<string, number>();
+interface PendingCursorToolCall {
+	readonly key: string;
+	readonly id: string;
+	readonly name: string;
+	readonly timestamp: number;
+}
+
+function repairToolResultPairing(messages: readonly Message[]): Message[] {
+	const pending: PendingCursorToolCall[] = [];
 	const repaired: Message[] = [];
+	const flushPending = (): void => {
+		for (const call of pending.splice(0)) {
+			repaired.push({
+				role: "toolResult",
+				toolCallId: call.id,
+				toolName: call.name,
+				content: [{ type: "text", text: "Tool call ended before a result was available." }],
+				isError: true,
+				timestamp: call.timestamp,
+			});
+		}
+	};
 	for (const message of messages) {
-		if (message.role === "assistant") {
-			for (const part of message.content) {
-				if (part.type !== "toolCall") continue;
-				const key = responsesToolPairingKey(part.id, message.api);
-				pending.set(key, (pending.get(key) ?? 0) + 1);
+		if (message.role === "toolResult") {
+			const key = pendingResultKey(new Map(pending.map(call => [call.key, true])), message.toolCallId);
+			const index = pending.findIndex(call => call.key === key);
+			if (index >= 0) {
+				pending.splice(index, 1);
+				repaired.push(message);
+				continue;
 			}
-			repaired.push(message);
+			const text = message.content
+				.flatMap(part => (part.type === "text" && part.text.trim() !== "" ? [part.text] : []))
+				.join("\n");
+			if (text === "") continue;
+			const errorAttr = message.isError ? ' is-error="true"' : "";
+			repaired.push({
+				role: "user",
+				content: `<stale-tool-result tool="${message.toolName}" id="${message.toolCallId}"${errorAttr}>\n${text}\n</stale-tool-result>`,
+				timestamp: message.timestamp,
+			});
 			continue;
 		}
-		if (message.role !== "toolResult") {
-			repaired.push(message);
-			continue;
+		flushPending();
+		repaired.push(message);
+		if (message.role !== "assistant") continue;
+		for (const part of message.content) {
+			if (part.type !== "toolCall") continue;
+			pending.push({
+				key: responsesToolPairingKey(part.id, message.api),
+				id: part.id,
+				name: part.name,
+				timestamp: message.timestamp,
+			});
 		}
-		const key = pendingResultKey(pending, message.toolCallId);
-		const count = pending.get(key) ?? 0;
-		if (count > 0) {
-			if (count === 1) pending.delete(key);
-			else pending.set(key, count - 1);
-			repaired.push(message);
-			continue;
-		}
-		const text = message.content
-			.flatMap(part => (part.type === "text" && part.text.trim() !== "" ? [part.text] : []))
-			.join("\n");
-		if (text === "") continue;
-		const errorAttr = message.isError ? ' is-error="true"' : "";
-		repaired.push({
-			role: "user",
-			content: `<stale-tool-result tool="${message.toolName}" id="${message.toolCallId}"${errorAttr}>\n${text}\n</stale-tool-result>`,
-			timestamp: message.timestamp,
-		});
 	}
+	flushPending();
 	return repaired;
 }
 
@@ -308,7 +329,7 @@ export function buildInferenceRequest(
 	context: Context,
 	options: CursorInferenceRequestOptions = {},
 ): InferenceStreamRequest {
-	const repairedContext = { ...context, messages: repairOrphanToolResults(context.messages) };
+	const repairedContext = { ...context, messages: repairToolResultPairing(context.messages) };
 	const toolCallIds = uniqueToolCallIds(repairedContext);
 	const messages = repairedContext.messages.map(message => messageToInference(message, toolCallIds));
 	for (const prompt of normalizeSystemPrompts(context.systemPrompt).reverse()) {
