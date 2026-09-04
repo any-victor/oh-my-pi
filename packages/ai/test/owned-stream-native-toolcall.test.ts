@@ -375,4 +375,23 @@ describe("leaked-thinking terminal reconciliation", () => {
 		const result = await projected.result();
 		expect(result.content).toEqual([signature, final]);
 	});
+
+	it("retains a terminal-only native tool call", async () => {
+		const source = new AssistantMessageEventStream();
+		const projected = wrapLeakedThinkingStream(source);
+		const message = makeAssistant([]);
+		source.push({ type: "start", partial: message });
+		const terminal: ToolCall = {
+			type: "toolCall",
+			id: "terminal-only",
+			name: "todo",
+			arguments: { ops: [{ op: "view" }] },
+		};
+		message.content = [terminal];
+		source.push({ type: "done", reason: "toolUse", message });
+
+		const result = await projected.result();
+		expect(result.stopReason).toBe("toolUse");
+		expect(result.content).toEqual([terminal]);
+	});
 });

@@ -453,7 +453,8 @@ messages.
   Cross-provider history, reasoning signatures, redacted reasoning, images, and
   image-bearing tool results remain in context. Tool-call and matching result IDs
   use one collision-resistant, occurrence-aware per-context mapping into Cursor's
-  accepted charset and length during replay.
+  accepted charset and length during replay. The shared message transformer repairs
+  orphan results before projection so Cursor never receives an unmatched tool message.
 - **Tool ownership:** active OMP tools are serialized as `InferenceAgentTool`.
   `toolChoice: "none"` omits the catalog; required choice degrades to automatic
   selection and named choice narrows the catalog to that tool because
@@ -474,7 +475,8 @@ messages.
 - **Connect framing:** messages use five-byte Connect envelopes, gzip for larger
   client frames, a 16 MiB frame cap, and a required JSON end-stream trailer.
 - **Final reconciliation:** completed streamed tools must equal the final response
-  by exact ID, name, and deep arguments. Final text wins when present, including
+  by exact ID, name, and deep arguments. Terminal-only final tool calls survive
+  the leaked-thinking wrapper for normal agent execution. Final text wins when present, including
   non-prefix corrections after streamed drafts pass through the leaked-thinking
   wrapper; non-empty streamed thinking survives empty, signature-only, or
   redacted final reasoning. Several opaque reasoning records are never paired by

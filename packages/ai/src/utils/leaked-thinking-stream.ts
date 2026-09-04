@@ -413,7 +413,29 @@ class LeakedThinkingProjector {
 		this.#flushHealer();
 		this.#closeText();
 		this.#closeThinking();
+		this.#mergeTerminalToolCalls(message);
 		return this.#mergeServerToolHistory(message);
+	}
+
+	#mergeTerminalToolCalls(message: AssistantMessage): void {
+		const unclaimed = this.#partial.content.filter((block): block is StreamingToolCall => block.type === "toolCall");
+		for (let srcIndex = 0; srcIndex < message.content.length; srcIndex++) {
+			const terminal = message.content[srcIndex];
+			if (terminal?.type !== "toolCall") continue;
+			let index = unclaimed.findIndex(block => this.#sourceAnchors.get(block) === srcIndex);
+			if (index < 0) {
+				index = unclaimed.findIndex(block => block.id === terminal.id && block.name === terminal.name);
+			}
+			if (index >= 0) {
+				const projected = unclaimed.splice(index, 1)[0];
+				syncToolCall(projected, terminal);
+				this.#sourceAnchors.set(projected, srcIndex);
+				continue;
+			}
+			const projected = cloneToolCall(terminal);
+			this.#partial.content.push(projected);
+			this.#anchor(this.#partial.content.length - 1, srcIndex);
+		}
 	}
 
 	#apply(events: readonly InbandScanEvent[], signature: string | undefined, srcIndex: number): void {

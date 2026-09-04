@@ -161,7 +161,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (model, context, raw
 			const requestedModel = { wireModelId: options.wireModelId, maxMode: model.cursorMaxMode === true };
 			const invocationId = crypto.randomUUID();
 			const runRequestValue = buildInferenceRunRequest(model, context, sessionId, requestedModel);
-			let request = buildInferenceRequest(context, {
+			let request = buildInferenceRequest(model, context, {
 				maxTokens: options.maxTokens,
 				temperature: options.temperature,
 				topP: options.topP,

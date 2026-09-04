@@ -77,7 +77,7 @@ function history(): Context {
 
 describe("Cursor managed-inference request", () => {
 	test("projects complete cross-provider history and ordinary OMP tools", () => {
-		const request = buildInferenceRequest(history());
+		const request = buildInferenceRequest(cursorModel(), history());
 		expect(request.invocationId).toBeUndefined();
 		expect(request.conversationId).toBeUndefined();
 		expect(request.requestedModel).toBeUndefined();
@@ -105,13 +105,13 @@ describe("Cursor managed-inference request", () => {
 		if (assistant?.role !== "assistant" || result?.role !== "toolResult") throw new Error("tool history missing");
 		const call = assistant.content.find(part => part.type === "toolCall");
 		if (call?.type !== "toolCall") throw new Error("tool call missing");
-		call.id = "call_123|fc_456";
-		result.toolCallId = "call_123|fc_456";
-		const request = buildInferenceRequest(context);
-		expect(request.messages[2]?.toolCalls[0]?.toolCallId).toBe("call_123_fc_456");
+		call.id = "call_123|fc_assistant";
+		result.toolCallId = "call_123|fc_result";
+		const request = buildInferenceRequest(cursorModel(), context);
+		expect(request.messages[2]?.toolCalls[0]?.toolCallId).toBe("call_123_fc_assistant");
 		const toolContent = request.messages[3]?.content;
 		if (toolContent?.case !== "toolContent") throw new Error("tool result missing");
-		expect(toolContent.value.parts[0]?.toolCallId).toBe("call_123_fc_456");
+		expect(toolContent.value.parts[0]?.toolCallId).toBe("call_123_fc_assistant");
 	});
 
 	test("keeps colliding normalized tool-call ids unique", () => {
@@ -140,7 +140,7 @@ describe("Cursor managed-inference request", () => {
 			timestamp: 4,
 		});
 
-		const request = buildInferenceRequest(context);
+		const request = buildInferenceRequest(cursorModel(), context);
 		expect(request.messages[2]?.toolCalls.map(call => call.toolCallId)).toEqual(["call_a", "call_a_dup1"]);
 		const resultIds = request.messages.slice(3).map(message => {
 			if (message.content?.case !== "toolContent") throw new Error("tool result missing");
@@ -174,7 +174,7 @@ describe("Cursor managed-inference request", () => {
 			timestamp: 5,
 		});
 
-		const request = buildInferenceRequest(context);
+		const request = buildInferenceRequest(cursorModel(), context);
 		const callIds = request.messages.flatMap(message => message.toolCalls.map(call => call.toolCallId));
 		const resultIds = request.messages.flatMap(message =>
 			message.content?.case === "toolContent" ? message.content.value.parts.map(result => result.toolCallId) : [],
@@ -184,12 +184,13 @@ describe("Cursor managed-inference request", () => {
 	});
 
 	test("omits tools for none and safely narrows unsupported forced choices", () => {
-		expect(buildInferenceRequest(history(), { toolChoice: "none" }).tools).toEqual([]);
-		expect(buildInferenceRequest(history(), { toolChoice: "required" }).tools.map(tool => tool.name)).toEqual([
-			TOOL.name,
-		]);
+		expect(buildInferenceRequest(cursorModel(), history(), { toolChoice: "none" }).tools).toEqual([]);
+		expect(
+			buildInferenceRequest(cursorModel(), history(), { toolChoice: "required" }).tools.map(tool => tool.name),
+		).toEqual([TOOL.name]);
 		expect(
 			buildInferenceRequest(
+				cursorModel(),
 				{ ...history(), tools: [TOOL, { ...TOOL, name: "other" }] },
 				{ toolChoice: { type: "tool", name: TOOL.name } },
 			).tools.map(tool => tool.name),
@@ -197,7 +198,7 @@ describe("Cursor managed-inference request", () => {
 	});
 
 	test("preserves ordered user image parts exactly as the extracted adapter sends them", () => {
-		const request = buildInferenceRequest({
+		const request = buildInferenceRequest(cursorModel(), {
 			messages: [
 				{
 					role: "user",
@@ -219,8 +220,25 @@ describe("Cursor managed-inference request", () => {
 	});
 
 	test("preserves image-bearing error tool results as experimental content", () => {
-		const request = buildInferenceRequest({
+		const request = buildInferenceRequest(cursorModel(), {
 			messages: [
+				{
+					role: "assistant",
+					api: "cursor-agent",
+					provider: "cursor",
+					model: "composer-2.5",
+					content: [{ type: "toolCall", id: "image-1", name: "inspect_image", arguments: {} }],
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: 1,
+				},
 				{
 					role: "toolResult",
 					toolCallId: "image-1",
@@ -230,11 +248,11 @@ describe("Cursor managed-inference request", () => {
 						{ type: "image", data: PNG_BASE64, mimeType: "image/png" },
 					],
 					isError: true,
-					timestamp: 1,
+					timestamp: 2,
 				},
 			],
 		});
-		const content = request.messages[0]?.content;
+		const content = request.messages[1]?.content;
 		if (content?.case !== "toolContent") throw new Error("Cursor tool result missing");
 		const result = content.value.parts[0];
 		expect(result).toMatchObject({ toolCallId: "image-1", toolName: "inspect_image", isError: true });
@@ -242,6 +260,27 @@ describe("Cursor managed-inference request", () => {
 		const image = result?.experimentalContent[1]?.part;
 		if (image?.case !== "image") throw new Error("Cursor tool-result image missing");
 		expect(image.value).toMatchObject({ data: PNG_BASE64, mimeType: "image/png" });
+	});
+
+	test("repairs orphan tool results before Cursor serialization", () => {
+		const request = buildInferenceRequest(cursorModel(), {
+			messages: [
+				{
+					role: "toolResult",
+					toolCallId: "orphan",
+					toolName: "read",
+					content: [{ type: "text", text: "retained output" }],
+					isError: false,
+					timestamp: 1,
+				},
+			],
+		});
+		expect(request.messages).toHaveLength(1);
+		expect(request.messages[0]).toMatchObject({
+			role: 1,
+			content: { case: "text", value: expect.stringContaining("retained output") },
+		});
+		expect(request.messages[0]?.content.case).not.toBe("toolContent");
 	});
 
 	test("keeps parallel calls and the originating Cursor reasoning model on replay", () => {
@@ -255,7 +294,7 @@ describe("Cursor managed-inference request", () => {
 			{ type: "toolCall", id: "first", name: TOOL.name, arguments: { left: "A", right: "B" } },
 			{ type: "toolCall", id: "second", name: TOOL.name, arguments: { left: "C", right: "D" } },
 		];
-		const request = buildInferenceRequest({ ...context, messages: context.messages.slice(0, 2) });
+		const request = buildInferenceRequest(cursorModel(), { ...context, messages: context.messages.slice(0, 2) });
 		const projected = request.messages[2];
 		expect(projected?.reasoningParts).toEqual([
 			expect.objectContaining({ signature: "opaque", modelName: "cursor-grok-4.6-high" }),
@@ -344,7 +383,7 @@ describe("Cursor managed-inference request", () => {
 	});
 
 	test("forwards request limits and rejects malformed schemas before transport", () => {
-		const request = buildInferenceRequest(history(), {
+		const request = buildInferenceRequest(cursorModel(), history(), {
 			maxTokens: 2048,
 			temperature: 0.25,
 			topP: 0.9,
@@ -357,7 +396,7 @@ describe("Cursor managed-inference request", () => {
 			stopSequences: ["STOP"],
 		});
 		expect(() =>
-			buildInferenceRequest({
+			buildInferenceRequest(cursorModel(), {
 				messages: [{ role: "user", content: "hello", timestamp: 1 }],
 				tools: [{ name: "bad", description: "bad", parameters: "not-an-object" } as unknown as Tool],
 			}),

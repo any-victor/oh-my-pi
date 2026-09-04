@@ -232,27 +232,85 @@ function uniqueToolCallIds(context: Context): ReadonlyMap<object, string> {
 				if (part.type !== "toolCall") continue;
 				const assigned = allocate(part.id);
 				assignments.set(part, assigned);
-				const queue = pending.get(part.id) ?? [];
+				const key = responsesToolPairingKey(part.id, message.api);
+				const queue = pending.get(key) ?? [];
 				queue.push(assigned);
-				pending.set(part.id, queue);
+				pending.set(key, queue);
 			}
 			continue;
 		}
 		if (message.role !== "toolResult") continue;
-		const queue = pending.get(message.toolCallId);
+		const key = pendingResultKey(pending, message.toolCallId);
+		const queue = pending.get(key);
 		const assigned = queue?.shift() ?? allocate(message.toolCallId);
 		assignments.set(message, assigned);
-		if (queue?.length === 0) pending.delete(message.toolCallId);
+		if (queue?.length === 0) pending.delete(key);
 	}
 	return assignments;
 }
 
+function responsesToolPairingKey(id: string, api?: string): string {
+	if (api !== "openai-responses" && api !== "openai-codex-responses" && api !== "azure-openai-responses") {
+		return id;
+	}
+	const separator = id.indexOf("|");
+	return separator > 0 ? id.slice(0, separator) : id;
+}
+
+function pendingResultKey(pending: ReadonlyMap<string, unknown>, id: string): string {
+	if (pending.has(id)) return id;
+	const separator = id.indexOf("|");
+	const prefix = separator > 0 ? id.slice(0, separator) : id;
+	return pending.has(prefix) ? prefix : id;
+}
+
+function repairOrphanToolResults(messages: readonly Message[]): Message[] {
+	const pending = new Map<string, number>();
+	const repaired: Message[] = [];
+	for (const message of messages) {
+		if (message.role === "assistant") {
+			for (const part of message.content) {
+				if (part.type !== "toolCall") continue;
+				const key = responsesToolPairingKey(part.id, message.api);
+				pending.set(key, (pending.get(key) ?? 0) + 1);
+			}
+			repaired.push(message);
+			continue;
+		}
+		if (message.role !== "toolResult") {
+			repaired.push(message);
+			continue;
+		}
+		const key = pendingResultKey(pending, message.toolCallId);
+		const count = pending.get(key) ?? 0;
+		if (count > 0) {
+			if (count === 1) pending.delete(key);
+			else pending.set(key, count - 1);
+			repaired.push(message);
+			continue;
+		}
+		const text = message.content
+			.flatMap(part => (part.type === "text" && part.text.trim() !== "" ? [part.text] : []))
+			.join("\n");
+		if (text === "") continue;
+		const errorAttr = message.isError ? ' is-error="true"' : "";
+		repaired.push({
+			role: "user",
+			content: `<stale-tool-result tool="${message.toolName}" id="${message.toolCallId}"${errorAttr}>\n${text}\n</stale-tool-result>`,
+			timestamp: message.timestamp,
+		});
+	}
+	return repaired;
+}
+
 export function buildInferenceRequest(
+	_model: Model<"cursor-agent">,
 	context: Context,
 	options: CursorInferenceRequestOptions = {},
 ): InferenceStreamRequest {
-	const toolCallIds = uniqueToolCallIds(context);
-	const messages = context.messages.map(message => messageToInference(message, toolCallIds));
+	const repairedContext = { ...context, messages: repairOrphanToolResults(context.messages) };
+	const toolCallIds = uniqueToolCallIds(repairedContext);
+	const messages = repairedContext.messages.map(message => messageToInference(message, toolCallIds));
 	for (const prompt of normalizeSystemPrompts(context.systemPrompt).reverse()) {
 		messages.unshift(
 			create(InferenceCoreMessageSchema, {
