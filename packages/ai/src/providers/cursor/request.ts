@@ -40,6 +40,7 @@ import { toolWireSchema } from "../../utils/schema";
 import {
 	collectToolCallOriginScope,
 	createToolResultLookahead,
+	renderStaleToolResult,
 	sanitizeMalformedToolCalls,
 	toolCallPairingKey,
 	type ToolCallOriginScope,
@@ -350,10 +351,9 @@ function repairToolResultPairing(messages: readonly Message[]): Message[] {
 				.flatMap(part => (part.type === "text" && part.text.trim() !== "" ? [part.text] : []))
 				.join("\n");
 			if (text === "") continue;
-			const errorAttr = message.isError ? ' is-error="true"' : "";
 			repaired.push({
 				role: "user",
-				content: `<stale-tool-result tool="${message.toolName}" id="${message.toolCallId}"${errorAttr}>\n${text}\n</stale-tool-result>`,
+				content: renderStaleToolResult(message, text),
 				timestamp: message.timestamp,
 			});
 			continue;

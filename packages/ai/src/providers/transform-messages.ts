@@ -1,3 +1,4 @@
+import { prompt } from "@oh-my-pi/pi-utils";
 import { renderDemotedThinking } from "../dialect/demotion";
 import type {
 	Api,
@@ -10,6 +11,16 @@ import type {
 	UserMessage,
 } from "../types";
 import { isDemotedThinking, kDemotedThinking } from "../utils/block-symbols";
+import staleToolResultTemplate from "./stale-tool-result.md" with { type: "text" };
+
+export function renderStaleToolResult(message: ToolResultMessage, content: string): string {
+	return prompt.render(staleToolResultTemplate, {
+		toolName: message.toolName,
+		toolCallId: message.toolCallId,
+		isError: message.isError,
+		content,
+	});
+}
 
 const enum ToolCallStatus {
 	/** A tool result has already been emitted for this tool call; later duplicates must be skipped. */
@@ -1257,10 +1268,9 @@ export function transformMessages<TApi extends Api>(
 					if (part.type === "text" && part.text.trim() !== "") textParts.push(part.text);
 				}
 				if (textParts.length > 0) {
-					const errorAttr = msg.isError ? ' is-error="true"' : "";
 					result.push({
 						role: "user",
-						content: `<stale-tool-result tool="${msg.toolName}" id="${msg.toolCallId}"${errorAttr}>\n${textParts.join("\n")}\n</stale-tool-result>`,
+						content: renderStaleToolResult(msg, textParts.join("\n")),
 						timestamp: messageTimestamp,
 					} as UserMessage);
 				}

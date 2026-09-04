@@ -371,6 +371,7 @@ class LeakedThinkingProjector {
 			const remainingTerminalText = terminalTextCount - terminalTextIndex++;
 			const fedText = this.#fedTexts.get(srcIndex);
 			const fedLength = fedText?.length ?? 0;
+			let replayStart = fedLength;
 			if (fedText !== undefined) {
 				const claimed = claimText(srcIndex, block.text, false);
 				if (block.text === fedText) continue;
@@ -389,6 +390,8 @@ class LeakedThinkingProjector {
 					if (block.textSignature === undefined) delete claimed.textSignature;
 					else claimed.textSignature = block.textSignature;
 					continue;
+				} else {
+					replayStart = 0;
 				}
 			} else {
 				const shifted = claimText(srcIndex, block.text, true);
@@ -419,7 +422,7 @@ class LeakedThinkingProjector {
 			}
 			this.#activeTextSourceIndex = srcIndex;
 			this.#lastTextSignature = block.textSignature;
-			this.#apply(this.#healer.feed(block.text.slice(fedLength)), this.#lastTextSignature, srcIndex);
+			this.#apply(this.#healer.feed(block.text.slice(replayStart)), this.#lastTextSignature, srcIndex);
 		}
 		this.#flushHealer();
 		this.#closeText();

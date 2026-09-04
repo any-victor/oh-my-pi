@@ -396,6 +396,26 @@ describe("leaked-thinking terminal reconciliation", () => {
 		);
 	});
 
+	it("creates visible text for a correction after a fully leaked reasoning source", async () => {
+		const source = new AssistantMessageEventStream();
+		const projected = wrapLeakedThinkingStream(source);
+		const message = makeAssistant([]);
+		const streamed = { type: "text" as const, text: "<think>draft reasoning</think>" };
+		message.content.push(streamed);
+		source.push({ type: "start", partial: message });
+		source.push({ type: "text_start", contentIndex: 0, partial: message });
+		source.push({ type: "text_delta", contentIndex: 0, delta: streamed.text, partial: message });
+		const final = { type: "text" as const, text: "final" };
+		message.content = [final];
+		source.push({ type: "done", reason: "stop", message });
+
+		const result = await projected.result();
+		expect(result.content.filter(block => block.type === "text")).toEqual([final]);
+		expect(result.content.some(block => block.type === "thinking" && block.thinking === "draft reasoning")).toBe(
+			true,
+		);
+	});
+
 	it("retains a terminal-only native tool call", async () => {
 		const source = new AssistantMessageEventStream();
 		const projected = wrapLeakedThinkingStream(source);
