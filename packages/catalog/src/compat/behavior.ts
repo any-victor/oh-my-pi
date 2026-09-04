@@ -52,12 +52,9 @@ export function modelOperationOverrides(provider: string, model: string): readon
 }
 
 /**
- * Splits a Cursor effort-suffixed OpenAI sibling id into its base id and
- * declared effort tier. The family gate requires the declared marker
- * (`gpt-`) followed immediately by an ASCII digit; matching stays
- * case-sensitive to preserve Cursor wire-id behavior.
+ * Splits any KDL-declared Cursor effort suffix without applying a family gate.
  */
-export function cursorEffortSuffix(
+export function cursorEffortTierSuffix(
 	model: string,
 ): { base: string; tier: string; level: string; fast: boolean } | undefined {
 	const rule = behavior.cursorEffort;
@@ -68,19 +65,28 @@ export function cursorEffortSuffix(
 		if (!candidate.endsWith(tier.suffix)) continue;
 		const prefix = candidate.slice(0, candidate.length - tier.suffix.length);
 		if (!prefix.endsWith("-")) continue;
-		const base = prefix.slice(0, -1);
-		let family = false;
-		let index = base.indexOf(rule.familyMarker);
-		while (index !== -1) {
-			const next = base.charCodeAt(index + rule.familyMarker.length);
-			if (next >= 48 && next <= 57) {
-				family = true;
-				break;
-			}
-			index = base.indexOf(rule.familyMarker, index + 1);
-		}
-		if (!family) return undefined;
-		return { base, tier: tier.suffix, level: tier.level, fast };
+		return { base: prefix.slice(0, -1), tier: tier.suffix, level: tier.level, fast };
+	}
+	return undefined;
+}
+
+/**
+ * Splits a Cursor effort-suffixed OpenAI sibling id into its base id and
+ * declared effort tier. The family gate requires the declared marker
+ * (`gpt-`) followed immediately by an ASCII digit; matching stays
+ * case-sensitive to preserve Cursor wire-id behavior.
+ */
+export function cursorEffortSuffix(
+	model: string,
+): { base: string; tier: string; level: string; fast: boolean } | undefined {
+	const rule = behavior.cursorEffort;
+	const matched = cursorEffortTierSuffix(model);
+	if (!rule || !matched) return undefined;
+	let index = matched.base.indexOf(rule.familyMarker);
+	while (index !== -1) {
+		const next = matched.base.charCodeAt(index + rule.familyMarker.length);
+		if (next >= 48 && next <= 57) return matched;
+		index = matched.base.indexOf(rule.familyMarker, index + 1);
 	}
 	return undefined;
 }

@@ -1,6 +1,11 @@
 import * as http2 from "node:http2";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import { cursorEffortLevel, cursorEffortPreference, cursorEffortSuffix, cursorModelRoute } from "../compat/behavior";
+import {
+	cursorEffortLevel,
+	cursorEffortPreference,
+	cursorEffortTierSuffix,
+	cursorModelRoute,
+} from "../compat/behavior";
 import { classifyModel } from "../compat/taxonomy";
 import { Effort, THINKING_EFFORTS } from "../effort";
 import { getBundledModels } from "../models";
@@ -185,22 +190,36 @@ function routedEffortSuffix(
 	return undefined;
 }
 
-function familyFor(model: ModelDetails): { readonly id: string; readonly level: Effort | "off" } {
-	const generic = cursorEffortSuffix(model.modelId);
+function familyFor(
+	model: ModelDetails,
+	availableModels: readonly AvailableModelsResponse_AvailableModel[],
+): { readonly id: string; readonly level: Effort | "off" } {
+	const generic = cursorEffortTierSuffix(model.modelId);
 	const genericLevel = localEffortLevel(generic?.level);
 	const matched =
 		generic !== undefined && genericLevel !== undefined
 			? { base: generic.base, level: genericLevel, fast: generic.fast }
 			: routedEffortSuffix(model.modelId);
 	if (matched === undefined) return { id: model.modelId, level: "off" };
-	return { id: `${matched.base}${matched.fast ? "-fast" : ""}`, level: matched.level };
+	const id = `${matched.base}${matched.fast ? "-fast" : ""}`;
+	const described = availableModels.some(
+		available =>
+			available.name === id ||
+			available.idAliases.includes(id) ||
+			available.legacySlugs.includes(model.modelId) ||
+			available.variants.some(variant => variant.legacySlug === model.modelId),
+	);
+	return described ? { id, level: matched.level } : { id: model.modelId, level: "off" };
 }
 
-function modelFamilies(models: readonly ModelDetails[]): ModelFamily[] {
+function modelFamilies(
+	models: readonly ModelDetails[],
+	availableModels: readonly AvailableModelsResponse_AvailableModel[],
+): ModelFamily[] {
 	const grouped = new Map<string, { model: ModelDetails; level: Effort | "off" }[]>();
 	for (const model of models) {
 		if (model.modelId === "") continue;
-		const member = familyFor(model);
+		const member = familyFor(model, availableModels);
 		const group = grouped.get(member.id) ?? [];
 		group.push({ model, level: member.level });
 		grouped.set(member.id, group);
@@ -345,7 +364,7 @@ export function cursorCatalogModels(
 	references: ReadonlyMap<string, ModelSpec<"cursor-agent">> = createCursorReferenceMap(),
 ): ModelSpec<"cursor-agent">[] {
 	if (available.models.length === 0) throw new Error("Cursor AvailableModels returned no models");
-	const models = modelFamilies(usable.models).flatMap(family => {
+	const models = modelFamilies(usable.models, available.models).flatMap(family => {
 		const base = baseModelFor(family, available.models);
 		if (base === undefined) return [];
 		return [
@@ -358,7 +377,7 @@ export function cursorCatalogModels(
 	if (selected !== undefined && selected.modelId !== "") {
 		const usableIds = new Set(usable.models.map(model => model.modelId));
 		if (!usableIds.has(selected.modelId)) throw new Error(`Cursor default model '${selected.modelId}' is not usable`);
-		const family = familyFor(selected).id;
+		const family = familyFor(selected, available.models).id;
 		if (!models.some(model => model.id === family || model.id === maxModeModelId(family))) {
 			throw new Error(`Cursor default model '${selected.modelId}' has no complete catalog metadata`);
 		}

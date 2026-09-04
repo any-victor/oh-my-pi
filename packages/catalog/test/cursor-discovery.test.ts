@@ -225,6 +225,29 @@ describe("Cursor complete catalog join", () => {
 		expect(models.map(candidate => candidate.id)).toEqual(["future-model-low", "future-model-high"]);
 	});
 
+	it("collapses an available legacy family without a hard-coded route", () => {
+		const usable = create(GetUsableModelsResponseSchema, {
+			models: [model("claude-4.6-opus-low"), model("claude-4.6-opus-high")],
+		});
+		const availableModels = create(AvailableModelsResponseSchema, {
+			models: [available("claude-4.6-opus", { thinking: true, images: true, context: 300_000 })],
+		});
+		const defaultModel = create(GetDefaultModelForCliResponseSchema, { model: usable.models[1] });
+		const models = cursorCatalogModels(availableModels, usable, defaultModel, "https://api2.cursor.sh", new Map());
+		expect(models).toHaveLength(1);
+		expect(models[0]).toMatchObject({
+			id: "claude-4.6-opus",
+			requestModelId: "claude-4.6-opus-high",
+			thinking: {
+				efforts: [Effort.Low, Effort.High],
+				effortRouting: {
+					[Effort.Low]: "claude-4.6-opus-low",
+					[Effort.High]: "claude-4.6-opus-high",
+				},
+			},
+		});
+	});
+
 	it("publishes distinct normal and Max rows with exact context parameters", () => {
 		const models = builtCatalog();
 		expect(models.find(candidate => candidate.id === "gpt-5.6-sol")).toMatchObject({
