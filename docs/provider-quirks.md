@@ -451,10 +451,13 @@ messages.
 - **Context ownership:** every normalized OMP system, user, developer, assistant,
   tool-call, and tool-result message is projected into `InferenceCoreMessage`.
   Cross-provider history, reasoning signatures, redacted reasoning, images, and
-  image-bearing tool results remain in context.
-- **Tool ownership:** every active OMP tool is serialized as `InferenceAgentTool`.
-  The server returns correlated `toolCallPart` deltas; completed JSON arguments
-  become ordinary `ToolCall` blocks and execute only through `agent-loop`.
+  image-bearing tool results remain in context. Tool-call and matching result IDs
+  are normalized to Cursor's accepted charset and length during replay.
+- **Tool ownership:** active OMP tools are serialized as `InferenceAgentTool`.
+  `toolChoice: "none"` omits the catalog; required and named forcing fail clearly
+  because `RunInference` exposes no equivalent wire control. The server returns
+  correlated `toolCallPart` deltas; completed JSON arguments become ordinary
+  `ToolCall` blocks and execute only through `agent-loop`.
 - **Model routing:** the outer run carries the stable session identity, routing
   conversation, and resolved Cursor model parameters. A model/header routing
   change cleanly finishes the old run before opening another.
@@ -468,9 +471,11 @@ messages.
 - **Connect framing:** messages use five-byte Connect envelopes, gzip for larger
   client frames, a 16 MiB frame cap, and a required JSON end-stream trailer.
 - **Final reconciliation:** completed streamed tools must equal the final response
-  by exact ID, name, and deep arguments. Final text wins when present; non-empty
-  streamed thinking survives empty, signature-only, or redacted final reasoning.
-  Several opaque reasoning records are never paired by array position.
+  by exact ID, name, and deep arguments. Final text wins when present, including
+  non-prefix corrections after streamed drafts pass through the leaked-thinking
+  wrapper; non-empty streamed thinking survives empty, signature-only, or
+  redacted final reasoning. Several opaque reasoning records are never paired by
+  array position.
 - **Hooks and proxying:** caller headers are lower-cased and sanitized before the
   transport-owned header set wins. `onPayload`, `onResponse`, configured provider
   proxies, abort signals, request limits, and standard OMP error classification
@@ -503,7 +508,9 @@ messages.
 - Discovery publishes only models that have both usable and complete available
   metadata. A request, decode, or join failure returns no dynamic result rather
   than reusing partial metadata. The cache namespace
-  `cursor:complete-catalog-v5` invalidates earlier GetUsableModels-only rows.
+  credential-and-endpoint-scoped `cursor:complete-catalog-v6` namespace
+  invalidates earlier partial rows and prevents one account's authoritative
+  roster from hydrating another account.
 - Dynamic models keep the public `cursor-agent` API identifier. Capabilities and
   context windows come from `AvailableModels`; effort routing comes from usable
   family members; bundled references supply stable cost and output-token data.

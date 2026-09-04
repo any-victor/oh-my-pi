@@ -119,7 +119,7 @@ export function cursorModelManagerOptions(config: CursorModelManagerConfig = {})
 	const { apiKey, baseUrl, clientVersion } = config;
 	return {
 		providerId: "cursor",
-		cacheProviderId: resolveModelCacheProviderId("cursor"),
+		cacheProviderId: resolveModelCacheProviderId("cursor", { apiKey, baseUrl }),
 		dynamicModelsAuthoritative: true,
 		...(apiKey
 			? {

@@ -6,6 +6,7 @@ export interface ModelCacheProviderIdOptions {
 }
 
 const CREDENTIAL_SCOPED_MODEL_CACHE_PROVIDERS: Readonly<Record<string, true>> = {
+	cursor: true,
 	"opencode-go": true,
 	"opencode-zen": true,
 	"github-copilot": true,
@@ -20,6 +21,8 @@ export function getDefaultModelDiscoveryBaseUrl(providerId: string): string | un
 	switch (providerId) {
 		case "ollama":
 			return "http://127.0.0.1:11434";
+		case "cursor":
+			return "https://api2.cursor.sh";
 		case "litellm":
 			return Bun.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
 		case "opencode-go":
@@ -53,11 +56,14 @@ export function resolveModelCacheProviderId(providerId: string, options: ModelCa
 	switch (providerId) {
 		case "ollama":
 			return resolveOllamaModelCacheProviderId(providerId, options.baseUrl);
-		case "cursor":
-			// v5: GetUsableModels-only rows lacked authoritative context windows,
-			// image/thinking capabilities, variant context, and distinct Max Mode
-			// entries. Refetch through the complete three-surface catalog join.
-			return "cursor:complete-catalog-v5";
+		case "cursor": {
+			// v6: Cursor discovery is authoritative per bearer account and endpoint.
+			// Scope the complete three-surface catalog so switching either cannot
+			// hydrate and prune models from another account's cached roster.
+			const baseUrl = (options.baseUrl ?? getDefaultModelDiscoveryBaseUrl(providerId)!).replace(/\/+$/u, "");
+			const scope = `${options.apiKey ?? ""}\u0000${baseUrl}`;
+			return `cursor:complete-catalog-v6:${Bun.hash(scope).toString(36)}`;
+		}
 		case "litellm": {
 			const baseUrl = options.baseUrl ?? getDefaultModelDiscoveryBaseUrl(providerId)!;
 			// rich-v8 invalidates rows whose `compatConfig` retained a colliding

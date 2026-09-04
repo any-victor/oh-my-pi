@@ -4,6 +4,7 @@ import type * as net from "node:net";
 import { Effort } from "../src/effort";
 import { buildModel } from "../src/build";
 import { cursorCatalogModels, fetchCursorUsableModels, resolveCursorInput } from "../src/discovery/cursor";
+import { isCredentialScopedModelCacheProvider } from "../src/provider-models/cache-provider-id";
 import { cursorModelManagerOptions } from "../src/provider-models/special";
 import type { AvailableModelsResponse_ModelVariantConfig, ModelDetails } from "../src/discovery/cursor-proto";
 import {
@@ -189,10 +190,15 @@ async function startCursorDiscoveryServer(): Promise<string> {
 }
 
 describe("Cursor complete catalog join", () => {
-	it("invalidates partial caches and treats the complete account roster as authoritative", () => {
-		const options = cursorModelManagerOptions({ apiKey: "test-token" });
-		expect(options.cacheProviderId).toBe("cursor:complete-catalog-v5");
-		expect(options.dynamicModelsAuthoritative).toBe(true);
+	it("scopes the authoritative catalog cache by credential and endpoint", () => {
+		const first = cursorModelManagerOptions({ apiKey: "first-token" });
+		const second = cursorModelManagerOptions({ apiKey: "second-token" });
+		const alternate = cursorModelManagerOptions({ apiKey: "first-token", baseUrl: "https://cursor.example" });
+		expect(first.cacheProviderId?.startsWith("cursor:complete-catalog-v6:")).toBe(true);
+		expect(second.cacheProviderId).not.toBe(first.cacheProviderId);
+		expect(alternate.cacheProviderId).not.toBe(first.cacheProviderId);
+		expect(first.dynamicModelsAuthoritative).toBe(true);
+		expect(isCredentialScopedModelCacheProvider("cursor")).toBe(true);
 	});
 
 	it("uses the authoritative 1M Gemini window instead of the 200k fallback", () => {
