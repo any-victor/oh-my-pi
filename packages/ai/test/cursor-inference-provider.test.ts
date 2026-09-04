@@ -325,6 +325,37 @@ describe("Cursor provider entrypoint", () => {
 		}
 	});
 
+	test("accepts unadvertised tool names authorized by the final payload hook", async () => {
+		const target = await loopback("server_known_tool");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		try {
+			const { result } = await collect(
+				streamCursor(
+					model(target.origin),
+					{ messages: [{ role: "user", content: "call the server-known tool", timestamp: 1 }] },
+					{
+						apiKey: "HEADER.PAYLOAD.SIGNATURE",
+						sessionId: "omp-session",
+						providerSessionState,
+						onPayload: payload => {
+							const request = payload as InferenceStreamRequest;
+							return create(InferenceStreamRequestSchema, {
+								...request,
+								acceptedUnadvertisedToolNames: ["server_known_tool"],
+							});
+						},
+					},
+				),
+			);
+			expect(result.stopReason).toBe("toolUse");
+			expect(result.content).toContainEqual(
+				expect.objectContaining({ type: "toolCall", name: "server_known_tool" }),
+			);
+		} finally {
+			closeProviderState(providerSessionState);
+		}
+	});
+
 	test("applies hooks and caller headers while reopening later user turns", async () => {
 		const target = await loopback();
 		const providerSessionState = new Map<string, ProviderSessionState>();

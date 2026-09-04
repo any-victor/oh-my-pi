@@ -180,7 +180,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (model, context, raw
 			const mapper = new CursorInferenceMapper(
 				stream,
 				output,
-				new Set(request.tools.map(({ name }) => name)),
+				new Set([...request.tools.map(({ name }) => name), ...request.acceptedUnadvertisedToolNames]),
 				invocationId,
 				() => {
 					firstTokenTime ??= performance.now();
