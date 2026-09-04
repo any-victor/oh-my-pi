@@ -239,7 +239,7 @@ export function messageToInference(
 function toolToInference(tool: Tool) {
 	const schema = requiredJsonObject(toolWireSchema(tool), `Cursor inference tool '${tool.name}' schema`);
 	return create(InferenceAgentToolSchema, {
-		name: tool.name,
+		name: tool.customWireName ?? tool.name,
 		description: tool.description,
 		// Cursor's IDE converter wraps the JSON Schema before serializing the Struct.
 		parameters: encodeJsonStruct({ jsonSchema: schema }),

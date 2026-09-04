@@ -200,6 +200,14 @@ describe("Cursor managed-inference request", () => {
 		).toEqual([TOOL.name]);
 	});
 
+	test("advertises tools under their dispatcher-visible custom wire names", () => {
+		const request = buildInferenceRequest(cursorModel(), {
+			messages: [{ role: "user", content: "apply the patch", timestamp: 1 }],
+			tools: [{ ...TOOL, name: "edit", customWireName: "apply_patch" }],
+		});
+		expect(request.tools.map(tool => tool.name)).toEqual(["apply_patch"]);
+	});
+
 	test("preserves ordered user image parts exactly as the extracted adapter sends them", () => {
 		const request = buildInferenceRequest(cursorModel(), {
 			messages: [
