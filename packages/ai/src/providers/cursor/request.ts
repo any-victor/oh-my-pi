@@ -431,12 +431,39 @@ export function buildInferenceRequest(
 	});
 }
 
+/** Preserve visible thinking while omitting opaque reasoning state owned by an earlier outer run. */
+export function withoutRunScopedReasoning(
+	request: InferenceStreamRequest,
+	preserveCurrentTurn = false,
+): InferenceStreamRequest {
+	const currentTurnStart = preserveCurrentTurn
+		? request.messages.findLastIndex(message => message.role === InferenceMessageRole.USER)
+		: request.messages.length;
+	if (!request.messages.some((message, index) => index <= currentTurnStart && message.reasoningParts.length > 0)) {
+		return request;
+	}
+	return {
+		...request,
+		messages: request.messages.map((message, index) => {
+			if (index > currentTurnStart || message.reasoningParts.length === 0) return message;
+			return {
+				...message,
+				reasoningParts: message.reasoningParts.flatMap(part =>
+					part.isRedacted || part.text.trim() === "" ? [] : [{ ...part, signature: undefined }],
+				),
+			};
+		}),
+	};
+}
+
 interface RequestedModelFields {
 	readonly modelId: string;
 	readonly parameters: readonly { readonly id: string; readonly value: string }[];
 }
 
-function requestedModelFields(modelId: string): RequestedModelFields {
+function requestedModelFields(model: Model<"cursor-agent">, modelId: string): RequestedModelFields {
+	const discovered = model.cursorModelRoutes?.[modelId];
+	if (discovered !== undefined) return discovered;
 	const routed = cursorModelRoute(modelId);
 	if (routed !== undefined) return routed;
 
@@ -465,7 +492,7 @@ export function inferenceRequestedModel(
 	options: CursorRequestedModelOptions = {},
 ): InferenceRequestedModel {
 	const selectedId = options.wireModelId ?? model.requestModelId ?? model.id;
-	const requested = requestedModelFields(selectedId);
+	const requested = requestedModelFields(model, selectedId);
 	return create(InferenceRequestedModelSchema, {
 		modelId: requested.modelId,
 		maxMode: options.maxMode ?? model.cursorMaxMode === true,

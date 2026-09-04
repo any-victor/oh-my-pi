@@ -23,8 +23,10 @@ import type { ProviderResponseMetadata } from "../../types";
 import { raceWithSignal } from "../../utils/abort";
 import { formatConnectEndStreamError, summarizeConnectErrorDetails } from "../connect-error-detail";
 import { CONNECT_FLAG_COMPRESSED, CONNECT_MAX_FRAME_BYTES, ConnectFrameDecoder, encodeConnectFrame } from "./connect";
+import { cursorErrorDetailValue, cursorProviderStatusCode } from "./error-detail";
 import { inferenceRequestHeaders } from "./headers";
 import type { CursorMachineIdentity } from "./identity";
+import { withoutRunScopedReasoning } from "./request";
 
 const CONNECT_COMPRESSION_MIN_BYTES = 1_024;
 const RESPONSE_TIMEOUT_MS = 65_000;
@@ -58,7 +60,7 @@ export interface CursorInferenceRuntimeOptions {
 }
 
 export interface CursorInferenceInvokeOptions {
-	/** Reuse the current outer run only for a tool-result continuation of the same turn. */
+	/** Reuse the current outer run for a tool-result continuation when it is still active. */
 	readonly reuseRun?: boolean;
 	readonly signal?: AbortSignal;
 	readonly callerHeaders?: Record<string, string>;
@@ -148,7 +150,7 @@ export function cursorInvocationErrorMessage(error: RunInferenceInvocationError)
 	const detail = summarizeConnectErrorDetails(
 		error.details.map(entry => ({
 			type: entry.type,
-			value: new TextDecoder().decode(entry.value),
+			value: cursorErrorDetailValue(entry),
 		})),
 	);
 	return detail === undefined ? message : `${message} [details: ${detail}]`;
@@ -156,8 +158,10 @@ export function cursorInvocationErrorMessage(error: RunInferenceInvocationError)
 
 function cursorInvocationError(error: RunInferenceInvocationError): Error {
 	const message = `Cursor invocation failed: ${cursorInvocationErrorMessage(error)}`;
+	const providerStatus = cursorProviderStatusCode(error.details);
 	const status =
-		error.code === 16 ? 401 : error.code === 7 ? 403 : error.code === 8 ? 429 : error.code === 14 ? 503 : undefined;
+		providerStatus ??
+		(error.code === 16 ? 401 : error.code === 7 ? 403 : error.code === 8 ? 429 : error.code === 14 ? 503 : undefined);
 	return status === undefined
 		? new AIError.ProviderResponseError(message, { provider: "cursor", kind: "output" })
 		: new AIError.ProviderHttpError(message, status, { code: String(error.code) });
@@ -541,6 +545,11 @@ interface RunSlot {
 	readonly run: CursorInferenceRun;
 }
 
+interface RunSelection {
+	readonly run: CursorInferenceRun;
+	readonly reused: boolean;
+}
+
 /** Account-scoped managed-inference runtime with routed runs isolated by OMP session id. */
 export class CursorInferenceRuntime {
 	readonly #options: CursorInferenceRuntimeOptions;
@@ -645,14 +654,14 @@ export class CursorInferenceRuntime {
 		}
 	}
 
-	async runFor(
+	async #runFor(
 		sessionId: string,
 		routeKey: string,
 		runRequest: RunInferenceClientMessage,
 		callerHeaders?: Record<string, string>,
 		signal?: AbortSignal,
 		reuseRun = true,
-	): Promise<CursorInferenceRun> {
+	): Promise<RunSelection> {
 		if (sessionId === "") throw new Error("Cursor managed inference requires a stable session id");
 		const previous = this.#runLocks.get(sessionId) ?? Promise.resolve();
 		const gate = Promise.withResolvers<void>();
@@ -670,7 +679,7 @@ export class CursorInferenceRuntime {
 		}
 		try {
 			const slot = this.#runs.get(sessionId);
-			if (reuseRun && slot?.routeKey === routeKey) return slot.run;
+			if (reuseRun && slot?.routeKey === routeKey) return { run: slot.run, reused: true };
 			if (slot !== undefined) {
 				this.#runs.delete(sessionId);
 				try {
@@ -685,7 +694,7 @@ export class CursorInferenceRuntime {
 				if (this.#runs.get(sessionId)?.run === run) this.#runs.delete(sessionId);
 			};
 			void run.completion.then(removeRun, removeRun);
-			return run;
+			return { run, reused: false };
 		} finally {
 			gate.resolve();
 			if (this.#runLocks.get(sessionId) === lock) this.#runLocks.delete(sessionId);
@@ -700,7 +709,7 @@ export class CursorInferenceRuntime {
 		request: InferenceStreamRequest,
 		options: CursorInferenceInvokeOptions,
 	): Promise<CursorInferenceInvocation> {
-		const run = await this.runFor(
+		const selection = await this.#runFor(
 			sessionId,
 			routeKey,
 			runRequest,
@@ -708,7 +717,8 @@ export class CursorInferenceRuntime {
 			options.signal,
 			options.reuseRun,
 		);
-		return await run.invoke(invocationId, request, options);
+		const invocationRequest = withoutRunScopedReasoning(request, selection.reused);
+		return await selection.run.invoke(invocationId, invocationRequest, options);
 	}
 
 	async shutdown(): Promise<void> {

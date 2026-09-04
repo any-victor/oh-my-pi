@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added the reconstructed Cursor `RunInference` protocol closure and removed the AgentService-only tool-schema projection flag from Cursor catalog models.
+- Added the complete selected Cursor `RunInference`, model-catalog, and structured-error protocol closure while removing the AgentService-only tool-schema projection flag from Cursor catalog models.
 
 ### Changed
 
@@ -13,6 +13,7 @@
 ### Fixed
 
 - Restored Cursor's authoritative model context windows, image/thinking capabilities, and distinct Max Mode rows from the complete Available/Usable/Default catalog join, with caches isolated by bearer account and endpoint.
+- Fixed Cursor selector variants sending picker aliases as wire model IDs; normal, Max, thinking, effort, context, and Fast selections now use the catalog's base model and complete parameter set.
 - Fixed compressed Cursor catalog responses expanding beyond the catalog response-size limit during gzip or Brotli decompression.
 - Fixed distinct Cursor Max configurations being mislabeled as 1M rows when their authoritative context is smaller or unchanged.
 

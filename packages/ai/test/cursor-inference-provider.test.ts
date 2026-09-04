@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Http2Server, ServerHttp2Session, ServerHttp2Stream } from "node:http2";
+import { type } from "@oh-my-pi/omptype";
 import { createServer } from "node:http2";
 import type {
 	InferenceStreamRequest,
@@ -7,17 +8,23 @@ import type {
 	RunInferenceServerMessage,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
 import {
+	CustomErrorDetailsSchema,
+	ErrorDetailsSchema,
 	InferenceExtendedUsageInfoSchema,
 	InferenceModelConfigSchema,
+	InferenceReasoningPartSchema,
 	InferenceRequestedModelSchema,
 	InferenceResponseInfoSchema,
 	InferenceResponseMessageSchema,
 	InferenceStreamRequestSchema,
 	InferenceStreamResponseSchema,
 	InferenceTextStreamPartSchema,
+	InferenceThinkingStreamPartSchema,
 	InferenceToolCallStreamPartSchema,
 	RunInferenceClientMessageSchema,
+	RunInferenceErrorDetailSchema,
 	RunInferenceInvocationEndSchema,
+	RunInferenceInvocationErrorSchema,
 	RunInferenceInvocationResponseSchema,
 	RunInferenceRunReadySchema,
 	RunInferenceServerMessageSchema,
@@ -44,25 +51,50 @@ function send(stream: ServerHttp2Stream, message: RunInferenceServerMessage): vo
 	stream.write(encodeConnectFrame(toBinary(RunInferenceServerMessageSchema, message)));
 }
 
-async function loopback(toolCallName?: string): Promise<{
+function providerStatusDetail(status: number): Uint8Array {
+	return toBinary(
+		ErrorDetailsSchema,
+		create(ErrorDetailsSchema, {
+			details: create(CustomErrorDetailsSchema, { additionalInfo: { providerStatusCode: String(status) } }),
+		}),
+	);
+}
+
+interface LoopbackOptions {
+	readonly toolCallName?: string;
+	readonly rejectReasoningReplayOnReopenedRun?: boolean;
+	readonly alwaysRejectWithProviderStatus?: boolean;
+	readonly answerAfterToolResult?: boolean;
+}
+
+async function loopback(options: LoopbackOptions = {}): Promise<{
 	readonly origin: string;
 	readonly runRequests: () => number;
 	readonly invocations: () => number;
 	readonly invokeMaxTokens: () => number[];
+	readonly invokeReasoningCounts: () => number[];
 	readonly invokeStopSequences: () => string[][];
 	readonly invokeToolCounts: () => number[];
 	readonly sessions: () => number;
 	readonly headers: () => Record<string, string> | undefined;
 }> {
+	const {
+		toolCallName,
+		rejectReasoningReplayOnReopenedRun = false,
+		alwaysRejectWithProviderStatus = false,
+		answerAfterToolResult = false,
+	} = options;
 	let runRequests = 0;
 	let invocations = 0;
 	let capturedHeaders: Record<string, string> | undefined;
 	const invokeMaxTokens: number[] = [];
+	const invokeReasoningCounts: number[] = [];
 	const invokeStopSequences: string[][] = [];
 	const invokeToolCounts: number[] = [];
 	server = createServer();
 	server.on("session", session => sessions.add(session));
 	server.on("stream", (stream: ServerHttp2Stream, headers) => {
+		let openedRun = 0;
 		capturedHeaders = Object.fromEntries(Object.entries(headers).map(([name, value]) => [name, String(value)]));
 		stream.respond({ ":status": 200, "content-type": "application/connect+proto", "x-loopback": "ok" });
 		const decoder = new ConnectFrameDecoder();
@@ -70,7 +102,7 @@ async function loopback(toolCallName?: string): Promise<{
 			for (const frame of decoder.push(chunk)) {
 				const message = fromBinary(RunInferenceClientMessageSchema, frame.body);
 				if (message.message.case === "runRequest") {
-					runRequests++;
+					openedRun = ++runRequests;
 					send(
 						stream,
 						create(RunInferenceServerMessageSchema, {
@@ -86,6 +118,39 @@ async function loopback(toolCallName?: string): Promise<{
 				if (message.message.case === "invokeModel") {
 					invocations++;
 					const { invocationId, request } = message.message.value;
+					const replaysOpaqueReasoning = request?.messages.some(message =>
+						message.reasoningParts.some(part => part.signature !== ""),
+					);
+					invokeReasoningCounts.push(
+						request?.messages.reduce((total, message) => total + message.reasoningParts.length, 0) ?? 0,
+					);
+					if (
+						alwaysRejectWithProviderStatus ||
+						(rejectReasoningReplayOnReopenedRun && openedRun > 1 && replaysOpaqueReasoning)
+					) {
+						send(
+							stream,
+							create(RunInferenceServerMessageSchema, {
+								message: {
+									case: "invocationEnd",
+									value: create(RunInferenceInvocationEndSchema, {
+										invocationId,
+										error: create(RunInferenceInvocationErrorSchema, {
+											code: 8,
+											message: "Provider Error",
+											details: [
+												create(RunInferenceErrorDetailSchema, {
+													type: "aiserver.v1.ErrorDetails",
+													value: providerStatusDetail(400),
+												}),
+											],
+										}),
+									}),
+								},
+							}),
+						);
+						continue;
+					}
 					invokeMaxTokens.push(request?.modelConfig?.maxTokens ?? 0);
 					invokeStopSequences.push(request?.modelConfig?.stopSequences ?? []);
 					invokeToolCounts.push(request?.tools.length ?? 0);
@@ -99,7 +164,7 @@ async function loopback(toolCallName?: string): Promise<{
 								}),
 							},
 						});
-					if (toolCallName !== undefined) {
+					if (toolCallName !== undefined && (!answerAfterToolResult || invocations === 1)) {
 						send(
 							stream,
 							response({
@@ -124,6 +189,20 @@ async function loopback(toolCallName?: string): Promise<{
 							}),
 						);
 						continue;
+					}
+					if (rejectReasoningReplayOnReopenedRun && invocations === 1) {
+						send(
+							stream,
+							response({
+								response: {
+									case: "thinkingPart",
+									value: create(InferenceThinkingStreamPartSchema, {
+										signature: "opaque-run-1",
+										isFinal: true,
+									}),
+								},
+							}),
+						);
 					}
 					send(
 						stream,
@@ -160,6 +239,10 @@ async function loopback(toolCallName?: string): Promise<{
 									messages: [
 										create(InferenceResponseMessageSchema, {
 											content: `final-${invocations}`,
+											reasoningParts:
+												rejectReasoningReplayOnReopenedRun && invocations === 1
+													? [create(InferenceReasoningPartSchema, { signature: "opaque-run-1" })]
+													: [],
 										}),
 									],
 								}),
@@ -188,6 +271,9 @@ async function loopback(toolCallName?: string): Promise<{
 							},
 						}),
 					);
+					if (rejectReasoningReplayOnReopenedRun && invocations === 1) {
+						stream.end(encodeConnectFrame(new TextEncoder().encode("{}"), CONNECT_FLAG_END_STREAM));
+					}
 				}
 				if (message.message.case === "finishRun") {
 					stream.end(encodeConnectFrame(new TextEncoder().encode("{}"), CONNECT_FLAG_END_STREAM));
@@ -205,6 +291,7 @@ async function loopback(toolCallName?: string): Promise<{
 		runRequests: () => runRequests,
 		invocations: () => invocations,
 		invokeMaxTokens: () => invokeMaxTokens,
+		invokeReasoningCounts: () => invokeReasoningCounts,
 		invokeStopSequences: () => invokeStopSequences,
 		invokeToolCounts: () => invokeToolCounts,
 		sessions: () => sessions.size,
@@ -253,6 +340,32 @@ describe("Cursor provider entrypoint", () => {
 		expect(result).toMatchObject({ stopReason: "error", errorMessage: expect.stringContaining("Cursor API key") });
 	});
 
+	test("classifies an embedded provider 400 instead of outer resource exhaustion", async () => {
+		const target = await loopback({ alwaysRejectWithProviderStatus: true });
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		try {
+			const { result } = await collect(
+				streamCursor(
+					model(target.origin),
+					{ messages: [{ role: "user", content: "reject this", timestamp: 1 }] },
+					{
+						apiKey: "HEADER.PAYLOAD.SIGNATURE",
+						sessionId: "omp-provider-status",
+						providerSessionState,
+					},
+				),
+			);
+			expect(result).toMatchObject({
+				stopReason: "error",
+				errorStatus: 400,
+			});
+			expect(result.errorMessage).toContain('"providerStatusCode":"400"');
+			expect(result.errorMessage).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u);
+		} finally {
+			closeProviderState(providerSessionState);
+		}
+	});
+
 	test("forwards public stop sequences and toolChoice none", async () => {
 		const target = await loopback();
 		const providerSessionState = new Map<string, ProviderSessionState>();
@@ -288,7 +401,7 @@ describe("Cursor provider entrypoint", () => {
 	});
 
 	test("rejects tool calls removed by the final payload hook", async () => {
-		const target = await loopback("read");
+		const target = await loopback({ toolCallName: "read" });
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		try {
 			const { result } = await collect(
@@ -326,7 +439,7 @@ describe("Cursor provider entrypoint", () => {
 	});
 
 	test("accepts unadvertised tool names authorized by the final payload hook", async () => {
-		const target = await loopback("server_known_tool");
+		const target = await loopback({ toolCallName: "server_known_tool" });
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		try {
 			const { result } = await collect(
@@ -351,6 +464,96 @@ describe("Cursor provider entrypoint", () => {
 			expect(result.content).toContainEqual(
 				expect.objectContaining({ type: "toolCall", name: "server_known_tool" }),
 			);
+		} finally {
+			closeProviderState(providerSessionState);
+		}
+	});
+
+	test("keeps opaque reasoning on an active tool continuation", async () => {
+		const target = await loopback({ toolCallName: "inspect", answerAfterToolResult: true });
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const options: CursorOptions = {
+			apiKey: "HEADER.PAYLOAD.SIGNATURE",
+			sessionId: "omp-tool-reasoning-session",
+			providerSessionState,
+		};
+		const firstPrompt = { role: "user" as const, content: "inspect first", timestamp: 1 };
+		const inspectTool = {
+			name: "inspect",
+			description: "Inspect the fixture.",
+			parameters: type({ "+": "reject" }),
+		};
+		try {
+			const first = await collect(
+				streamCursor(model(target.origin), { messages: [firstPrompt], tools: [inspectTool] }, options),
+			);
+			expect(first.result.stopReason).toBe("toolUse");
+			const call = first.result.content.find(part => part.type === "toolCall");
+			if (call?.type !== "toolCall") throw new Error("signed continuation tool call missing");
+			const assistantWithReasoning: AssistantMessage = {
+				...first.result,
+				upstreamModel: "composer-2.5",
+				content: [
+					{ type: "thinking", thinking: "", thinkingSignature: "opaque-tool-run" },
+					...first.result.content,
+				],
+			};
+			const second = await collect(
+				streamCursor(
+					model(target.origin),
+					{
+						messages: [
+							firstPrompt,
+							assistantWithReasoning,
+							{
+								role: "toolResult",
+								toolCallId: call.id,
+								toolName: call.name,
+								content: [{ type: "text", text: "inspected" }],
+								isError: false,
+								timestamp: 2,
+							},
+						],
+						tools: [inspectTool],
+					},
+					options,
+				),
+			);
+			expect(second.result).toMatchObject({ stopReason: "stop", content: [{ type: "text", text: "final-2" }] });
+			expect(target.runRequests()).toBe(1);
+			expect(target.invokeReasoningCounts()).toEqual([0, 1]);
+		} finally {
+			closeProviderState(providerSessionState);
+		}
+	});
+
+	test("omits opaque reasoning when a later user turn opens a replacement run", async () => {
+		const target = await loopback({ rejectReasoningReplayOnReopenedRun: true });
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const options: CursorOptions = {
+			apiKey: "HEADER.PAYLOAD.SIGNATURE",
+			sessionId: "omp-reasoning-session",
+			providerSessionState,
+		};
+		try {
+			const firstPrompt = { role: "user" as const, content: "reason first", timestamp: 1 };
+			const first = await collect(streamCursor(model(target.origin), { messages: [firstPrompt] }, options));
+			expect(first.result.content).toContainEqual(
+				expect.objectContaining({ type: "thinking", thinkingSignature: "opaque-run-1" }),
+			);
+			const second = await collect(
+				streamCursor(
+					model(target.origin),
+					{
+						messages: [firstPrompt, first.result, { role: "user", content: "continue", timestamp: 2 }],
+					},
+					options,
+				),
+			);
+			expect(second.result).toMatchObject({ stopReason: "stop", content: [{ type: "text", text: "final-2" }] });
+			expect(target.runRequests()).toBe(2);
+			expect(target.invocations()).toBe(2);
+			expect(target.invokeReasoningCounts()).toEqual([0, 0]);
 		} finally {
 			closeProviderState(providerSessionState);
 		}

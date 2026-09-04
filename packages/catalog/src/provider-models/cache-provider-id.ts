@@ -57,12 +57,12 @@ export function resolveModelCacheProviderId(providerId: string, options: ModelCa
 		case "ollama":
 			return resolveOllamaModelCacheProviderId(providerId, options.baseUrl);
 		case "cursor": {
-			// v6: Cursor discovery is authoritative per bearer account and endpoint.
-			// Scope the complete three-surface catalog so switching either cannot
-			// hydrate and prune models from another account's cached roster.
+			// v7 maps selector legacy slugs back to their AvailableModels base model
+			// and complete variant parameters. Invalidate v6 rows that exposed the
+			// slugs themselves as RunInference model ids.
 			const baseUrl = (options.baseUrl ?? getDefaultModelDiscoveryBaseUrl(providerId)!).replace(/\/+$/u, "");
 			const scope = `${options.apiKey ?? ""}\u0000${baseUrl}`;
-			return `cursor:complete-catalog-v6:${Bun.hash(scope).toString(36)}`;
+			return `cursor:complete-catalog-v7:${Bun.hash(scope).toString(36)}`;
 		}
 		case "litellm": {
 			const baseUrl = options.baseUrl ?? getDefaultModelDiscoveryBaseUrl(providerId)!;

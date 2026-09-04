@@ -1049,6 +1049,11 @@ export type ModelTokenizer =
 	| "kimi-k2"
 	| "glm5";
 
+export interface CursorRequestedModelRoute {
+	readonly modelId: string;
+	readonly parameters: readonly { readonly id: string; readonly value: string }[];
+}
+
 // Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
 	id: string;
@@ -1114,6 +1119,8 @@ export interface Model<TApi extends Api = Api> {
 	cursorMaxMode?: boolean;
 	/** Cursor catalog variant `context` parameter (for example `272k`, `300k`, or `1m`). */
 	cursorContext?: string;
+	/** Cursor selector legacy slug to exact AvailableModels base model and parameter values. */
+	cursorModelRoutes?: Readonly<Record<string, CursorRequestedModelRoute>>;
 	cost: ModelCost;
 	/** Premium Copilot requests charged per user-initiated request (defaults to 1). */
 	premiumMultiplier?: number;

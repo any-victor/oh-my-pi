@@ -3,7 +3,12 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { InferenceMessageRole } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
 import { decodeJsonStruct, decodeJsonValue } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 import type { Context, Model, Tool } from "../src/types";
-import { buildInferenceRequest, buildInferenceRunRequest, inferenceRoutingKey } from "../src/providers/cursor/request";
+import {
+	buildInferenceRequest,
+	buildInferenceRunRequest,
+	inferenceRoutingKey,
+	withoutRunScopedReasoning,
+} from "../src/providers/cursor/request";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "../src/providers/vision-guard";
 
 function cursorModel(id = "composer-2.5", input: ("text" | "image")[] = ["text", "image"]): Model<"cursor-agent"> {
@@ -474,6 +479,40 @@ describe("Cursor managed-inference request", () => {
 		expect(toolContent.value.parts[0]?.isError).toBe(false);
 	});
 
+	test("preserves visible thinking but removes opaque state before a replacement run", () => {
+		const context = history();
+		const assistant = context.messages[1];
+		if (assistant?.role !== "assistant") throw new Error("assistant fixture missing");
+		assistant.api = "cursor-agent";
+		assistant.upstreamModel = "gpt-5.6-sol-medium";
+		assistant.content = [
+			{ type: "thinking", thinking: "visible analysis", thinkingSignature: "opaque-visible" },
+			{ type: "thinking", thinking: "", thinkingSignature: "opaque-only" },
+			{ type: "redactedThinking", data: "opaque-redacted" },
+			{ type: "text", text: "answer" },
+		];
+		const request = buildInferenceRequest(cursorModel(), { messages: [assistant] });
+		const sanitized = withoutRunScopedReasoning(request);
+		expect(sanitized.messages[0]?.reasoningParts).toEqual([
+			expect.objectContaining({ text: "visible analysis", signature: undefined, isRedacted: false }),
+		]);
+		expect(request.messages[0]?.reasoningParts).toHaveLength(3);
+
+		context.messages.push(
+			{ role: "user", content: "continue in the active run", timestamp: 4 },
+			{
+				...assistant,
+				content: [{ type: "thinking", thinking: "current analysis", thinkingSignature: "opaque-current" }],
+				timestamp: 5,
+			},
+		);
+		const continuation = withoutRunScopedReasoning(buildInferenceRequest(cursorModel(), context), true);
+		expect(continuation.messages.flatMap(message => message.reasoningParts.map(part => part.signature))).toEqual([
+			undefined,
+			"opaque-current",
+		]);
+	});
+
 	test("keeps custom Cursor-provider reasoning and parallel calls on replay", () => {
 		const context = history();
 		const assistant = context.messages[1];
@@ -549,6 +588,27 @@ describe("Cursor managed-inference request", () => {
 			parameters: [{ id: "effort", value: "medium" }],
 		});
 		const opus = cursorModel("claude-opus-5-high");
+		opus.cursorModelRoutes = {
+			"claude-opus-5-medium": {
+				modelId: "claude-opus-5",
+				parameters: [
+					{ id: "thinking", value: "false" },
+					{ id: "context", value: "300k" },
+					{ id: "effort", value: "medium" },
+					{ id: "fast", value: "false" },
+				],
+			},
+		};
+		expect(JSON.parse(inferenceRoutingKey(opus, { wireModelId: "claude-opus-5-medium" }))).toEqual({
+			modelId: "claude-opus-5",
+			maxMode: false,
+			parameters: [
+				{ id: "thinking", value: "false" },
+				{ id: "context", value: "300k" },
+				{ id: "effort", value: "medium" },
+				{ id: "fast", value: "false" },
+			],
+		});
 		expect(JSON.parse(inferenceRoutingKey(opus, { wireModelId: "claude-opus-5-thinking-high" }))).toEqual({
 			modelId: "claude-opus-5",
 			maxMode: false,

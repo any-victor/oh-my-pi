@@ -14,14 +14,7 @@ const CURSOR_CONSUMER_DIRS = [
 	path.join(PACKAGES_DIR, "coding-agent/test"),
 ];
 
-const CURSOR_ENUMS = [
-	"CursorRuleSource",
-	"ForceBackgroundShellStatus",
-	"ForceBackgroundSubagentStatus",
-	"InferenceMessageRole",
-	"InferenceStreamErrorType",
-	"RunInferenceRoutingRole",
-];
+const CURSOR_ENUMS = ["InferenceMessageRole", "InferenceStreamErrorType", "RunInferenceRoutingRole"];
 const DEVIN_MESSAGES = [
 	"exa.api_server_pb.AssignModelRequest",
 	"exa.api_server_pb.AssignModelResponse",
@@ -113,6 +106,12 @@ async function generateProtocols(): Promise<void> {
 		includeDependencies: true,
 		packagePrefix: "Cursor",
 		protobufImportPath: "./protobuf",
+		headerComment: `/**
+ * Cursor protocol declarations used by Oh My Pi.
+ *
+ * Generation selects only runtime and test roots, while each selected message retains
+ * its complete vendor-declared fields and transitive message and enum dependencies.
+ */`,
 	});
 	const devin = generateProtoTs(await parseProtoDirectory(DEVIN_PROTO_DIR), {
 		includeMessages: DEVIN_MESSAGES,

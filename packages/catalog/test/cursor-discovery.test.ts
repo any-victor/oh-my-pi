@@ -16,7 +16,7 @@ import {
 	GetDefaultModelForCliResponseSchema,
 	GetUsableModelsResponseSchema,
 	ModelDetailsSchema,
-	RequestedModel_ModelParameterbytesSchema,
+	RequestedModel_ModelParameterValueSchema,
 } from "../src/discovery/cursor-proto";
 import { create, toBinary } from "../src/discovery/protobuf";
 
@@ -43,7 +43,7 @@ function model(id: string, fields: Partial<ModelDetails> = {}) {
 }
 
 function parameter(id: string, value: string) {
-	return create(RequestedModel_ModelParameterbytesSchema, { id, value });
+	return create(RequestedModel_ModelParameterValueSchema, { id, value });
 }
 
 function variant(
@@ -52,6 +52,20 @@ function variant(
 ) {
 	return create(AvailableModelsResponse_ModelVariantConfigSchema, {
 		parameterValues: context === undefined ? [] : [parameter("context", context)],
+		isMaxMode: options.max ?? false,
+		isDefaultNonMaxConfig: options.defaultNormal,
+		isDefaultMaxConfig: options.defaultMax,
+	});
+}
+
+function routedVariant(
+	legacySlug: string,
+	values: Readonly<Record<string, string>>,
+	options: { readonly max?: boolean; readonly defaultNormal?: boolean; readonly defaultMax?: boolean } = {},
+) {
+	return create(AvailableModelsResponse_ModelVariantConfigSchema, {
+		legacySlug,
+		parameterValues: Object.entries(values).map(([id, value]) => parameter(id, value)),
 		isMaxMode: options.max ?? false,
 		isDefaultNonMaxConfig: options.defaultNormal,
 		isDefaultMaxConfig: options.defaultMax,
@@ -196,7 +210,7 @@ describe("Cursor complete catalog join", () => {
 		const first = cursorModelManagerOptions({ apiKey: "first-token" });
 		const second = cursorModelManagerOptions({ apiKey: "second-token" });
 		const alternate = cursorModelManagerOptions({ apiKey: "first-token", baseUrl: "https://cursor.example" });
-		expect(first.cacheProviderId?.startsWith("cursor:complete-catalog-v6:")).toBe(true);
+		expect(first.cacheProviderId?.startsWith("cursor:complete-catalog-v7:")).toBe(true);
 		expect(second.cacheProviderId).not.toBe(first.cacheProviderId);
 		expect(alternate.cacheProviderId).not.toBe(first.cacheProviderId);
 		expect(first.dynamicModelsAuthoritative).toBe(true);
@@ -300,6 +314,86 @@ describe("Cursor complete catalog join", () => {
 					[Effort.High]: "claude-4.6-opus-high",
 				},
 			},
+		});
+	});
+
+	it("maps selector legacy slugs through their complete base-model variants", () => {
+		const slugs = [
+			"claude-opus-5-low",
+			"claude-opus-5-medium",
+			"claude-opus-5-high",
+			"claude-opus-5-thinking-low",
+			"claude-opus-5-thinking-medium",
+			"claude-opus-5-thinking-high",
+		];
+		const usable = create(GetUsableModelsResponseSchema, { models: slugs.map(id => model(id)) });
+		const variants = [false, true].flatMap(maxMode =>
+			slugs.map(slug => {
+				const thinking = slug.includes("-thinking-");
+				const effort = slug.endsWith("-low") ? "low" : slug.endsWith("-medium") ? "medium" : "high";
+				return routedVariant(
+					slug,
+					{ thinking: String(thinking), context: maxMode ? "1m" : "300k", effort, fast: "false" },
+					{
+						max: maxMode,
+						defaultNormal: !maxMode && thinking && effort === "high",
+						defaultMax: maxMode && thinking && effort === "high",
+					},
+				);
+			}),
+		);
+		const availableModels = create(AvailableModelsResponseSchema, {
+			models: [
+				available("claude-opus-5", {
+					displayName: "Claude Opus 5",
+					legacySlugs: slugs,
+					thinking: true,
+					images: true,
+					supportsMax: true,
+					supportsNonMax: true,
+					context: 300_000,
+					maxContext: 1_000_000,
+					variants,
+				}),
+			],
+		});
+		const defaultModel = create(GetDefaultModelForCliResponseSchema, { model: usable.models[5] });
+		const models = cursorCatalogModels(availableModels, usable, defaultModel, "https://api2.cursor.sh", new Map());
+		expect(models.map(candidate => candidate.id)).toEqual(["claude-opus-5", "claude-opus-5-1m"]);
+		expect(models[0]).toMatchObject({
+			requestModelId: "claude-opus-5-thinking-high",
+			thinking: {
+				effortRouting: {
+					off: "claude-opus-5-high",
+					low: "claude-opus-5-thinking-low",
+					medium: "claude-opus-5-thinking-medium",
+					high: "claude-opus-5-thinking-high",
+				},
+			},
+			cursorModelRoutes: {
+				"claude-opus-5-medium": {
+					modelId: "claude-opus-5",
+					parameters: [
+						{ id: "thinking", value: "false" },
+						{ id: "context", value: "300k" },
+						{ id: "effort", value: "medium" },
+						{ id: "fast", value: "false" },
+					],
+				},
+				"claude-opus-5-thinking-medium": {
+					modelId: "claude-opus-5",
+					parameters: [
+						{ id: "thinking", value: "true" },
+						{ id: "context", value: "300k" },
+						{ id: "effort", value: "medium" },
+						{ id: "fast", value: "false" },
+					],
+				},
+			},
+		});
+		expect(models[1]?.cursorModelRoutes?.["claude-opus-5-thinking-medium"]?.parameters).toContainEqual({
+			id: "context",
+			value: "1m",
 		});
 	});
 

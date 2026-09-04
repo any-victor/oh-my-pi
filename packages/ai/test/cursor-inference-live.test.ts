@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { resolveWireModelId } from "@oh-my-pi/pi-catalog/model-thinking";
 import { streamCursor } from "../src/providers/cursor";
 import type { AssistantMessage, Context, Model, ProviderSessionState } from "../src/types";
 import { e2eApiKey, resolveApiKey } from "./oauth";
@@ -32,6 +34,13 @@ const maxModel: Model<"cursor-agent"> = buildModel({
 	cursorContext: "1m",
 });
 
+const reasoningModel: Model<"cursor-agent"> = buildModel({
+	...model,
+	id: "gpt-5.6-sol",
+	name: "GPT-5.6 Sol",
+	contextWindow: 272_000,
+});
+
 const tool = {
 	name: "inspect_pixel",
 	description: "Return a tiny image for inspection.",
@@ -47,16 +56,18 @@ async function collect(
 	sessionId: string,
 	maxTokens: number,
 	providerSessionState?: Map<string, ProviderSessionState>,
+	cursorModel: Model<"cursor-agent"> = model,
+	wireModelId = "gemini-3.7-flash-high",
 ): Promise<{
 	readonly result: AssistantMessage;
 	readonly thinking: string;
 	readonly argumentDeltas: number;
 }> {
 	if (token === undefined || token === "") throw new Error("Cursor live token is required");
-	const stream = streamCursor(model, context, {
+	const stream = streamCursor(cursorModel, context, {
 		apiKey: token,
 		sessionId,
-		wireModelId: "gemini-3.7-flash-high",
+		wireModelId,
 		maxTokens,
 		providerSessionState,
 	});
@@ -96,7 +107,7 @@ describe.skipIf(!liveEnabled)("Cursor managed inference live", () => {
 				contextWindow: 1_000_000,
 				cursorMaxMode: false,
 			});
-			expect(models.find(candidate => candidate.id === "cursor-grok-4.6")).toMatchObject({
+			expect(models.find(candidate => candidate.id === "grok-4.6")).toMatchObject({
 				contextWindow: 256_000,
 				cursorMaxMode: false,
 			});
@@ -148,27 +159,98 @@ describe.skipIf(!liveEnabled)("Cursor managed inference live", () => {
 	);
 
 	test(
-		"retains visible thinking and one authoritative final answer",
+		"survives three same-route user turns after signed reasoning",
 		async () => {
-			const { result, thinking } = await collect(
-				{
-					messages: [
-						{
-							role: "user",
-							content: "Reason about whether 37 is prime, then reply with exactly CURSOR_LIVE_OK.",
-							timestamp: Date.now(),
-						},
-					],
-				},
-				`omp-cursor-thinking-${crypto.randomUUID()}`,
-				1_024,
-			);
-			expectSuccess(result);
-			expect(thinking.trim().length).toBeGreaterThan(0);
-			expect(result.content.some(part => part.type === "thinking" && part.thinking.includes(thinking))).toBe(true);
-			expect(visibleText(result)).toBe("CURSOR_LIVE_OK");
+			const sessionId = `omp-cursor-reasoning-replay-${crypto.randomUUID()}`;
+			const providerSessionState = new Map<string, ProviderSessionState>();
+			const messages: Context["messages"] = [];
+			try {
+				for (let turn = 1; turn <= 3; turn++) {
+					messages.push({
+						role: "user",
+						content: `Reason privately, then reply exactly CURSOR_REASONING_TURN_${turn}.`,
+						timestamp: Date.now(),
+					});
+					const { result } = await collect(
+						{ messages },
+						sessionId,
+						1_024,
+						providerSessionState,
+						reasoningModel,
+						"gpt-5.6-sol-medium",
+					);
+					expectSuccess(result);
+					expect(visibleText(result)).toBe(`CURSOR_REASONING_TURN_${turn}`);
+					if (turn === 1) {
+						expect(
+							result.content.some(part => part.type === "thinking" && (part.thinkingSignature?.length ?? 0) > 0),
+						).toBe(true);
+					}
+					messages.push(result);
+				}
+			} finally {
+				closeProviderState(providerSessionState);
+			}
 		},
-		{ retry: 1, timeout: 120_000 },
+		{ retry: 1, timeout: 240_000 },
+	);
+
+	test(
+		"resumes after signed reasoning and switches GPT to Opus and back",
+		async () => {
+			if (token === undefined || token === "") throw new Error("Cursor live token is required");
+			const specs = await fetchCursorUsableModels({ apiKey: token });
+			if (specs === null) throw new Error("Cursor live catalog fetch failed");
+			const gptSpec = specs.find(candidate => candidate.id === "gpt-5.6-sol");
+			const opusSpec = specs.find(candidate => candidate.id === "claude-opus-5");
+			if (gptSpec === undefined || opusSpec === undefined)
+				throw new Error("Cursor live switch models are unavailable");
+			const gpt = buildModel(gptSpec);
+			const opus = buildModel(opusSpec);
+			const sessionId = `omp-cursor-resume-switch-${crypto.randomUUID()}`;
+			const messages: Context["messages"] = [];
+			let providerSessionState = new Map<string, ProviderSessionState>();
+			try {
+				const routes = [
+					{ model: gpt, effort: Effort.Medium, expected: "CURSOR_SWITCH_GPT_1" },
+					{ model: opus, effort: Effort.Medium, expected: "CURSOR_SWITCH_OPUS" },
+					{ model: gpt, effort: Effort.High, expected: "CURSOR_SWITCH_GPT_2" },
+				];
+				for (let turn = 0; turn < routes.length; turn++) {
+					const route = routes[turn];
+					if (route === undefined) throw new Error("Cursor live switch route is missing");
+					messages.push({
+						role: "user",
+						content:
+							turn === 0
+								? `Calculate 19 + 23 before replying exactly ${route.expected}.`
+								: `Reply exactly ${route.expected}.`,
+						timestamp: Date.now(),
+					});
+					const { result } = await collect(
+						{ messages },
+						sessionId,
+						1_024,
+						providerSessionState,
+						route.model,
+						resolveWireModelId(route.model, route.effort),
+					);
+					expectSuccess(result);
+					expect(visibleText(result)).toBe(route.expected);
+					if (turn === 0) {
+						expect(
+							result.content.some(part => part.type === "thinking" && (part.thinkingSignature?.length ?? 0) > 0),
+						).toBe(true);
+						closeProviderState(providerSessionState);
+						providerSessionState = new Map<string, ProviderSessionState>();
+					}
+					messages.push(result);
+				}
+			} finally {
+				closeProviderState(providerSessionState);
+			}
+		},
+		{ retry: 1, timeout: 300_000 },
 	);
 
 	test(

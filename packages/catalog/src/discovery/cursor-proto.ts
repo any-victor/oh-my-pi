@@ -3,29 +3,93 @@
 /**
  * Cursor protocol declarations used by Oh My Pi.
  *
- * Each declaration retains only fields consumed by the client or its protocol tests.
+ * Generation selects only runtime and test roots, while each selected message retains
+ * its complete vendor-declared fields and transitive message and enum dependencies.
  */
 import { pb, type MessageCodec, type ProtoMessage } from "./protobuf";
 
-/** Cursor enum CursorRuleSource. */
-export enum CursorRuleSource {
+/** Cursor enum AvailableModelsScope. */
+export enum AvailableModelsScope {
 	UNSPECIFIED = 0,
-	TEAM = 1,
-	USER = 2,
+	USER_AVAILABLE = 1,
+	AUTOMATIONS = 2,
+	ADMIN_SETTINGS_ALL_APPLICATION_MODELS = 3,
 }
 
-/** Cursor enum ForceBackgroundShellStatus. */
-export enum ForceBackgroundShellStatus {
+/** Cursor enum CloudAgentEffortMode. */
+export enum CloudAgentEffortMode {
 	UNSPECIFIED = 0,
-	ACCEPTED = 1,
-	NOT_FOUND = 2,
+	STANDARD = 1,
+	GRIND = 2,
 }
 
-/** Cursor enum ForceBackgroundSubagentStatus. */
-export enum ForceBackgroundSubagentStatus {
+/** Cursor enum DegradationStatus. */
+export enum DegradationStatus {
 	UNSPECIFIED = 0,
-	ACCEPTED = 1,
-	NOT_FOUND = 2,
+	DEGRADED = 1,
+	DISABLED = 2,
+}
+
+/** Cursor enum Error. */
+export enum Error {
+	UNSPECIFIED = 0,
+	BAD_API_KEY = 1,
+	NOT_LOGGED_IN = 2,
+	INVALID_AUTH_ID = 3,
+	NOT_HIGH_ENOUGH_PERMISSIONS = 4,
+	BAD_MODEL_NAME = 5,
+	USER_NOT_FOUND = 6,
+	FREE_USER_RATE_LIMIT_EXCEEDED = 7,
+	PRO_USER_RATE_LIMIT_EXCEEDED = 8,
+	FREE_USER_USAGE_LIMIT = 9,
+	PRO_USER_USAGE_LIMIT = 10,
+	AUTH_TOKEN_NOT_FOUND = 11,
+	AUTH_TOKEN_EXPIRED = 12,
+	OPENAI = 13,
+	OPENAI_RATE_LIMIT_EXCEEDED = 14,
+	AGENT_REQUIRES_LOGIN = 18,
+	MAX_TOKENS = 20,
+	USER_ABORTED_REQUEST = 21,
+	GENERIC_RATE_LIMIT_EXCEEDED = 22,
+	PRO_USER_ONLY = 23,
+	TIMEOUT = 25,
+	GPT_4_VISION_PREVIEW_RATE_LIMIT = 28,
+	CUSTOM_MESSAGE = 29,
+	OUTDATED_CLIENT = 30,
+	CLAUDE_IMAGE_TOO_LARGE = 31,
+	FILE_NOT_FOUND = 33,
+	API_KEY_RATE_LIMIT = 34,
+	DEBOUNCED = 35,
+	BAD_REQUEST = 36,
+	REPOSITORY_SERVICE_REPOSITORY_IS_NOT_INITIALIZED = 37,
+	UNAUTHORIZED = 38,
+	NOT_FOUND = 39,
+	DEPRECATED = 40,
+	RESOURCE_EXHAUSTED = 41,
+	BAD_USER_API_KEY = 42,
+	CONVERSATION_TOO_LONG = 43,
+	USAGE_PRICING_REQUIRED = 44,
+	USAGE_PRICING_REQUIRED_CHANGEABLE = 45,
+	GITHUB_NO_USER_CREDENTIALS = 46,
+	GITHUB_USER_NO_ACCESS = 47,
+	GITHUB_APP_NO_ACCESS = 48,
+	GITHUB_MULTIPLE_OWNERS = 49,
+	RATE_LIMITED = 50,
+	RATE_LIMITED_CHANGEABLE = 51,
+	CUSTOM = 52,
+	HOOKS_BLOCKED = 53,
+	SUSPICIOUS_USAGE_BLOCKED = 54,
+	EXTENSION_HOST_TIMEOUT = 55,
+	NETWORK_ERROR = 56,
+	PROVIDER_ERROR = 57,
+	MODEL_BLOCKED = 58,
+	INTERNAL = 59,
+	MAX_MODE_REQUIRED = 60,
+	MODEL_NO_LONGER_SUPPORTED = 61,
+	PRICING_WARNING = 62,
+	SLOW_POOL = 63,
+	UNSUPPORTED_REGION = 64,
+	ACCOUNT_CLOSED = 65,
 }
 
 /** Cursor enum InferenceMessageRole. */
@@ -56,11 +120,41 @@ export enum InferenceStreamErrorType {
 	CONTENT_FILTER = 8,
 }
 
+/** Cursor enum ModelVendorId. */
+export enum ModelVendorId {
+	UNSPECIFIED = 0,
+	ANTHROPIC = 1,
+	OPENAI = 2,
+	GOOGLE = 3,
+	XAI = 4,
+	MOONSHOT = 5,
+	CURSOR = 6,
+	NVIDIA = 7,
+	ZAI = 8,
+	META = 9,
+}
+
+/** Cursor enum Presentation. */
+export enum Presentation {
+	UNSPECIFIED = 0,
+	POST_PICKER_WARNING = 1,
+}
+
 /** Cursor enum RunInferenceRoutingRole. */
 export enum RunInferenceRoutingRole {
 	UNSPECIFIED = 0,
 	USER = 1,
 	ASSISTANT = 2,
+}
+
+/** Cursor enum Variant. */
+export enum Variant {
+	UNSPECIFIED = 0,
+	ACCENT = 1,
+	NEUTRAL = 2,
+	SUCCESS = 3,
+	WARN = 4,
+	DANGER = 5,
 }
 
 /** Cursor message agent.v1.ApiKeyCredentials. */
@@ -76,30 +170,97 @@ export const ApiKeyCredentialsSchema: MessageCodec<ApiKeyCredentials> = pb<ApiKe
 
 /** Cursor message aiserver.v1.AvailableModelsRequest. */
 export interface AvailableModelsRequest extends ProtoMessage {
+	isNightly: boolean;
+	includeLongContextModels: boolean;
+	excludeMaxNamedModels: boolean;
+	additionalModelNames: string[];
 	useModelParameters?: boolean;
+	includeHiddenModels?: boolean;
 	doNotUseMarkdown?: boolean;
+	variantsWillBeShownInExplodedList?: boolean;
+	forAutomations?: boolean;
+	scope?: AvailableModelsScope;
+	useReactModelPicker?: boolean;
+	useCloudAgentEffortModes?: boolean;
+	adminSettingsGroupPublicId?: string;
+	byokEnabled?: boolean;
+	useParameterizedAutomationsModels?: boolean;
 }
 
 export const AvailableModelsRequestSchema: MessageCodec<AvailableModelsRequest> = pb<AvailableModelsRequest>("aiserver.v1.AvailableModelsRequest", [
+	{ no: 1, name: "isNightly", kind: "bool" },
+	{ no: 2, name: "includeLongContextModels", kind: "bool" },
+	{ no: 3, name: "excludeMaxNamedModels", kind: "bool" },
+	{ no: 4, name: "additionalModelNames", kind: "string", repeat: true },
 	{ no: 5, name: "useModelParameters", kind: "bool", optional: true },
+	{ no: 6, name: "includeHiddenModels", kind: "bool", optional: true },
 	{ no: 7, name: "doNotUseMarkdown", kind: "bool", optional: true },
+	{ no: 8, name: "variantsWillBeShownInExplodedList", kind: "bool", optional: true },
+	{ no: 9, name: "forAutomations", kind: "bool", optional: true },
+	{ no: 10, name: "scope", kind: "enum", optional: true },
+	{ no: 11, name: "useReactModelPicker", kind: "bool", optional: true },
+	{ no: 12, name: "useCloudAgentEffortModes", kind: "bool", optional: true },
+	{ no: 13, name: "adminSettingsGroupPublicId", kind: "string", optional: true },
+	{ no: 14, name: "byokEnabled", kind: "bool", optional: true },
+	{ no: 15, name: "useParameterizedAutomationsModels", kind: "bool", optional: true },
 ]);
 
 /** Cursor message aiserver.v1.AvailableModelsResponse. */
 export interface AvailableModelsResponse extends ProtoMessage {
+	modelNames: string[];
 	models: AvailableModelsResponse_AvailableModel[];
+	composerModelConfig?: AvailableModelsResponse_FeatureModelConfig;
+	cmdKModelConfig?: AvailableModelsResponse_FeatureModelConfig;
+	backgroundComposerModelConfig?: AvailableModelsResponse_FeatureModelConfig;
+	planExecutionModelConfig?: AvailableModelsResponse_FeatureModelConfig;
+	specModelConfig?: AvailableModelsResponse_FeatureModelConfig;
+	deepSearchModelConfig?: AvailableModelsResponse_FeatureModelConfig;
+	quickAgentModelConfig?: AvailableModelsResponse_FeatureModelConfig;
+	useModelParameters: boolean;
+	disableUnusedModelsAfterNHours?: number;
+	upgradeUnchangedModelsAfterNHours?: number;
+	displayConfiguration?: AvailableModelsResponse_ModelPickerDisplayConfiguration;
+	subagentModelConfigs: Record<string, AvailableModelsResponse_FeatureModelConfig>;
+	experimentalModelId?: string;
+	experimentalModelDisplayName?: string;
+	nudgeNewChatsToAutoOptimizeFor?: string;
 }
 
 export const AvailableModelsResponseSchema: MessageCodec<AvailableModelsResponse> = pb<AvailableModelsResponse>("aiserver.v1.AvailableModelsResponse", [
+	{ no: 1, name: "modelNames", kind: "string", repeat: true },
 	{ no: 2, name: "models", kind: "message", T: () => AvailableModelsResponse_AvailableModelSchema, repeat: true },
+	{ no: 4, name: "composerModelConfig", kind: "message", T: () => AvailableModelsResponse_FeatureModelConfigSchema },
+	{ no: 5, name: "cmdKModelConfig", kind: "message", T: () => AvailableModelsResponse_FeatureModelConfigSchema },
+	{ no: 6, name: "backgroundComposerModelConfig", kind: "message", T: () => AvailableModelsResponse_FeatureModelConfigSchema },
+	{ no: 7, name: "planExecutionModelConfig", kind: "message", T: () => AvailableModelsResponse_FeatureModelConfigSchema },
+	{ no: 8, name: "specModelConfig", kind: "message", T: () => AvailableModelsResponse_FeatureModelConfigSchema },
+	{ no: 9, name: "deepSearchModelConfig", kind: "message", T: () => AvailableModelsResponse_FeatureModelConfigSchema },
+	{ no: 10, name: "quickAgentModelConfig", kind: "message", T: () => AvailableModelsResponse_FeatureModelConfigSchema },
+	{ no: 11, name: "useModelParameters", kind: "bool" },
+	{ no: 12, name: "disableUnusedModelsAfterNHours", kind: "int32", optional: true },
+	{ no: 13, name: "upgradeUnchangedModelsAfterNHours", kind: "int32", optional: true },
+	{ no: 15, name: "displayConfiguration", kind: "message", T: () => AvailableModelsResponse_ModelPickerDisplayConfigurationSchema },
+	{ no: 16, name: "subagentModelConfigs", kind: "map", K: "string", V: () => AvailableModelsResponse_FeatureModelConfigSchema },
+	{ no: 19, name: "experimentalModelId", kind: "string", optional: true },
+	{ no: 20, name: "experimentalModelDisplayName", kind: "string", optional: true },
+	{ no: 21, name: "nudgeNewChatsToAutoOptimizeFor", kind: "string", optional: true },
 ]);
 
 /** Cursor message aiserver.v1.AvailableModelsResponse_AvailableModel. */
 export interface AvailableModelsResponse_AvailableModel extends ProtoMessage {
 	name: string;
+	defaultOn: boolean;
+	isLongContextOnly?: boolean;
+	isChatOnly?: boolean;
+	supportsAgent?: boolean;
+	degradationStatus?: DegradationStatus;
+	price?: number;
 	tooltipData?: AvailableModelsResponse_TooltipData;
 	supportsThinking?: boolean;
 	supportsImages?: boolean;
+	supportsAutoContext?: boolean;
+	autoContextMaxTokens?: number;
+	autoContextExtendedMaxTokens?: number;
 	supportsMaxMode?: boolean;
 	contextTokenLimit?: number;
 	contextTokenLimitForMaxMode?: number;
@@ -107,17 +268,49 @@ export interface AvailableModelsResponse_AvailableModel extends ProtoMessage {
 	serverModelName?: string;
 	supportsNonMaxMode?: boolean;
 	tooltipDataForMaxMode?: AvailableModelsResponse_TooltipData;
+	isRecommendedForBackgroundComposer?: boolean;
+	supportsPlanMode?: boolean;
+	isUserAdded?: boolean;
+	inputboxShortModelName?: string;
+	supportsSandboxing?: boolean;
+	supportsCmdK?: boolean;
+	onlySupportsCmdK?: boolean;
+	backgroundComposerSortOrder?: number;
 	parameterDefinitions: ModelParameterDefinition[];
 	variants: AvailableModelsResponse_ModelVariantConfig[];
+	cloudAgentEffortMode?: CloudAgentEffortMode;
+	cloudMigrateToModel?: string;
+	upgradeModelId?: string;
+	isHidden?: boolean;
 	legacySlugs: string[];
 	idAliases: string[];
+	namedModelSectionIndex?: number;
+	tagline?: string;
+	visibleInRoutedModelView?: boolean;
+	vendorName?: string;
+	vendor?: AvailableModelsResponse_ModelVendor;
+	defaultDisabledInAdminAllowlist?: boolean;
+	cloudAgentEffortModes: CloudAgentEffortMode[];
+	supportsSmartModeClassifier?: boolean;
+	requiresDataRetention?: boolean;
+	reasonForZdrConsentBlock?: string;
+	modelPickerBadges: AvailableModelsResponse_ModelPickerBadge[];
 }
 
 export const AvailableModelsResponse_AvailableModelSchema: MessageCodec<AvailableModelsResponse_AvailableModel> = pb<AvailableModelsResponse_AvailableModel>("aiserver.v1.AvailableModelsResponse_AvailableModel", [
 	{ no: 1, name: "name", kind: "string" },
+	{ no: 2, name: "defaultOn", kind: "bool" },
+	{ no: 3, name: "isLongContextOnly", kind: "bool", optional: true },
+	{ no: 4, name: "isChatOnly", kind: "bool", optional: true },
+	{ no: 5, name: "supportsAgent", kind: "bool", optional: true },
+	{ no: 6, name: "degradationStatus", kind: "enum", optional: true },
+	{ no: 7, name: "price", kind: "double", optional: true },
 	{ no: 8, name: "tooltipData", kind: "message", T: () => AvailableModelsResponse_TooltipDataSchema },
 	{ no: 9, name: "supportsThinking", kind: "bool", optional: true },
 	{ no: 10, name: "supportsImages", kind: "bool", optional: true },
+	{ no: 11, name: "supportsAutoContext", kind: "bool", optional: true },
+	{ no: 12, name: "autoContextMaxTokens", kind: "int32", optional: true },
+	{ no: 13, name: "autoContextExtendedMaxTokens", kind: "int32", optional: true },
 	{ no: 14, name: "supportsMaxMode", kind: "bool", optional: true },
 	{ no: 15, name: "contextTokenLimit", kind: "int32", optional: true },
 	{ no: 16, name: "contextTokenLimitForMaxMode", kind: "int32", optional: true },
@@ -125,15 +318,175 @@ export const AvailableModelsResponse_AvailableModelSchema: MessageCodec<Availabl
 	{ no: 18, name: "serverModelName", kind: "string", optional: true },
 	{ no: 19, name: "supportsNonMaxMode", kind: "bool", optional: true },
 	{ no: 20, name: "tooltipDataForMaxMode", kind: "message", T: () => AvailableModelsResponse_TooltipDataSchema },
+	{ no: 21, name: "isRecommendedForBackgroundComposer", kind: "bool", optional: true },
+	{ no: 22, name: "supportsPlanMode", kind: "bool", optional: true },
+	{ no: 23, name: "isUserAdded", kind: "bool", optional: true },
+	{ no: 24, name: "inputboxShortModelName", kind: "string", optional: true },
+	{ no: 25, name: "supportsSandboxing", kind: "bool", optional: true },
+	{ no: 26, name: "supportsCmdK", kind: "bool", optional: true },
+	{ no: 27, name: "onlySupportsCmdK", kind: "bool", optional: true },
+	{ no: 28, name: "backgroundComposerSortOrder", kind: "int32", optional: true },
 	{ no: 29, name: "parameterDefinitions", kind: "message", T: () => ModelParameterDefinitionSchema, repeat: true },
 	{ no: 30, name: "variants", kind: "message", T: () => AvailableModelsResponse_ModelVariantConfigSchema, repeat: true },
+	{ no: 32, name: "cloudAgentEffortMode", kind: "enum", optional: true },
+	{ no: 33, name: "cloudMigrateToModel", kind: "string", optional: true },
+	{ no: 34, name: "upgradeModelId", kind: "string", optional: true },
+	{ no: 35, name: "isHidden", kind: "bool", optional: true },
 	{ no: 36, name: "legacySlugs", kind: "string", repeat: true },
 	{ no: 37, name: "idAliases", kind: "string", repeat: true },
+	{ no: 38, name: "namedModelSectionIndex", kind: "int32", optional: true },
+	{ no: 39, name: "tagline", kind: "string", optional: true },
+	{ no: 40, name: "visibleInRoutedModelView", kind: "bool", optional: true },
+	{ no: 41, name: "vendorName", kind: "string", optional: true },
+	{ no: 42, name: "vendor", kind: "message", T: () => AvailableModelsResponse_ModelVendorSchema },
+	{ no: 43, name: "defaultDisabledInAdminAllowlist", kind: "bool", optional: true },
+	{ no: 44, name: "cloudAgentEffortModes", kind: "enum", repeat: true },
+	{ no: 45, name: "supportsSmartModeClassifier", kind: "bool", optional: true },
+	{ no: 46, name: "requiresDataRetention", kind: "bool", optional: true },
+	{ no: 47, name: "reasonForZdrConsentBlock", kind: "string", optional: true },
+	{ no: 48, name: "modelPickerBadges", kind: "message", T: () => AvailableModelsResponse_ModelPickerBadgeSchema, repeat: true },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_ConfirmationDialogue. */
+export interface AvailableModelsResponse_ConfirmationDialogue extends ProtoMessage {
+	title: string;
+	body: string;
+	key: string;
+	blocksSubmission: boolean;
+	presentation?: Presentation;
+}
+
+export const AvailableModelsResponse_ConfirmationDialogueSchema: MessageCodec<AvailableModelsResponse_ConfirmationDialogue> = pb<AvailableModelsResponse_ConfirmationDialogue>("aiserver.v1.AvailableModelsResponse_ConfirmationDialogue", [
+	{ no: 1, name: "title", kind: "string" },
+	{ no: 2, name: "body", kind: "string" },
+	{ no: 3, name: "key", kind: "string" },
+	{ no: 4, name: "blocksSubmission", kind: "bool" },
+	{ no: 5, name: "presentation", kind: "enum", optional: true },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_FeatureModelConfig. */
+export interface AvailableModelsResponse_FeatureModelConfig extends ProtoMessage {
+	defaultModel: string;
+	fallbackModels: string[];
+	bestOfNDefaultModels: string[];
+}
+
+export const AvailableModelsResponse_FeatureModelConfigSchema: MessageCodec<AvailableModelsResponse_FeatureModelConfig> = pb<AvailableModelsResponse_FeatureModelConfig>("aiserver.v1.AvailableModelsResponse_FeatureModelConfig", [
+	{ no: 1, name: "defaultModel", kind: "string" },
+	{ no: 2, name: "fallbackModels", kind: "string", repeat: true },
+	{ no: 3, name: "bestOfNDefaultModels", kind: "string", repeat: true },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_ModelPickerBadge. */
+export interface AvailableModelsResponse_ModelPickerBadge extends ProtoMessage {
+	label: string;
+	variant: Variant;
+	dismissOnSelection: boolean;
+}
+
+export const AvailableModelsResponse_ModelPickerBadgeSchema: MessageCodec<AvailableModelsResponse_ModelPickerBadge> = pb<AvailableModelsResponse_ModelPickerBadge>("aiserver.v1.AvailableModelsResponse_ModelPickerBadge", [
+	{ no: 1, name: "label", kind: "string" },
+	{ no: 2, name: "variant", kind: "enum" },
+	{ no: 3, name: "dismissOnSelection", kind: "bool" },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration. */
+export interface AvailableModelsResponse_ModelPickerDisplayConfiguration extends ProtoMessage {
+	routedModelViewConfig?: AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig;
+	namedModelsViewConfig?: AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig;
+	hideSearchBar?: boolean;
+	hideAddModels?: boolean;
+	modelSelectionRestrictionMessage?: string;
+}
+
+export const AvailableModelsResponse_ModelPickerDisplayConfigurationSchema: MessageCodec<AvailableModelsResponse_ModelPickerDisplayConfiguration> = pb<AvailableModelsResponse_ModelPickerDisplayConfiguration>("aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration", [
+	{ no: 1, name: "routedModelViewConfig", kind: "message", T: () => AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfigSchema },
+	{ no: 2, name: "namedModelsViewConfig", kind: "message", T: () => AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfigSchema },
+	{ no: 3, name: "hideSearchBar", kind: "bool", optional: true },
+	{ no: 4, name: "hideAddModels", kind: "bool", optional: true },
+	{ no: 5, name: "modelSelectionRestrictionMessage", kind: "string", optional: true },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig. */
+export interface AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig extends ProtoMessage {
+	namedViewToRoutedModelViewToggle?: AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewToggle;
+	namedViewToRoutedModelViewNoButton?: AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewNoButton;
+	namedViewToRoutedModelViewButton?: AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewButton;
+}
+
+export const AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfigSchema: MessageCodec<AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig> = pb<AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig>("aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig", [
+	{ no: 2, name: "namedViewToRoutedModelViewToggle", kind: "message", T: () => AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewToggleSchema },
+	{ no: 3, name: "namedViewToRoutedModelViewNoButton", kind: "message", T: () => AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewNoButtonSchema },
+	{ no: 4, name: "namedViewToRoutedModelViewButton", kind: "message", T: () => AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewButtonSchema },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewButton. */
+export interface AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewButton extends ProtoMessage {
+	markdown: string;
+}
+
+export const AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewButtonSchema: MessageCodec<AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewButton> = pb<AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewButton>("aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewButton", [
+	{ no: 1, name: "markdown", kind: "string" },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewNoButton. */
+export interface AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewNoButton extends ProtoMessage {
+}
+
+export const AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewNoButtonSchema: MessageCodec<AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewNoButton> = pb<AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewNoButton>("aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewNoButton", [
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewToggle. */
+export interface AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewToggle extends ProtoMessage {
+	markdown: string;
+}
+
+export const AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewToggleSchema: MessageCodec<AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewToggle> = pb<AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewToggle>("aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_NamedModelsViewConfig_NamedViewToRoutedModelViewToggle", [
+	{ no: 1, name: "markdown", kind: "string" },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig. */
+export interface AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig extends ProtoMessage {
+	title?: string;
+	routedModelViewToNamedViewToggle?: AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewToggle;
+	routedModelViewToNamedViewButton?: AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewButton;
+	hideSearchBar?: boolean;
+	hideRoutedModelView?: boolean;
+}
+
+export const AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfigSchema: MessageCodec<AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig> = pb<AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig>("aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig", [
+	{ no: 1, name: "title", kind: "string", optional: true },
+	{ no: 2, name: "routedModelViewToNamedViewToggle", kind: "message", T: () => AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewToggleSchema },
+	{ no: 3, name: "routedModelViewToNamedViewButton", kind: "message", T: () => AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewButtonSchema },
+	{ no: 4, name: "hideSearchBar", kind: "bool", optional: true },
+	{ no: 5, name: "hideRoutedModelView", kind: "bool", optional: true },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewButton. */
+export interface AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewButton extends ProtoMessage {
+	markdown: string;
+}
+
+export const AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewButtonSchema: MessageCodec<AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewButton> = pb<AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewButton>("aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewButton", [
+	{ no: 1, name: "markdown", kind: "string" },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewToggle. */
+export interface AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewToggle extends ProtoMessage {
+	titleMarkdown: string;
+	subtitle?: string;
+	setToLastNamedModel?: boolean;
+}
+
+export const AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewToggleSchema: MessageCodec<AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewToggle> = pb<AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewToggle>("aiserver.v1.AvailableModelsResponse_ModelPickerDisplayConfiguration_RoutedModelViewConfig_RoutedModelViewToNamedViewToggle", [
+	{ no: 1, name: "titleMarkdown", kind: "string" },
+	{ no: 2, name: "subtitle", kind: "string", optional: true },
+	{ no: 3, name: "setToLastNamedModel", kind: "bool", optional: true },
 ]);
 
 /** Cursor message aiserver.v1.AvailableModelsResponse_ModelVariantConfig. */
 export interface AvailableModelsResponse_ModelVariantConfig extends ProtoMessage {
-	parameterValues: RequestedModel_ModelParameterbytes[];
+	parameterValues: RequestedModel_ModelParameterValue[];
 	displayName: string;
 	isMaxMode: boolean;
 	isDefaultMaxConfig?: boolean;
@@ -142,11 +495,12 @@ export interface AvailableModelsResponse_ModelVariantConfig extends ProtoMessage
 	tagline?: string;
 	displayNameOutsidePicker?: string;
 	variantStringRepresentation?: string;
+	confirmationDialogue?: AvailableModelsResponse_ConfirmationDialogue;
 	legacySlug?: string;
 }
 
 export const AvailableModelsResponse_ModelVariantConfigSchema: MessageCodec<AvailableModelsResponse_ModelVariantConfig> = pb<AvailableModelsResponse_ModelVariantConfig>("aiserver.v1.AvailableModelsResponse_ModelVariantConfig", [
-	{ no: 1, name: "parameterValues", kind: "message", T: () => RequestedModel_ModelParameterbytesSchema, repeat: true },
+	{ no: 1, name: "parameterValues", kind: "message", T: () => RequestedModel_ModelParameterValueSchema, repeat: true },
 	{ no: 2, name: "displayName", kind: "string" },
 	{ no: 3, name: "isMaxMode", kind: "bool" },
 	{ no: 4, name: "isDefaultMaxConfig", kind: "bool", optional: true },
@@ -155,7 +509,19 @@ export const AvailableModelsResponse_ModelVariantConfigSchema: MessageCodec<Avai
 	{ no: 7, name: "tagline", kind: "string", optional: true },
 	{ no: 8, name: "displayNameOutsidePicker", kind: "string", optional: true },
 	{ no: 9, name: "variantStringRepresentation", kind: "string", optional: true },
+	{ no: 10, name: "confirmationDialogue", kind: "message", T: () => AvailableModelsResponse_ConfirmationDialogueSchema },
 	{ no: 11, name: "legacySlug", kind: "string", optional: true },
+]);
+
+/** Cursor message aiserver.v1.AvailableModelsResponse_ModelVendor. */
+export interface AvailableModelsResponse_ModelVendor extends ProtoMessage {
+	id: ModelVendorId;
+	displayName: string;
+}
+
+export const AvailableModelsResponse_ModelVendorSchema: MessageCodec<AvailableModelsResponse_ModelVendor> = pb<AvailableModelsResponse_ModelVendor>("aiserver.v1.AvailableModelsResponse_ModelVendor", [
+	{ no: 1, name: "id", kind: "enum" },
+	{ no: 2, name: "displayName", kind: "string" },
 ]);
 
 /** Cursor message aiserver.v1.AvailableModelsResponse_TooltipData. */
@@ -205,6 +571,121 @@ export const BedrockCredentialsSchema: MessageCodec<BedrockCredentials> = pb<Bed
 	{ no: 2, name: "secretKey", kind: "string" },
 	{ no: 3, name: "region", kind: "string" },
 	{ no: 4, name: "sessionToken", kind: "string", optional: true },
+]);
+
+/** Cursor message aiserver.v1.ClientAction. */
+export interface ClientAction extends ProtoMessage {
+	commandId: string;
+	args: Record<string, string>;
+}
+
+export const ClientActionSchema: MessageCodec<ClientAction> = pb<ClientAction>("aiserver.v1.ClientAction", [
+	{ no: 1, name: "commandId", kind: "string" },
+	{ no: 2, name: "args", kind: "map", K: "string", V: "string" },
+]);
+
+/** Cursor message aiserver.v1.ConfigureSpendLimitAction. */
+export interface ConfigureSpendLimitAction extends ProtoMessage {
+	confirmLabel: string;
+}
+
+export const ConfigureSpendLimitActionSchema: MessageCodec<ConfigureSpendLimitAction> = pb<ConfigureSpendLimitAction>("aiserver.v1.ConfigureSpendLimitAction", [
+	{ no: 1, name: "confirmLabel", kind: "string" },
+]);
+
+/** Cursor message aiserver.v1.CustomErrorDetails. */
+export interface CustomErrorDetails extends ProtoMessage {
+	title: string;
+	detail: string;
+	allowCommandLinksPotentiallyUnsafePleaseOnlyUseForHandwrittenTrustedMarkdown?: boolean;
+	isRetryable?: boolean;
+	showRequestId?: boolean;
+	shouldShowImmediateError?: boolean;
+	additionalInfo: Record<string, string>;
+	buttons: ErrorButton[];
+	planChoices: PlanChoice[];
+	analyticsMetadata?: ErrorAnalyticsMetadata;
+}
+
+export const CustomErrorDetailsSchema: MessageCodec<CustomErrorDetails> = pb<CustomErrorDetails>("aiserver.v1.CustomErrorDetails", [
+	{ no: 1, name: "title", kind: "string" },
+	{ no: 2, name: "detail", kind: "string" },
+	{ no: 3, name: "allowCommandLinksPotentiallyUnsafePleaseOnlyUseForHandwrittenTrustedMarkdown", kind: "bool", optional: true },
+	{ no: 4, name: "isRetryable", kind: "bool", optional: true },
+	{ no: 5, name: "showRequestId", kind: "bool", optional: true },
+	{ no: 6, name: "shouldShowImmediateError", kind: "bool", optional: true },
+	{ no: 7, name: "additionalInfo", kind: "map", K: "string", V: "string" },
+	{ no: 8, name: "buttons", kind: "message", T: () => ErrorButtonSchema, repeat: true },
+	{ no: 9, name: "planChoices", kind: "message", T: () => PlanChoiceSchema, repeat: true },
+	{ no: 10, name: "analyticsMetadata", kind: "message", T: () => ErrorAnalyticsMetadataSchema },
+]);
+
+/** Cursor message aiserver.v1.DashboardAction. */
+export interface DashboardAction extends ProtoMessage {
+	action: string;
+	args: Record<string, string>;
+	successMessage?: string;
+}
+
+export const DashboardActionSchema: MessageCodec<DashboardAction> = pb<DashboardAction>("aiserver.v1.DashboardAction", [
+	{ no: 1, name: "action", kind: "string" },
+	{ no: 2, name: "args", kind: "map", K: "string", V: "string" },
+	{ no: 3, name: "successMessage", kind: "string", optional: true },
+]);
+
+/** Cursor message aiserver.v1.ErrorAnalyticsMetadata. */
+export interface ErrorAnalyticsMetadata extends ProtoMessage {
+	actionRequired?: string;
+}
+
+export const ErrorAnalyticsMetadataSchema: MessageCodec<ErrorAnalyticsMetadata> = pb<ErrorAnalyticsMetadata>("aiserver.v1.ErrorAnalyticsMetadata", [
+	{ no: 1, name: "actionRequired", kind: "string", optional: true },
+]);
+
+/** Cursor message aiserver.v1.ErrorButton. */
+export interface ErrorButton extends ProtoMessage {
+	label: string;
+	action:
+		| { case: undefined; value?: undefined }
+		| { case: "upgrade"; value: UpgradeAction }
+		| { case: "switchModel"; value: SwitchModelAction }
+		| { case: "configureSpendLimit"; value: ConfigureSpendLimitAction }
+		| { case: "url"; value: UrlAction }
+		| { case: "upgradeChoice"; value: UpgradeChoice }
+		| { case: "dashboardAction"; value: DashboardAction }
+		| { case: "reloadWindow"; value: ReloadWindowAction }
+		| { case: "clientAction"; value: ClientAction };
+}
+
+export const ErrorButtonSchema: MessageCodec<ErrorButton> = pb<ErrorButton>("aiserver.v1.ErrorButton", [
+	{ no: 1, name: "label", kind: "string" },
+	{
+		kind: "oneof",
+		name: "action",
+		variants: [
+			{ no: 2, name: "upgrade", kind: "message", T: () => UpgradeActionSchema },
+			{ no: 3, name: "switchModel", kind: "message", T: () => SwitchModelActionSchema },
+			{ no: 4, name: "configureSpendLimit", kind: "message", T: () => ConfigureSpendLimitActionSchema },
+			{ no: 5, name: "url", kind: "message", T: () => UrlActionSchema },
+			{ no: 6, name: "upgradeChoice", kind: "message", T: () => UpgradeChoiceSchema },
+			{ no: 7, name: "dashboardAction", kind: "message", T: () => DashboardActionSchema },
+			{ no: 8, name: "reloadWindow", kind: "message", T: () => ReloadWindowActionSchema },
+			{ no: 9, name: "clientAction", kind: "message", T: () => ClientActionSchema },
+		],
+	},
+]);
+
+/** Cursor message aiserver.v1.ErrorDetails. */
+export interface ErrorDetails extends ProtoMessage {
+	error: Error;
+	details?: CustomErrorDetails;
+	isExpected?: boolean;
+}
+
+export const ErrorDetailsSchema: MessageCodec<ErrorDetails> = pb<ErrorDetails>("aiserver.v1.ErrorDetails", [
+	{ no: 1, name: "error", kind: "enum" },
+	{ no: 2, name: "details", kind: "message", T: () => CustomErrorDetailsSchema },
+	{ no: 3, name: "isExpected", kind: "bool", optional: true },
 ]);
 
 /** Cursor message agent.v1.GetDefaultModelForCliRequest. */
@@ -855,21 +1336,114 @@ export interface ModelParameterDefinition extends ProtoMessage {
 	id: string;
 	name: string;
 	markdownTooltip?: string;
+	parameterType?: ModelParameterDefinition_ModelParameterType;
+	isCycleableByHotkey?: boolean;
 }
 
 export const ModelParameterDefinitionSchema: MessageCodec<ModelParameterDefinition> = pb<ModelParameterDefinition>("aiserver.v1.ModelParameterDefinition", [
 	{ no: 1, name: "id", kind: "string" },
 	{ no: 2, name: "name", kind: "string" },
 	{ no: 3, name: "markdownTooltip", kind: "string", optional: true },
+	{ no: 4, name: "parameterType", kind: "message", T: () => ModelParameterDefinition_ModelParameterTypeSchema },
+	{ no: 5, name: "isCycleableByHotkey", kind: "bool", optional: true },
 ]);
 
-/** Cursor message agent.v1.RequestedModel_ModelParameterbytes. */
-export interface RequestedModel_ModelParameterbytes extends ProtoMessage {
+/** Cursor message aiserver.v1.ModelParameterDefinition_BooleanParameterDefinition. */
+export interface ModelParameterDefinition_BooleanParameterDefinition extends ProtoMessage {
+	values: ModelParameterDefinition_BooleanParameterDefinition_BooleanParameterValue[];
+}
+
+export const ModelParameterDefinition_BooleanParameterDefinitionSchema: MessageCodec<ModelParameterDefinition_BooleanParameterDefinition> = pb<ModelParameterDefinition_BooleanParameterDefinition>("aiserver.v1.ModelParameterDefinition_BooleanParameterDefinition", [
+	{ no: 1, name: "values", kind: "message", T: () => ModelParameterDefinition_BooleanParameterDefinition_BooleanParameterValueSchema, repeat: true },
+]);
+
+/** Cursor message aiserver.v1.ModelParameterDefinition_BooleanParameterDefinition_BooleanParameterValue. */
+export interface ModelParameterDefinition_BooleanParameterDefinition_BooleanParameterValue extends ProtoMessage {
+	value: string;
+	displayName?: string;
+	increasesModelCost?: boolean;
+	defaultBlockedInAdminAllowlist?: boolean;
+	hideFromUserPickerWhenAdminBlocked?: boolean;
+	blockedByAdminAllowlist?: boolean;
+}
+
+export const ModelParameterDefinition_BooleanParameterDefinition_BooleanParameterValueSchema: MessageCodec<ModelParameterDefinition_BooleanParameterDefinition_BooleanParameterValue> = pb<ModelParameterDefinition_BooleanParameterDefinition_BooleanParameterValue>("aiserver.v1.ModelParameterDefinition_BooleanParameterDefinition_BooleanParameterValue", [
+	{ no: 1, name: "value", kind: "string" },
+	{ no: 2, name: "displayName", kind: "string", optional: true },
+	{ no: 3, name: "increasesModelCost", kind: "bool", optional: true },
+	{ no: 4, name: "defaultBlockedInAdminAllowlist", kind: "bool", optional: true },
+	{ no: 5, name: "hideFromUserPickerWhenAdminBlocked", kind: "bool", optional: true },
+	{ no: 6, name: "blockedByAdminAllowlist", kind: "bool", optional: true },
+]);
+
+/** Cursor message aiserver.v1.ModelParameterDefinition_EnumParameterDefinition. */
+export interface ModelParameterDefinition_EnumParameterDefinition extends ProtoMessage {
+	values: ModelParameterDefinition_EnumParameterDefinition_EnumParameterValue[];
+}
+
+export const ModelParameterDefinition_EnumParameterDefinitionSchema: MessageCodec<ModelParameterDefinition_EnumParameterDefinition> = pb<ModelParameterDefinition_EnumParameterDefinition>("aiserver.v1.ModelParameterDefinition_EnumParameterDefinition", [
+	{ no: 1, name: "values", kind: "message", T: () => ModelParameterDefinition_EnumParameterDefinition_EnumParameterValueSchema, repeat: true },
+]);
+
+/** Cursor message aiserver.v1.ModelParameterDefinition_EnumParameterDefinition_EnumParameterValue. */
+export interface ModelParameterDefinition_EnumParameterDefinition_EnumParameterValue extends ProtoMessage {
+	value: string;
+	displayName?: string;
+	increasesModelCost?: boolean;
+	blockedByAdminAllowlist?: boolean;
+	markdownTooltip?: string;
+	modelPickerBadges: AvailableModelsResponse_ModelPickerBadge[];
+}
+
+export const ModelParameterDefinition_EnumParameterDefinition_EnumParameterValueSchema: MessageCodec<ModelParameterDefinition_EnumParameterDefinition_EnumParameterValue> = pb<ModelParameterDefinition_EnumParameterDefinition_EnumParameterValue>("aiserver.v1.ModelParameterDefinition_EnumParameterDefinition_EnumParameterValue", [
+	{ no: 1, name: "value", kind: "string" },
+	{ no: 2, name: "displayName", kind: "string", optional: true },
+	{ no: 3, name: "increasesModelCost", kind: "bool", optional: true },
+	{ no: 4, name: "blockedByAdminAllowlist", kind: "bool", optional: true },
+	{ no: 5, name: "markdownTooltip", kind: "string", optional: true },
+	{ no: 6, name: "modelPickerBadges", kind: "message", T: () => AvailableModelsResponse_ModelPickerBadgeSchema, repeat: true },
+]);
+
+/** Cursor message aiserver.v1.ModelParameterDefinition_ModelParameterType. */
+export interface ModelParameterDefinition_ModelParameterType extends ProtoMessage {
+	booleanParameter?: ModelParameterDefinition_BooleanParameterDefinition;
+	enumParameter?: ModelParameterDefinition_EnumParameterDefinition;
+}
+
+export const ModelParameterDefinition_ModelParameterTypeSchema: MessageCodec<ModelParameterDefinition_ModelParameterType> = pb<ModelParameterDefinition_ModelParameterType>("aiserver.v1.ModelParameterDefinition_ModelParameterType", [
+	{ no: 1, name: "booleanParameter", kind: "message", T: () => ModelParameterDefinition_BooleanParameterDefinitionSchema },
+	{ no: 2, name: "enumParameter", kind: "message", T: () => ModelParameterDefinition_EnumParameterDefinitionSchema },
+]);
+
+/** Cursor message aiserver.v1.PlanChoice. */
+export interface PlanChoice extends ProtoMessage {
+	label: string;
+	sublabel?: string;
+	description?: string;
+	value: string;
+}
+
+export const PlanChoiceSchema: MessageCodec<PlanChoice> = pb<PlanChoice>("aiserver.v1.PlanChoice", [
+	{ no: 1, name: "label", kind: "string" },
+	{ no: 2, name: "sublabel", kind: "string", optional: true },
+	{ no: 3, name: "description", kind: "string", optional: true },
+	{ no: 4, name: "value", kind: "string" },
+]);
+
+/** Cursor message aiserver.v1.ReloadWindowAction. */
+export interface ReloadWindowAction extends ProtoMessage {
+}
+
+export const ReloadWindowActionSchema: MessageCodec<ReloadWindowAction> = pb<ReloadWindowAction>("aiserver.v1.ReloadWindowAction", [
+]);
+
+/** Cursor message agent.v1.RequestedModel_ModelParameterValue. */
+export interface RequestedModel_ModelParameterValue extends ProtoMessage {
 	id: string;
 	value: string;
 }
 
-export const RequestedModel_ModelParameterbytesSchema: MessageCodec<RequestedModel_ModelParameterbytes> = pb<RequestedModel_ModelParameterbytes>("agent.v1.RequestedModel_ModelParameterbytes", [
+export const RequestedModel_ModelParameterValueSchema: MessageCodec<RequestedModel_ModelParameterValue> = pb<RequestedModel_ModelParameterValue>("agent.v1.RequestedModel_ModelParameterValue", [
 	{ no: 1, name: "id", kind: "string" },
 	{ no: 2, name: "value", kind: "string" },
 ]);
@@ -1116,10 +1690,63 @@ export const RunInferenceServerMessageSchema: MessageCodec<RunInferenceServerMes
 	},
 ]);
 
+/** Cursor message aiserver.v1.SwitchModelAction. */
+export interface SwitchModelAction extends ProtoMessage {
+	suggestedModel?: string;
+	parameters: SwitchModelAction_ModelParameterValue[];
+	maxMode?: boolean;
+}
+
+export const SwitchModelActionSchema: MessageCodec<SwitchModelAction> = pb<SwitchModelAction>("aiserver.v1.SwitchModelAction", [
+	{ no: 1, name: "suggestedModel", kind: "string", optional: true },
+	{ no: 2, name: "parameters", kind: "message", T: () => SwitchModelAction_ModelParameterValueSchema, repeat: true },
+	{ no: 3, name: "maxMode", kind: "bool", optional: true },
+]);
+
+/** Cursor message aiserver.v1.SwitchModelAction_ModelParameterValue. */
+export interface SwitchModelAction_ModelParameterValue extends ProtoMessage {
+	id: string;
+	value: string;
+}
+
+export const SwitchModelAction_ModelParameterValueSchema: MessageCodec<SwitchModelAction_ModelParameterValue> = pb<SwitchModelAction_ModelParameterValue>("aiserver.v1.SwitchModelAction_ModelParameterValue", [
+	{ no: 1, name: "id", kind: "string" },
+	{ no: 2, name: "value", kind: "string" },
+]);
+
 /** Cursor message agent.v1.ThinkingDetails. */
 export interface ThinkingDetails extends ProtoMessage {
 }
 
 export const ThinkingDetailsSchema: MessageCodec<ThinkingDetails> = pb<ThinkingDetails>("agent.v1.ThinkingDetails", [
+]);
+
+/** Cursor message aiserver.v1.UpgradeAction. */
+export interface UpgradeAction extends ProtoMessage {
+	membershipToUpgradeTo: string;
+	tryImmediateUpgrade?: boolean;
+	allowTrial?: boolean;
+}
+
+export const UpgradeActionSchema: MessageCodec<UpgradeAction> = pb<UpgradeAction>("aiserver.v1.UpgradeAction", [
+	{ no: 1, name: "membershipToUpgradeTo", kind: "string" },
+	{ no: 2, name: "tryImmediateUpgrade", kind: "bool", optional: true },
+	{ no: 3, name: "allowTrial", kind: "bool", optional: true },
+]);
+
+/** Cursor message aiserver.v1.UpgradeChoice. */
+export interface UpgradeChoice extends ProtoMessage {
+}
+
+export const UpgradeChoiceSchema: MessageCodec<UpgradeChoice> = pb<UpgradeChoice>("aiserver.v1.UpgradeChoice", [
+]);
+
+/** Cursor message aiserver.v1.UrlAction. */
+export interface UrlAction extends ProtoMessage {
+	url: string;
+}
+
+export const UrlActionSchema: MessageCodec<UrlAction> = pb<UrlAction>("aiserver.v1.UrlAction", [
+	{ no: 1, name: "url", kind: "string" },
 ]);
 

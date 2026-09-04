@@ -176,8 +176,44 @@ function createCursorReferenceMap(): Map<string, ModelSpec<"cursor-agent">> {
 }
 
 function localEffortLevel(value: string | undefined): Effort | "off" | undefined {
-	if (value === "off") return "off";
+	if (value === "off" || value === "none") return "off";
 	return THINKING_EFFORTS.find(effort => effort === value);
+}
+
+function variantParameter(
+	variant: AvailableModelsResponse_AvailableModel["variants"][number],
+	id: string,
+): string | undefined {
+	return variant.parameterValues.find(parameter => parameter.id === id)?.value;
+}
+
+function variantLevel(variant: AvailableModelsResponse_AvailableModel["variants"][number]): Effort | "off" | undefined {
+	if (variantParameter(variant, "thinking") === "false") return "off";
+	return localEffortLevel(variantParameter(variant, "effort") ?? variantParameter(variant, "reasoning"));
+}
+
+function variantFast(variant: AvailableModelsResponse_AvailableModel["variants"][number]): boolean {
+	return variantParameter(variant, "fast") === "true";
+}
+
+function variantForLegacySlug(
+	modelId: string,
+	availableModels: readonly AvailableModelsResponse_AvailableModel[],
+):
+	| {
+			readonly base: AvailableModelsResponse_AvailableModel;
+			readonly variant: AvailableModelsResponse_AvailableModel["variants"][number];
+	  }
+	| undefined {
+	for (const base of availableModels) {
+		const matches = base.variants.filter(variant => variant.legacySlug === modelId);
+		const variant =
+			matches.find(candidate => candidate.isDefaultNonMaxConfig === true) ??
+			matches.find(candidate => candidate.isDefaultMaxConfig === true) ??
+			matches[0];
+		if (variant !== undefined) return { base, variant };
+	}
+	return undefined;
 }
 
 function routedEffortSuffix(
@@ -199,6 +235,11 @@ function familyFor(
 	model: ModelDetails,
 	availableModels: readonly AvailableModelsResponse_AvailableModel[],
 ): { readonly id: string; readonly level: Effort | "off" } {
+	const selection = variantForLegacySlug(model.modelId, availableModels);
+	const selectionLevel = selection === undefined ? undefined : variantLevel(selection.variant);
+	if (selection !== undefined && selectionLevel !== undefined) {
+		return { id: `${selection.base.name}${variantFast(selection.variant) ? "-fast" : ""}`, level: selectionLevel };
+	}
 	const generic = cursorEffortTierSuffix(model.modelId);
 	const genericLevel = localEffortLevel(generic?.level);
 	const matched =
@@ -330,21 +371,69 @@ function providerModel(
 	maxMode: boolean,
 	references: ReadonlyMap<string, ModelSpec<"cursor-agent">>,
 ): ModelSpec<"cursor-agent"> {
-	const representative =
+	const memberIds = new Set(family.members.map(member => member.model.modelId));
+	const fast = family.id.endsWith("-fast");
+	const variants = base.variants.filter(
+		variant =>
+			variant.legacySlug !== undefined &&
+			memberIds.has(variant.legacySlug) &&
+			variant.isMaxMode === maxMode &&
+			variantFast(variant) === fast,
+	);
+	const defaultVariant =
+		variants.find(variant =>
+			maxMode ? variant.isDefaultMaxConfig === true : variant.isDefaultNonMaxConfig === true,
+		) ?? variants[0];
+	const defaultEffort =
+		defaultVariant === undefined
+			? undefined
+			: (variantParameter(defaultVariant, "effort") ?? variantParameter(defaultVariant, "reasoning"));
+	const effortRouting: Partial<Record<Effort | "off", string>> = {};
+	for (const variant of variants) {
+		const level = variantLevel(variant);
+		if (level === undefined || variant.legacySlug === undefined || level === "off") continue;
+		effortRouting[level] = variant.legacySlug;
+	}
+	const offVariant =
+		variants.find(
+			variant => variantLevel(variant) === "off" && variantParameter(variant, "effort") === defaultEffort,
+		) ?? variants.find(variant => variantLevel(variant) === "off");
+	if (offVariant?.legacySlug !== undefined) effortRouting.off = offVariant.legacySlug;
+	if (variants.length === 0) {
+		for (const member of family.members) effortRouting[member.level] = member.model.modelId;
+	}
+	const preferred =
+		(defaultVariant?.legacySlug === undefined
+			? undefined
+			: family.members.find(member => member.model.modelId === defaultVariant.legacySlug)) ??
 		cursorEffortPreference().flatMap(tier => {
 			const level = localEffortLevel(cursorEffortLevel(tier));
 			return level === undefined ? [] : family.members.filter(member => member.level === level);
-		})[0] ?? family.members[0];
-	if (representative === undefined) throw new Error(`Cursor model family '${family.id}' is empty`);
-	const effortRouting: Partial<Record<Effort | "off", string>> = {};
-	for (const member of family.members) effortRouting[member.level] = member.model.modelId;
+		})[0] ??
+		family.members[0];
+	if (preferred === undefined) throw new Error(`Cursor model family '${family.id}' is empty`);
+	const cursorModelRoutes = Object.fromEntries(
+		variants.flatMap(variant =>
+			variant.legacySlug === undefined
+				? []
+				: [
+						[
+							variant.legacySlug,
+							{
+								modelId: base.name,
+								parameters: variant.parameterValues.map(({ id, value }) => ({ id, value })),
+							},
+						] as const,
+					],
+		),
+	);
 	const efforts = THINKING_EFFORTS.filter(level => effortRouting[level] !== undefined);
 	const reasoning = base.supportsThinking === true;
 	const reference = familyReference(family, references);
 	const capturedName =
 		base.clientDisplayName === undefined || base.clientDisplayName === ""
-			? stripEffortDisplayLabel(displayName(representative.model)).trim()
-			: base.clientDisplayName;
+			? stripEffortDisplayLabel(displayName(preferred.model)).trim()
+			: `${base.clientDisplayName}${fast ? " Fast" : ""}`;
 	const cursorContext = variantContext(base, maxMode);
 	return {
 		...(reference ?? {
@@ -362,7 +451,8 @@ function providerModel(
 		maxTokens: reference?.maxTokens ?? DEFAULT_MAX_TOKENS,
 		cursorMaxMode: maxMode,
 		...(cursorContext === undefined ? {} : { cursorContext }),
-		requestModelId: representative.model.modelId,
+		...(Object.keys(cursorModelRoutes).length === 0 ? {} : { cursorModelRoutes }),
+		requestModelId: defaultVariant?.legacySlug ?? preferred.model.modelId,
 		...(reasoning && efforts.length > 0
 			? {
 					thinking: {
