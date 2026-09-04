@@ -12,6 +12,7 @@ import type { CursorMachineIdentity, IdentityDependencies } from "../src/provide
 import {
 	deriveHostMachineId,
 	deriveMacMachineId,
+	executeIdentityCommand,
 	firstUsableMac,
 	loadCursorMachineIdentity,
 	machineIdCommand,
@@ -101,6 +102,15 @@ describe("Cursor managed-inference wire", () => {
 			"x-trace": "kept",
 		});
 		expect(headers.connection).toBeUndefined();
+	});
+
+	test("bounds and concurrently drains the host identity command", async () => {
+		expect(await executeIdentityCommand("head -c 131072 /dev/zero >&2; printf done", "linux", {}, 1_000)).toBe(
+			"done",
+		);
+		const started = performance.now();
+		await expect(executeIdentityCommand("sleep 30", "linux", {}, 25)).rejects.toThrow("Timed out");
+		expect(performance.now() - started).toBeLessThan(2_000);
 	});
 
 	test("derives Cursor's platform and MAC identity exactly", async () => {

@@ -463,6 +463,8 @@ messages.
   creation is serialized per scope, while different credentials remain isolated.
   Invocation responses are correlated by exact ID, delivered in order per
   invocation, bounded in count/bytes, and cancellable without cancelling siblings.
+  A connection that completes after runtime shutdown is destroyed before it can
+  become the active session.
 - **Connect framing:** messages use five-byte Connect envelopes, gzip for larger
   client frames, a 16 MiB frame cap, and a required JSON end-stream trailer.
 - **Final reconciliation:** completed streamed tools must equal the final response
@@ -480,7 +482,9 @@ messages.
   identity, including host-derived machine and MAC hashes, minute checksum,
   per-runtime client key, request UUID, cookie, timezone, architecture, version,
   and commit headers. If host identity cannot be derived, OMP persists one
-  owner-only UUID fallback under the agent directory and logs the fallback.
+  owner-only UUID fallback under the agent directory and logs the fallback. Host
+  lookup runs through the shared supervised process utility with a five-second
+  deadline and concurrent stdout/stderr draining.
 - **PKCE OAuth:** the existing browser login, polling, and refresh flow remains in
   `packages/ai/src/registry/oauth/cursor.ts`.
 - **Usage:** `packages/ai/src/usage/cursor.ts` continues to combine the standard

@@ -3,11 +3,12 @@ import * as fs from "node:fs/promises";
 import { networkInterfaces } from "node:os";
 import * as path from "node:path";
 import { arch, env, platform } from "node:process";
-import { getAgentDir, isRecord, logger } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isRecord, logger, ptree } from "@oh-my-pi/pi-utils";
 
 export const CURSOR_IDE_VERSION = "3.18.9";
 export const CURSOR_IDE_COMMIT = "2ba48ff3f7514cc4643c52ca9f7b3173d9b66130";
 
+const CURSOR_IDENTITY_COMMAND_TIMEOUT_MS = 5_000;
 const REJECTED_MAC_ADDRESSES = new Set(["00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff", "ac:de:48:00:11:22"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
@@ -30,20 +31,26 @@ export interface IdentityDependencies {
 	readonly createUuid: () => string;
 }
 
+/** Execute one host-identity command with bounded, deadlock-safe process supervision. */
+export async function executeIdentityCommand(
+	command: string,
+	targetPlatform: NodeJS.Platform = platform,
+	targetEnv: NodeJS.ProcessEnv = env,
+	timeoutMs = CURSOR_IDENTITY_COMMAND_TIMEOUT_MS,
+): Promise<string> {
+	const shell =
+		targetPlatform === "win32"
+			? [targetEnv.ComSpec ?? "cmd.exe", "/d", "/s", "/c", command]
+			: ["/bin/sh", "-c", command];
+	const result = await ptree.exec(shell, { timeout: timeoutMs, stderr: "full" });
+	return result.stdout;
+}
+
 const DEFAULT_DEPENDENCIES: IdentityDependencies = {
 	platform,
 	arch,
 	env,
-	execute: async command => {
-		const shell =
-			platform === "win32" ? [env.ComSpec ?? "cmd.exe", "/d", "/s", "/c", command] : ["/bin/sh", "-c", command];
-		const process = Bun.spawn(shell, { stdout: "pipe", stderr: "pipe" });
-		const output = await new Response(process.stdout).text();
-		const error = await new Response(process.stderr).text();
-		const exitCode = await process.exited;
-		if (exitCode !== 0) throw new Error(error.trim() || `Cursor identity command exited ${exitCode}`);
-		return output;
-	},
+	execute: executeIdentityCommand,
 	interfaces: networkInterfaces,
 	createUuid: randomUUID,
 };

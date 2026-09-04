@@ -548,6 +548,7 @@ export class CursorInferenceRuntime {
 	readonly #runs = new Map<string, RunSlot>();
 	readonly #runLocks = new Map<string, Promise<void>>();
 	#session: ClientHttp2Session | undefined;
+	#connectingSession: ClientHttp2Session | undefined;
 	#sessionPromise: Promise<ClientHttp2Session> | undefined;
 	#closed = false;
 
@@ -564,12 +565,20 @@ export class CursorInferenceRuntime {
 		this.#sessionPromise ??= Promise.resolve(
 			(this.#options.connect ?? (authority => connect(authority)))(this.#backend.origin),
 		)
-			.then(waitForHttp2Connect)
-			.catch(error => {
-				this.#sessionPromise = undefined;
-				throw error;
+			.then(session => {
+				if (this.#closed) {
+					session.destroy();
+					throw new Error("Cursor managed-inference runtime is shut down");
+				}
+				this.#connectingSession = session;
+				return waitForHttp2Connect(session);
 			})
 			.then(session => {
+				if (this.#connectingSession === session) this.#connectingSession = undefined;
+				if (this.#closed) {
+					session.destroy();
+					throw new Error("Cursor managed-inference runtime is shut down");
+				}
 				this.#session = session;
 				this.#sessionPromise = undefined;
 				const clear = (): void => {
@@ -579,6 +588,12 @@ export class CursorInferenceRuntime {
 				session.on("error", clear);
 				session.once("close", clear);
 				return session;
+			})
+			.catch(error => {
+				this.#connectingSession?.destroy();
+				this.#connectingSession = undefined;
+				this.#sessionPromise = undefined;
+				throw error;
 			});
 		return await this.#sessionPromise;
 	}
@@ -670,6 +685,8 @@ export class CursorInferenceRuntime {
 		await Promise.allSettled(
 			runs.map(async ({ run }) => await run.finish(this.#options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS)),
 		);
+		this.#connectingSession?.destroy();
+		this.#connectingSession = undefined;
 		this.#session?.destroy();
 		this.#session = undefined;
 	}

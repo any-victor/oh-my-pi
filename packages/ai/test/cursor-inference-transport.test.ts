@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { Http2Server, ServerHttp2Session, ServerHttp2Stream } from "node:http2";
+import type { ClientHttp2Session, Http2Server, ServerHttp2Session, ServerHttp2Stream } from "node:http2";
 import { connect, createServer } from "node:http2";
 import {
 	InferenceRequestedModelSchema,
@@ -322,6 +322,32 @@ describe("Cursor managed-inference transport", () => {
 		).toHaveProperty("invocationId", "second");
 		expect(attempts).toBe(2);
 		await managed.shutdown();
+	});
+
+	test("destroys a session that connects after runtime shutdown", async () => {
+		const target = await loopback(() => undefined);
+		const connectStarted = Promise.withResolvers<void>();
+		const lateSession = Promise.withResolvers<ClientHttp2Session>();
+		const managed = runtime(target, {
+			connect: async () => {
+				connectStarted.resolve();
+				return await lateSession.promise;
+			},
+		});
+		const pending = managed.invoke(
+			"omp-session",
+			"route",
+			clientRun(),
+			"late",
+			create(InferenceStreamRequestSchema),
+			{ onMessage: () => undefined },
+		);
+		await connectStarted.promise;
+		await managed.shutdown();
+		const session = connect(target.origin);
+		lateSession.resolve(session);
+		expect(await rejection(pending)).toHaveProperty("message", "Cursor managed-inference runtime is shut down");
+		expect(session.destroyed).toBe(true);
 	});
 
 	test("surfaces an HTTP failure before runReady without unhandled rejection", async () => {
