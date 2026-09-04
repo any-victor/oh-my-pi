@@ -380,7 +380,7 @@ describe("leaked-thinking terminal reconciliation", () => {
 		const source = new AssistantMessageEventStream();
 		const projected = wrapLeakedThinkingStream(source);
 		const message = makeAssistant([]);
-		const streamed = { type: "text" as const, text: "<think>draft reasoning</think>stale answer" };
+		const streamed = { type: "text" as const, text: "before<think>draft reasoning</think>stale answer" };
 		message.content.push(streamed);
 		source.push({ type: "start", partial: message });
 		source.push({ type: "text_start", contentIndex: 0, partial: message });

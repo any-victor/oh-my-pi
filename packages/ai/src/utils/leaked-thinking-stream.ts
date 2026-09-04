@@ -351,6 +351,9 @@ class LeakedThinkingProjector {
 			if (this.#thinkingBlocks.has(srcIndex)) continue;
 			this.#projectSignedThinking(srcIndex, block.thinking, block.thinkingSignature);
 		}
+		this.#flushHealer();
+		this.#closeText();
+		this.#closeThinking();
 		const unclaimedText = this.#partial.content.filter((block): block is TextContent => block.type === "text");
 		const terminalTextCount = message.content.filter(block => block.type === "text").length;
 		let terminalTextIndex = 0;
@@ -374,6 +377,14 @@ class LeakedThinkingProjector {
 				if (block.text.startsWith(fedText)) {
 					if (block.text.length === fedLength) continue;
 				} else if (claimed !== undefined) {
+					for (const candidate of unclaimedText) {
+						if (this.#sourceAnchors.get(candidate) !== srcIndex) continue;
+						const contentIndex = this.#partial.content.indexOf(candidate);
+						if (contentIndex >= 0) this.#partial.content.splice(contentIndex, 1);
+					}
+					for (let index = unclaimedText.length - 1; index >= 0; index--) {
+						if (this.#sourceAnchors.get(unclaimedText[index]!) === srcIndex) unclaimedText.splice(index, 1);
+					}
 					claimed.text = block.text;
 					if (block.textSignature === undefined) delete claimed.textSignature;
 					else claimed.textSignature = block.textSignature;
