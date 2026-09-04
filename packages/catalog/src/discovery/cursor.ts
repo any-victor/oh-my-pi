@@ -36,7 +36,6 @@ const CURSOR_GET_USABLE_MODELS_PATH = "/agent.v1.AgentService/GetUsableModels";
 const CURSOR_GET_DEFAULT_MODEL_PATH = "/agent.v1.AgentService/GetDefaultModelForCli";
 const CURSOR_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024;
 const DEFAULT_CONTEXT_WINDOW = 200_000;
-const DEFAULT_MAX_TOKENS = 64_000;
 
 /** Options for fetching and joining Cursor's three model-catalog surfaces. */
 export interface CursorModelDiscoveryOptions {
@@ -438,7 +437,6 @@ function providerModel(
 	return {
 		...(reference ?? {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			maxTokens: DEFAULT_MAX_TOKENS,
 		}),
 		id: maxMode ? maxModeModelId(family.id, base) : family.id,
 		name: `${capturedName}${maxMode ? " Max" : ""}`,
@@ -448,7 +446,8 @@ function providerModel(
 		reasoning,
 		input: base.supportsImages === true ? ["text", "image"] : ["text"],
 		contextWindow: contextWindow(base, maxMode),
-		maxTokens: reference?.maxTokens ?? DEFAULT_MAX_TOKENS,
+		// None of Cursor's fetched catalog surfaces reports a model output ceiling.
+		maxTokens: null,
 		cursorMaxMode: maxMode,
 		...(cursorContext === undefined ? {} : { cursorContext }),
 		...(Object.keys(cursorModelRoutes).length === 0 ? {} : { cursorModelRoutes }),

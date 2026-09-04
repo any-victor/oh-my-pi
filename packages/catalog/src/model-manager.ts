@@ -49,6 +49,11 @@ export interface ModelManagerOptions<TApi extends Api = Api, TModelsDevPayload =
 	 * ID-only authoritative catalogs must leave this false so models.dev can enrich them.
 	 */
 	dynamicModelCapabilitiesAuthoritative?: boolean;
+	/**
+	 * When true, a successful dynamic row's contextWindow and maxTokens values,
+	 * including explicit null for an unreported limit, replace fallback catalog metrics.
+	 */
+	dynamicModelLimitsAuthoritative?: boolean;
 	/** Cached model ids whose presence forces refresh when the static or migration-policy fingerprint changes. */
 	dropCachedModelIdsOnStaticMismatch?: readonly string[];
 	/**
@@ -223,11 +228,13 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const cacheHasUnresolvedHeaders = restoredCache.unresolvedModelIds.size > 0;
 	const dynamicModelsAuthoritative = options.dynamicModelsAuthoritative ?? false;
 	const dynamicModelCapabilitiesAuthoritative = options.dynamicModelCapabilitiesAuthoritative ?? false;
+	const dynamicModelLimitsAuthoritative = options.dynamicModelLimitsAuthoritative ?? false;
 	const cacheDropIds = options.dropCachedModelIdsOnStaticMismatch;
 	const staticCatalogFingerprint = fingerprintStaticModels(
 		staticModels,
 		dynamicModelsAuthoritative,
 		dynamicModelCapabilitiesAuthoritative,
+		dynamicModelLimitsAuthoritative,
 	);
 	// Endpoint-migration policy is cache identity: adding an id must invalidate
 	// matching-static-catalog caches written by the prior resolver.
@@ -330,10 +337,16 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		? mergeCatalogMetrics(mergedWithModelsDev, catalogMetricsSource)
 		: mergedWithModelsDev;
 	// Shared catalog rows enrich costs, limits, and capabilities by default. A
-	// provider with a complete capability schema may explicitly keep its dynamic
-	// reasoning and modality values authoritative while still taking catalog metrics.
+	// provider whose dynamic schema completely reports capabilities or limits may
+	// keep those fields authoritative while still taking catalog costs.
 	const dynamicCapabilitiesAuthoritative = authoritativeDynamicFetchSucceeded && dynamicModelCapabilitiesAuthoritative;
-	const mergedModels = mergeDynamicModels(mergedWithCatalogMetrics, dynamicModels, dynamicCapabilitiesAuthoritative);
+	const dynamicLimitsAuthoritative = authoritativeDynamicFetchSucceeded && dynamicModelLimitsAuthoritative;
+	const mergedModels = mergeDynamicModels(
+		mergedWithCatalogMetrics,
+		dynamicModels,
+		dynamicCapabilitiesAuthoritative,
+		dynamicLimitsAuthoritative,
+	);
 	const models = collapseBuiltVariants(
 		authoritativeDynamicFetchSucceeded ? retainModelIds(mergedModels, dynamicModels) : mergedModels,
 	);
@@ -500,6 +513,7 @@ function mergeDynamicModels<TApi extends Api>(
 	baseModels: readonly Model<TApi>[],
 	dynamicModels: readonly Model<TApi>[],
 	dynamicCapabilitiesAuthoritative = false,
+	dynamicLimitsAuthoritative = false,
 ): Model<TApi>[] {
 	// Empty-side fast paths: `mergeDynamicModels(base, [])` is the common shape
 	// after we've already merged the first pair, and `(...)` with no base
@@ -516,7 +530,10 @@ function mergeDynamicModels<TApi extends Api>(
 			merged.set(dynamicModel.id, dynamicModel);
 			continue;
 		}
-		merged.set(dynamicModel.id, mergeDynamicModel(existingModel, dynamicModel, dynamicCapabilitiesAuthoritative));
+		merged.set(
+			dynamicModel.id,
+			mergeDynamicModel(existingModel, dynamicModel, dynamicCapabilitiesAuthoritative, dynamicLimitsAuthoritative),
+		);
 	}
 	return Array.from(merged.values());
 }
@@ -543,11 +560,12 @@ export function fingerprintStaticModels<TApi extends Api>(
 	models: readonly (ModelSpec<TApi> | Model<TApi>)[],
 	dynamicModelsAuthoritative = false,
 	dynamicModelCapabilitiesAuthoritative = false,
+	dynamicModelLimitsAuthoritative = false,
 ): string {
-	const capabilityScope = dynamicModelCapabilitiesAuthoritative ? ":capabilities" : "";
-	if (models.length === 0) return `${MODEL_CACHE_FINGERPRINT_VERSION}${capabilityScope}:empty`;
+	const authorityScope = `${dynamicModelCapabilitiesAuthoritative ? ":capabilities" : ""}${dynamicModelLimitsAuthoritative ? ":limits" : ""}`;
+	if (models.length === 0) return `${MODEL_CACHE_FINGERPRINT_VERSION}${authorityScope}:empty`;
 	if (dynamicModelsAuthoritative)
-		return `${MODEL_CACHE_FINGERPRINT_VERSION}:authoritative${capabilityScope}:${fingerprintStaticModels(models)}`;
+		return `${MODEL_CACHE_FINGERPRINT_VERSION}:authoritative${authorityScope}:${fingerprintStaticModels(models)}`;
 	const tagged = models as ModelArrayWithFingerprint;
 	const cached = tagged[kStaticFingerprint];
 	if (cached !== undefined) return cached;
@@ -562,6 +580,7 @@ function mergeDynamicModel<TApi extends Api>(
 	existingModel: Model<TApi>,
 	dynamicModel: Model<TApi>,
 	dynamicCapabilitiesAuthoritative: boolean,
+	dynamicLimitsAuthoritative: boolean,
 ): Model<TApi> {
 	// When discovery resolves the same model id to a different endpoint (e.g.
 	// a GitHub Copilot business/enterprise host), the bundled reference's
@@ -597,8 +616,12 @@ function mergeDynamicModel<TApi extends Api>(
 			cacheWrite: preferDiscoveryCost(dynamicModel.cost.cacheWrite, existingModel.cost.cacheWrite),
 			...(longContextCost ? { longContext: longContextCost } : {}),
 		},
-		contextWindow: preferDiscoveryLimit(dynamicModel.contextWindow, existingModel.contextWindow),
-		maxTokens: preferDiscoveryLimit(dynamicModel.maxTokens, existingModel.maxTokens),
+		contextWindow: dynamicLimitsAuthoritative
+			? dynamicModel.contextWindow
+			: preferDiscoveryLimit(dynamicModel.contextWindow, existingModel.contextWindow),
+		maxTokens: dynamicLimitsAuthoritative
+			? dynamicModel.maxTokens
+			: preferDiscoveryLimit(dynamicModel.maxTokens, existingModel.maxTokens),
 		headers: dynamicModel.headers ? { ...existingModel.headers, ...dynamicModel.headers } : existingModel.headers,
 		compat: dynamicModel.compatConfig ?? existingModel.compatConfig,
 		contextPromotionTarget: dynamicModel.contextPromotionTarget ?? existingModel.contextPromotionTarget,

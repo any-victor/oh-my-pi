@@ -57,12 +57,11 @@ export function resolveModelCacheProviderId(providerId: string, options: ModelCa
 		case "ollama":
 			return resolveOllamaModelCacheProviderId(providerId, options.baseUrl);
 		case "cursor": {
-			// v7 maps selector legacy slugs back to their AvailableModels base model
-			// and complete variant parameters. Invalidate v6 rows that exposed the
-			// slugs themselves as RunInference model ids.
+			// v8 preserves the fetched catalog's unknown output ceiling. Invalidate
+			// v7 rows that invented 64,000 max output tokens for every Cursor model.
 			const baseUrl = (options.baseUrl ?? getDefaultModelDiscoveryBaseUrl(providerId)!).replace(/\/+$/u, "");
 			const scope = `${options.apiKey ?? ""}\u0000${baseUrl}`;
-			return `cursor:complete-catalog-v7:${Bun.hash(scope).toString(36)}`;
+			return `cursor:complete-catalog-v8:${Bun.hash(scope).toString(36)}`;
 		}
 		case "litellm": {
 			const baseUrl = options.baseUrl ?? getDefaultModelDiscoveryBaseUrl(providerId)!;

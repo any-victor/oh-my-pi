@@ -400,6 +400,33 @@ describe("Cursor provider entrypoint", () => {
 		}
 	});
 
+	test("omits an unknown catalog output ceiling while forwarding an explicit caller cap", async () => {
+		const target = await loopback();
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const context = { messages: [{ role: "user" as const, content: "bounded", timestamp: 1 }] };
+		const discoveredModel = { ...model(target.origin), maxTokens: null };
+		try {
+			await collect(
+				streamSimple(discoveredModel, context, {
+					apiKey: "HEADER.PAYLOAD.SIGNATURE",
+					sessionId: "omp-default-cap",
+					providerSessionState,
+				}),
+			);
+			await collect(
+				streamSimple(discoveredModel, context, {
+					apiKey: "HEADER.PAYLOAD.SIGNATURE",
+					sessionId: "omp-explicit-cap",
+					providerSessionState,
+					maxTokens: 321,
+				}),
+			);
+			expect(target.invokeMaxTokens()).toEqual([0, 321]);
+		} finally {
+			closeProviderState(providerSessionState);
+		}
+	});
+
 	test("rejects tool calls removed by the final payload hook", async () => {
 		const target = await loopback({ toolCallName: "read" });
 		const providerSessionState = new Map<string, ProviderSessionState>();

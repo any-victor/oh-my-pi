@@ -210,15 +210,16 @@ describe("Cursor complete catalog join", () => {
 		const first = cursorModelManagerOptions({ apiKey: "first-token" });
 		const second = cursorModelManagerOptions({ apiKey: "second-token" });
 		const alternate = cursorModelManagerOptions({ apiKey: "first-token", baseUrl: "https://cursor.example" });
-		expect(first.cacheProviderId?.startsWith("cursor:complete-catalog-v7:")).toBe(true);
+		expect(first.cacheProviderId?.startsWith("cursor:complete-catalog-v8:")).toBe(true);
 		expect(second.cacheProviderId).not.toBe(first.cacheProviderId);
 		expect(alternate.cacheProviderId).not.toBe(first.cacheProviderId);
 		expect(first.dynamicModelsAuthoritative).toBe(true);
 		expect(first.dynamicModelCapabilitiesAuthoritative).toBe(true);
+		expect(first.dynamicModelLimitsAuthoritative).toBe(true);
 		expect(isCredentialScopedModelCacheProvider("cursor")).toBe(true);
 	});
 
-	it("applies explicitly authoritative discovered capabilities without provider-specific branches", async () => {
+	it("applies explicitly authoritative discovered capabilities and limits without provider-specific branches", async () => {
 		const base = {
 			id: "account-scoped-route",
 			name: "Account-scoped Route",
@@ -232,15 +233,16 @@ describe("Cursor complete catalog join", () => {
 		const manager = createModelManager({
 			providerId: "account-catalog-test",
 			staticModels: [{ ...base, reasoning: true, input: ["text", "image"] }],
-			fetchDynamicModels: async () => [{ ...base, reasoning: false, input: ["text"] }],
+			fetchDynamicModels: async () => [{ ...base, reasoning: false, input: ["text"], maxTokens: null }],
 			dynamicModelsAuthoritative: true,
 			dynamicModelCapabilitiesAuthoritative: true,
+			dynamicModelLimitsAuthoritative: true,
 			cacheDbPath: ":memory:",
 		});
 
 		const { models } = await manager.refresh("online");
 		expect(models).toHaveLength(1);
-		expect(models[0]).toMatchObject({ input: ["text"], reasoning: false });
+		expect(models[0]).toMatchObject({ input: ["text"], reasoning: false, maxTokens: null });
 		expect(models[0]?.thinking).toBeUndefined();
 	});
 
@@ -248,6 +250,7 @@ describe("Cursor complete catalog join", () => {
 		const gemini = builtCatalog().find(candidate => candidate.id === "gemini-3.7-flash");
 		expect(gemini).toMatchObject({
 			contextWindow: 1_000_000,
+			maxTokens: null,
 			input: ["text", "image"],
 			reasoning: true,
 			requestModelId: "gemini-3.7-flash-medium",
@@ -516,6 +519,30 @@ describe("Cursor complete catalog join", () => {
 		expect(
 			await fetchCursorUsableModels({ apiKey: "test-token", baseUrl: await promise, timeoutMs: 1_000 }),
 		).toBeNull();
+	});
+
+	it("does not inherit an unfetched output ceiling from bundled references", () => {
+		const fixture = catalogFixture();
+		const reference = {
+			id: "gemini-3.7-flash",
+			name: "Stale bundled reference",
+			provider: "cursor" as const,
+			api: "cursor-agent" as const,
+			baseUrl: "https://api2.cursor.sh",
+			reasoning: true,
+			input: ["text"] as ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 64_000,
+		};
+		const models = cursorCatalogModels(
+			fixture.availableModels,
+			fixture.usable,
+			fixture.defaultModel,
+			"https://api2.cursor.sh",
+			new Map([[reference.id, reference]]),
+		);
+		expect(models.find(candidate => candidate.id === reference.id)?.maxTokens).toBeNull();
 	});
 });
 

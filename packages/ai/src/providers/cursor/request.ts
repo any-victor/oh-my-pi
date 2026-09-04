@@ -388,11 +388,12 @@ export function buildInferenceRequest(
 	const toolCallIds = uniqueToolCallIds(repairedContext);
 	const supportsImages = model.input.includes("image");
 	const messages = repairedContext.messages.map(message => messageToInference(message, toolCallIds, supportsImages));
-	for (const prompt of normalizeSystemPrompts(context.systemPrompt).reverse()) {
+	const systemPrompt = normalizeSystemPrompts(context.systemPrompt).join("\n\n");
+	if (systemPrompt !== "") {
 		messages.unshift(
 			create(InferenceCoreMessageSchema, {
 				role: InferenceMessageRole.SYSTEM,
-				content: { case: "text", value: prompt },
+				content: { case: "text", value: systemPrompt },
 			}),
 		);
 	}
@@ -511,30 +512,23 @@ export function inferenceRoutingKey(model: Model<"cursor-agent">, options: Curso
 	});
 }
 
-function routingText(message: Message): string {
-	if (message.role === "user") {
-		return typeof message.content === "string"
-			? message.content
-			: message.content.flatMap(part => (part.type === "text" ? [part.text] : [])).join("");
-	}
-	if (message.role === "assistant") {
-		return message.content.flatMap(part => (part.type === "text" ? [part.text] : [])).join("");
-	}
-	return "";
+function routingText(message: Extract<Message, { role: "user" }>): string {
+	return typeof message.content === "string"
+		? message.content
+		: message.content.flatMap(part => (part.type === "text" ? [part.text] : [])).join("");
 }
 
 function routingConversation(context: Context): RunInferenceRoutingMessage[] {
-	return context.messages.flatMap(message => {
-		if (message.role !== "user" && message.role !== "assistant") return [];
-		const text = routingText(message);
-		if (text === "") return [];
-		return [
-			create(RunInferenceRoutingMessageSchema, {
-				role: message.role === "user" ? RunInferenceRoutingRole.USER : RunInferenceRoutingRole.ASSISTANT,
-				text,
-			}),
-		];
-	});
+	const message = context.messages.at(-1);
+	if (message?.role !== "user") return [];
+	const text = routingText(message);
+	if (text.trim() === "") return [];
+	return [
+		create(RunInferenceRoutingMessageSchema, {
+			role: RunInferenceRoutingRole.USER,
+			text,
+		}),
+	];
 }
 
 export function buildInferenceRunRequest(

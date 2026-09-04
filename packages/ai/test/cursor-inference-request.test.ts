@@ -44,7 +44,7 @@ const PNG_BASE64 = Buffer.concat([
 
 function history(): Context {
 	return {
-		systemPrompt: ["Use the tool."],
+		systemPrompt: ["Use the tool.", "Return its result."],
 		messages: [
 			{ role: "user", content: "Join the fragments.", timestamp: 1 },
 			{
@@ -89,6 +89,7 @@ describe("Cursor managed-inference request", () => {
 		expect(request.conversationId).toBeUndefined();
 		expect(request.requestedModel).toBeUndefined();
 		expect(request.messages.map(message => message.role)).toEqual([4, 1, 2, 3]);
+		expect(request.messages[0]?.content).toEqual({ case: "text", value: "Use the tool.\n\nReturn its result." });
 		const assistant = request.messages[2];
 		expect(assistant?.content).toEqual({ case: "text", value: "Calling now." });
 		expect(assistant?.reasoningParts).toEqual([]);
@@ -533,9 +534,11 @@ describe("Cursor managed-inference request", () => {
 		expect(projected?.toolCalls.map(call => call.toolCallId)).toEqual(["first", "second"]);
 	});
 
-	test("routes on a stable OMP session and resolved model selection", () => {
+	test("routes only the current user action on the stable OMP session", () => {
 		const model = cursorModel();
-		const run = buildInferenceRunRequest(model, history(), "omp-session");
+		const context = history();
+		context.messages.push({ role: "user", content: "Current action.", timestamp: 4 });
+		const run = buildInferenceRunRequest(model, context, "omp-session");
 		expect(run).toMatchObject({
 			conversationId: "omp-session",
 			agentMode: "agent",
@@ -543,11 +546,9 @@ describe("Cursor managed-inference request", () => {
 				modelId: "composer-2.5",
 				parameters: [expect.objectContaining({ id: "fast", value: "false" })],
 			},
-			routingConversation: [
-				expect.objectContaining({ role: 1, text: "Join the fragments." }),
-				expect.objectContaining({ role: 2, text: "Calling now." }),
-			],
+			routingConversation: [expect.objectContaining({ role: 1, text: "Current action." })],
 		});
+		expect(buildInferenceRunRequest(model, history(), "omp-session").routingConversation).toEqual([]);
 		expect(inferenceRoutingKey(model)).toBe(
 			'{"modelId":"composer-2.5","maxMode":false,"parameters":[{"id":"fast","value":"false"}]}',
 		);

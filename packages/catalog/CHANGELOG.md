@@ -17,6 +17,7 @@
 - Fixed compressed Cursor catalog responses expanding beyond the catalog response-size limit during gzip or Brotli decompression.
 - Fixed distinct Cursor Max configurations being mislabeled as 1M rows when their authoritative context is smaller or unchanged.
 - Fixed provider model discovery losing either explicit text-only/non-reasoning capabilities or shared capability enrichment for authoritative ID-only rosters.
+- Fixed Cursor discovery inventing or inheriting an output-token ceiling that none of its three fetched catalog surfaces reports.
 
 ## [18.1.9] - 2026-09-04
 
