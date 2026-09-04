@@ -203,19 +203,19 @@ describe("Cursor complete catalog join", () => {
 		expect(isCredentialScopedModelCacheProvider("cursor")).toBe(true);
 	});
 
-	it("keeps account-discovered capabilities authoritative during model merge", async () => {
+	it("applies authoritative discovered capabilities without provider-specific policy", async () => {
 		const base = {
-			id: "future-cursor-route",
-			name: "Future Cursor Route",
-			provider: "cursor" as const,
+			id: "account-scoped-route",
+			name: "Account-scoped Route",
+			provider: "account-catalog-test",
 			api: "cursor-agent" as const,
-			baseUrl: "https://api2.cursor.sh",
+			baseUrl: "https://catalog.example.test",
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 200_000,
 			maxTokens: 32_000,
 		};
 		const manager = createModelManager({
-			providerId: "cursor",
+			providerId: "account-catalog-test",
 			staticModels: [{ ...base, reasoning: true, input: ["text", "image"] }],
 			fetchDynamicModels: async () => [{ ...base, reasoning: false, input: ["text"] }],
 			dynamicModelsAuthoritative: true,

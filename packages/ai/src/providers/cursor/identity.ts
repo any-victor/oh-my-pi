@@ -1,4 +1,3 @@
-import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -52,7 +51,7 @@ const DEFAULT_DEPENDENCIES: IdentityDependencies = {
 	env,
 	execute: executeIdentityCommand,
 	interfaces: os.networkInterfaces,
-	createUuid: randomUUID,
+	createUuid: () => crypto.randomUUID(),
 };
 
 export function machineIdCommand(
@@ -104,7 +103,7 @@ export async function deriveHostMachineId(dependencies: IdentityDependencies = D
 	const command = machineIdCommand(dependencies.platform, dependencies.arch, dependencies.env);
 	const hardwareId = normalizeHardwareId(dependencies.platform, await dependencies.execute(command));
 	if (hardwareId === "") throw new Error("Cursor host identity is empty");
-	return createHash("sha256").update(hardwareId, "utf8").digest("hex");
+	return new Bun.CryptoHasher("sha256").update(hardwareId).digest("hex");
 }
 
 export function firstUsableMac(interfaces: NetworkInterfaceMap): string {
@@ -123,7 +122,7 @@ export function deriveMacMachineId(
 	dependencies: Pick<IdentityDependencies, "interfaces"> = DEFAULT_DEPENDENCIES,
 ): string | undefined {
 	try {
-		return createHash("sha256").update(firstUsableMac(dependencies.interfaces()), "utf8").digest("hex");
+		return new Bun.CryptoHasher("sha256").update(firstUsableMac(dependencies.interfaces())).digest("hex");
 	} catch {
 		return undefined;
 	}

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import * as http2 from "node:http2";
 import type { InferenceStreamRequest, RunInferenceServerMessage } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
 import { RunInferenceClientMessageSchema } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
@@ -39,8 +38,8 @@ class CursorRuntimeState implements ProviderSessionState {
 
 	async runtimeFor(token: string, baseUrl: string, provider: string): Promise<CursorInferenceRuntime> {
 		const proxyUrl = getProxyForUrl(provider, new URL(baseUrl));
-		const digest = createHash("sha256")
-			.update(`${baseUrl}\0${proxyUrl?.toString() ?? ""}\0${token}`, "utf8")
+		const digest = new Bun.CryptoHasher("sha256")
+			.update(`${baseUrl}\0${proxyUrl?.toString() ?? ""}\0${token}`)
 			.digest("hex");
 		const existing = this.#runtimes.get(digest);
 		if (existing !== undefined) return await existing;

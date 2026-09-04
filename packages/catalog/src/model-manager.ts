@@ -317,7 +317,11 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const mergedWithCatalogMetrics = additiveStaticModelIds
 		? mergeCatalogMetrics(mergedWithModelsDev, catalogMetricsSource)
 		: mergedWithModelsDev;
-	const mergedModels = mergeDynamicModels(mergedWithCatalogMetrics, dynamicModels);
+	// A successful models.dev lookup remains the capability-enrichment source for
+	// sparse dynamic rosters. Otherwise an authoritative dynamic catalog owns the
+	// complete per-route capability set as well as the selectable model IDs.
+	const dynamicCapabilitiesAuthoritative = authoritativeDynamicFetchSucceeded && !modelsDevFetchSucceeded;
+	const mergedModels = mergeDynamicModels(mergedWithCatalogMetrics, dynamicModels, dynamicCapabilitiesAuthoritative);
 	const models = collapseBuiltVariants(
 		authoritativeDynamicFetchSucceeded ? retainModelIds(mergedModels, dynamicModels) : mergedModels,
 	);
@@ -483,6 +487,7 @@ function mergeCatalogMetrics<TApi extends Api>(
 function mergeDynamicModels<TApi extends Api>(
 	baseModels: readonly Model<TApi>[],
 	dynamicModels: readonly Model<TApi>[],
+	dynamicCapabilitiesAuthoritative = false,
 ): Model<TApi>[] {
 	// Empty-side fast paths: `mergeDynamicModels(base, [])` is the common shape
 	// after we've already merged the first pair, and `(...)` with no base
@@ -499,7 +504,7 @@ function mergeDynamicModels<TApi extends Api>(
 			merged.set(dynamicModel.id, dynamicModel);
 			continue;
 		}
-		merged.set(dynamicModel.id, mergeDynamicModel(existingModel, dynamicModel));
+		merged.set(dynamicModel.id, mergeDynamicModel(existingModel, dynamicModel, dynamicCapabilitiesAuthoritative));
 	}
 	return Array.from(merged.values());
 }
@@ -539,40 +544,27 @@ export function fingerprintStaticModels<TApi extends Api>(
 	return fingerprint;
 }
 
-function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamicModel: Model<TApi>): Model<TApi> {
+function mergeDynamicModel<TApi extends Api>(
+	existingModel: Model<TApi>,
+	dynamicModel: Model<TApi>,
+	dynamicCapabilitiesAuthoritative: boolean,
+): Model<TApi> {
 	// When discovery resolves the same model id to a different endpoint (e.g.
 	// a GitHub Copilot business/enterprise host), the bundled reference's
 	// capabilities are pinned to another endpoint and no longer apply. Copilot
 	// dynamic discovery also pre-applies the correct image fallback for omitted
 	// `supports.vision`, so its explicit `false` must not be OR-upgraded by the
-	// canonical bundled model.
-	// DeepInfra's discovery is authoritative (`dynamicModelsAuthoritative`) and
-	// its `vision`/`vlm` tags are the catalog's whole truth for modality. Every
-	// row shares the single DeepInfra endpoint, so `endpointChanged` never fires
-	// there: without this carve-out a model that dropped those tags would keep
-	// the bundled reference's image support and the agent would go on sending
-	// images to a now text-only route. Cursor's account catalog likewise reports
-	// the exact per-route capability rather than omitting it.
+	// canonical bundled model. Providers whose dynamic catalog is configured as
+	// authoritative likewise report the complete capability set for each route.
 	const endpointChanged = existingModel.baseUrl !== dynamicModel.baseUrl;
 	const dynamicInputAuthoritative =
+		dynamicCapabilitiesAuthoritative ||
 		endpointChanged ||
-		(existingModel.provider === "github-copilot" && dynamicModel.provider === "github-copilot") ||
-		(existingModel.provider === "deepinfra" && dynamicModel.provider === "deepinfra") ||
-		(existingModel.provider === "cursor" && dynamicModel.provider === "cursor");
+		(existingModel.provider === "github-copilot" && dynamicModel.provider === "github-copilot");
 	const supportsImage = dynamicInputAuthoritative
 		? dynamicModel.input.includes("image")
 		: existingModel.input.includes("image") || dynamicModel.input.includes("image");
-	// Synthetic's discovery is authoritative (`dynamicModelsAuthoritative`) and
-	// its per-model `reasoning_parameters.efforts` vocabulary is the route's
-	// whole truth: when the wire advertises only the `none` off-state the
-	// mapper emits `reasoning: false`, and OR-ing the bundled reference's
-	// stale `reasoning: true` back would re-arm an effort dial the route
-	// doesn't expose. Cursor also reports `supportsThinking` explicitly for
-	// every available route.
-	const dynamicReasoningAuthoritative =
-		(existingModel.provider === "synthetic" && dynamicModel.provider === "synthetic") ||
-		(existingModel.provider === "cursor" && dynamicModel.provider === "cursor");
-	const reasoning = dynamicReasoningAuthoritative
+	const reasoning = dynamicCapabilitiesAuthoritative
 		? dynamicModel.reasoning
 		: existingModel.reasoning || dynamicModel.reasoning;
 	const longContextCost = dynamicModel.cost.longContext ?? existingModel.cost.longContext;
