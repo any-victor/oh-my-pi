@@ -272,7 +272,7 @@ describe("Cursor provider entrypoint", () => {
 		}
 	});
 
-	test("replaces the session runtime when the credential changes", async () => {
+	test("keeps distinct credential runtimes isolated and reusable", async () => {
 		const target = await loopback();
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		try {
@@ -280,20 +280,58 @@ describe("Cursor provider entrypoint", () => {
 			await collect(
 				streamCursor(model(target.origin), context, {
 					apiKey: "FIRST.PAYLOAD.SIGNATURE",
-					sessionId: "omp-session",
+					sessionId: "first-session",
 					providerSessionState,
 				}),
 			);
 			await collect(
 				streamCursor(model(target.origin), context, {
 					apiKey: "SECOND.PAYLOAD.SIGNATURE",
-					sessionId: "omp-session",
+					sessionId: "second-session",
+					providerSessionState,
+				}),
+			);
+			await collect(
+				streamCursor(model(target.origin), context, {
+					apiKey: "FIRST.PAYLOAD.SIGNATURE",
+					sessionId: "first-session",
 					providerSessionState,
 				}),
 			);
 			expect(target.runRequests()).toBe(2);
+			expect(target.invocations()).toBe(3);
+		} finally {
+			closeProviderState(providerSessionState);
+		}
+	});
+
+	test("creates one runtime when the same credential starts concurrently", async () => {
+		const target = await loopback();
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		try {
+			const options: CursorOptions = {
+				apiKey: "SHARED.PAYLOAD.SIGNATURE",
+				sessionId: "omp-session",
+				providerSessionState,
+			};
+			await Promise.all([
+				collect(
+					streamCursor(
+						model(target.origin),
+						{ messages: [{ role: "user", content: "first", timestamp: 1 }] },
+						options,
+					),
+				),
+				collect(
+					streamCursor(
+						model(target.origin),
+						{ messages: [{ role: "user", content: "second", timestamp: 2 }] },
+						options,
+					),
+				),
+			]);
+			expect(target.runRequests()).toBe(1);
 			expect(target.invocations()).toBe(2);
-			expect(target.headers()?.authorization).toBe("Bearer SECOND.PAYLOAD.SIGNATURE");
 		} finally {
 			closeProviderState(providerSessionState);
 		}

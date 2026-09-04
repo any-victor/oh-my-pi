@@ -23,13 +23,8 @@ export interface CursorOptions extends StreamOptions {
 	wireModelId?: string;
 }
 
-interface RuntimeSlot {
-	readonly digest: string;
-	readonly runtime: CursorInferenceRuntime;
-}
-
 class CursorRuntimeState implements ProviderSessionState {
-	#slot: RuntimeSlot | undefined;
+	readonly #runtimes = new Map<string, Promise<CursorInferenceRuntime>>();
 	readonly #identity = loadCursorMachineIdentity();
 
 	async runtimeFor(token: string, baseUrl: string, provider: string): Promise<CursorInferenceRuntime> {
@@ -37,9 +32,20 @@ class CursorRuntimeState implements ProviderSessionState {
 		const digest = createHash("sha256")
 			.update(`${baseUrl}\0${proxyUrl?.toString() ?? ""}\0${token}`, "utf8")
 			.digest("hex");
-		if (this.#slot?.digest === digest) return this.#slot.runtime;
-		await this.#slot?.runtime.shutdown();
-		const runtime = new CursorInferenceRuntime({
+		const existing = this.#runtimes.get(digest);
+		if (existing !== undefined) return await existing;
+		const pending = this.#createRuntime(token, baseUrl, proxyUrl);
+		this.#runtimes.set(digest, pending);
+		try {
+			return await pending;
+		} catch (error) {
+			if (this.#runtimes.get(digest) === pending) this.#runtimes.delete(digest);
+			throw error;
+		}
+	}
+
+	async #createRuntime(token: string, baseUrl: string, proxyUrl: string | undefined): Promise<CursorInferenceRuntime> {
+		return new CursorInferenceRuntime({
 			backendUrl: baseUrl,
 			token,
 			ghostMode: false,
@@ -54,14 +60,17 @@ class CursorRuntimeState implements ProviderSessionState {
 							return http2.connect(authority, { createConnection: () => socket });
 						},
 		});
-		this.#slot = { digest, runtime };
-		return runtime;
 	}
 
 	close(): void {
-		const slot = this.#slot;
-		this.#slot = undefined;
-		void slot?.runtime.shutdown();
+		const runtimes = [...this.#runtimes.values()];
+		this.#runtimes.clear();
+		for (const pending of runtimes) {
+			void pending.then(
+				runtime => runtime.shutdown(),
+				() => undefined,
+			);
+		}
 	}
 }
 

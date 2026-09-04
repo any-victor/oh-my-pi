@@ -7,23 +7,24 @@
 - GitHub Copilot sign-in now requests only basic profile access, restoring login for Enterprise organizations that reject repository, gist, and Codespaces permissions ([#10656](https://github.com/can1357/oh-my-pi/issues/10656)).
 
 ## [18.1.9] - 2026-09-04
+### Breaking Changes
+
+- Removed the Cursor exec-channel handler types and stream options; Cursor now returns ordinary native tool calls for the caller's existing agent loop to execute.
 
 ### Added
 
 - Added recoverable native custom-scheme OAuth callbacks for macOS, Linux desktops, and Windows, with a manual fallback for unavailable or remote sessions.
+
+### Changed
+
+- Changed Cursor inference to the IDE's native `InferenceService/RunInference` HTTP/2 stream, preserving OMP context and reasoning while returning ordinary streamed OMP tool calls instead of delegating execution to Cursor's agent runtime. Repeated terminal text copies are collapsed without dropping signature-only reasoning.
 
 ### Fixed
 
 - Fixed Gemini tool continuations through custom Anthropic Messages proxies and OpenAI Responses relays, preserving tool-call and result associations across multi-turn requests.
 - Fixed race condition causing duplicate manual code prompts during OAuth flows
 - Fixed Gemini tool continuations through custom Anthropic Messages proxies and OpenAI Responses relays, ensuring tool calls and results remain correctly associated across multi-turn requests.
-### Breaking Changes
-
-- Removed the Cursor exec-channel handler types and stream options; Cursor now returns ordinary native tool calls for the caller's existing agent loop to execute.
-
-### Changed
-
-- Changed Cursor inference to the IDE's native `InferenceService/RunInference` HTTP/2 stream, preserving OMP context and reasoning while returning ordinary streamed OMP tool calls instead of delegating execution to Cursor's agent runtime. Repeated terminal text copies are collapsed without dropping signature-only reasoning.
+- Fixed concurrent Cursor callers with different credentials shutting down one another, concurrent first use creating duplicate runtimes, and generic Connect errors hiding structured diagnostic details.
 
 ## [18.1.8] - 2026-09-03
 

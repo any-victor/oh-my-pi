@@ -346,6 +346,44 @@ describe("Cursor managed-inference transport", () => {
 		await managed.shutdown();
 	});
 
+	test("preserves structured details from Connect error trailers", async () => {
+		const target = await loopback((message, stream) => {
+			if (message.message.case === "runRequest") {
+				send(
+					stream,
+					serverMessage({
+						message: {
+							case: "runReady",
+							value: create(RunInferenceRunReadySchema, {
+								resolvedModel: create(InferenceRequestedModelSchema, { modelId: "composer-2.5" }),
+							}),
+						},
+					}),
+				);
+			}
+			if (message.message.case === "invokeModel") {
+				const trailer = new TextEncoder().encode(
+					JSON.stringify({
+						error: {
+							code: "resource_exhausted",
+							message: "Error",
+							details: [{ type: "cursor.quota", debug: { reason: "plan_limit" } }],
+						},
+					}),
+				);
+				stream.end(encodeConnectFrame(trailer, CONNECT_FLAG_END_STREAM));
+			}
+		});
+		const managed = runtime(target);
+		const error = await rejection(
+			managed.invoke("omp-session", "route", clientRun(), "failed", create(InferenceStreamRequestSchema), {
+				onMessage: () => undefined,
+			}),
+		);
+		expect(error).toHaveProperty("message", expect.stringContaining('cursor.quota: {"reason":"plan_limit"}'));
+		await managed.shutdown();
+	});
+
 	test("fails every pending invocation on an unknown correlation id", async () => {
 		const target = await loopback((message, stream) => {
 			if (message.message.case !== "runRequest") return;

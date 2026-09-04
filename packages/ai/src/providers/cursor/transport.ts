@@ -20,6 +20,7 @@ import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/pro
 import { isRecord } from "@oh-my-pi/pi-utils";
 import * as AIError from "../../error";
 import type { ProviderResponseMetadata } from "../../types";
+import { formatConnectEndStreamError } from "../connect-error-detail";
 import { CONNECT_FLAG_COMPRESSED, CONNECT_MAX_FRAME_BYTES, ConnectFrameDecoder, encodeConnectFrame } from "./connect";
 import { inferenceRequestHeaders } from "./headers";
 import type { CursorMachineIdentity } from "./identity";
@@ -31,8 +32,14 @@ const MAX_PENDING_INVOCATIONS = 64;
 const MAX_QUEUED_RESPONSE_MESSAGES = 512;
 const MAX_QUEUED_RESPONSE_BYTES = 8 * 1024 * 1024;
 
+interface ConnectTrailerError {
+	readonly code: string;
+	readonly message?: string;
+	readonly [key: string]: unknown;
+}
+
 interface ConnectTrailer {
-	readonly error?: { readonly code: string; readonly message?: string };
+	readonly error?: ConnectTrailerError;
 }
 
 export interface CursorInferenceRuntimeOptions {
@@ -124,7 +131,13 @@ function parseTrailer(body: Uint8Array): ConnectTrailer {
 	if (code === "" || (message !== undefined && typeof message !== "string")) {
 		throw new Error("Cursor returned an invalid Connect error trailer");
 	}
-	return message === undefined ? { error: { code } } : { error: { code, message } };
+	return {
+		error: {
+			...raw.error,
+			code,
+			...(message === undefined ? {} : { message }),
+		},
+	};
 }
 
 export function cursorInvocationErrorMessage(error: RunInferenceInvocationError): string {
@@ -300,9 +313,7 @@ export class CursorInferenceRun {
 					if (frame.endOfStream) {
 						this.#trailer = parseTrailer(frame.body);
 						if (this.#trailer.error !== undefined) {
-							const suffix =
-								this.#trailer.error.message === undefined ? "" : ` — ${this.#trailer.error.message}`;
-							throw new Error(`Cursor RunInference failed: ${this.#trailer.error.code}${suffix}`);
+							throw new Error(`Cursor RunInference failed: ${formatConnectEndStreamError(this.#trailer.error)}`);
 						}
 						continue;
 					}
