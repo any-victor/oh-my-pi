@@ -172,8 +172,8 @@ class LeakedThinkingProjector {
 	#partial: AssistantMessage;
 	#text: OpenBlock;
 	#thinking: OpenBlock;
-	/** Visible text consumed per source block, used to recover terminal-only tails. */
-	#fedTextLengths = new Map<number, number>();
+	/** Visible text consumed per source block, used to reconcile terminal corrections and tails. */
+	#fedTexts = new Map<number, string>();
 	/** Source text block whose held healer output has not crossed a content boundary. */
 	#activeTextSourceIndex: number | undefined;
 	/** Original terminal content index for every projected block. */
@@ -202,7 +202,7 @@ class LeakedThinkingProjector {
 			this.#closeThinking();
 		}
 		this.#activeTextSourceIndex = srcIndex;
-		this.#fedTextLengths.set(srcIndex, (this.#fedTextLengths.get(srcIndex) ?? 0) + delta.length);
+		this.#fedTexts.set(srcIndex, `${this.#fedTexts.get(srcIndex) ?? ""}${delta}`);
 		if (startsSource || signature !== undefined) this.#lastTextSignature = signature;
 		this.#apply(this.#healer.feed(delta), this.#lastTextSignature, srcIndex);
 	}
@@ -352,6 +352,8 @@ class LeakedThinkingProjector {
 			this.#projectSignedThinking(srcIndex, block.thinking, block.thinkingSignature);
 		}
 		const unclaimedText = this.#partial.content.filter((block): block is TextContent => block.type === "text");
+		const terminalTextCount = message.content.filter(block => block.type === "text").length;
+		let terminalTextIndex = 0;
 		const claimText = (srcIndex: number, text: string, exactOnly: boolean): TextContent | undefined => {
 			let index = exactOnly
 				? unclaimedText.findIndex(block => block.text === text)
@@ -363,14 +365,39 @@ class LeakedThinkingProjector {
 		for (let srcIndex = 0; srcIndex < message.content.length; srcIndex++) {
 			const block = message.content[srcIndex];
 			if (block?.type !== "text") continue;
-			const fedLength = this.#fedTextLengths.get(srcIndex) ?? 0;
-			if (fedLength > 0) {
-				claimText(srcIndex, block.text, false);
-				if (block.text.length <= fedLength) continue;
+			const remainingTerminalText = terminalTextCount - terminalTextIndex++;
+			const fedText = this.#fedTexts.get(srcIndex);
+			const fedLength = fedText?.length ?? 0;
+			if (fedText !== undefined) {
+				const claimed = claimText(srcIndex, block.text, false);
+				if (block.text === fedText) continue;
+				if (block.text.startsWith(fedText)) {
+					if (block.text.length === fedLength) continue;
+				} else if (claimed !== undefined && claimed.text === fedText) {
+					claimed.text = block.text;
+					if (block.textSignature === undefined) delete claimed.textSignature;
+					else claimed.textSignature = block.textSignature;
+					continue;
+				}
 			} else {
 				const shifted = claimText(srcIndex, block.text, true);
 				if (shifted !== undefined) {
 					this.#sourceAnchors.set(shifted, srcIndex);
+					continue;
+				}
+				const plainCandidates = unclaimedText.filter(candidate => {
+					const source = this.#sourceAnchors.get(candidate);
+					const sourceText = source === undefined ? undefined : this.#fedTexts.get(source);
+					return sourceText !== undefined && candidate.text === sourceText;
+				});
+				if (plainCandidates.length > 0 && plainCandidates.length === remainingTerminalText) {
+					const corrected = plainCandidates[0];
+					const index = unclaimedText.indexOf(corrected);
+					if (index >= 0) unclaimedText.splice(index, 1);
+					corrected.text = block.text;
+					if (block.textSignature === undefined) delete corrected.textSignature;
+					else corrected.textSignature = block.textSignature;
+					this.#sourceAnchors.set(corrected, srcIndex);
 					continue;
 				}
 			}

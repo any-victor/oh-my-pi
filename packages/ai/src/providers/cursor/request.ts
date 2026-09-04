@@ -34,8 +34,8 @@ import {
 	type JsonObject,
 	type JsonValue,
 } from "@oh-my-pi/pi-catalog/discovery/protobuf";
-import type { Context, ImageContent, Message, Model, TextContent, Tool } from "../../types";
-import { normalizeSystemPrompts } from "../../utils";
+import type { Context, ImageContent, Message, Model, TextContent, Tool, ToolChoice } from "../../types";
+import { normalizeSystemPrompts, normalizeToolCallId } from "../../utils";
 import { toolWireSchema } from "../../utils/schema";
 import { cursorEffortSuffix, cursorModelParameters, cursorModelRoute } from "@oh-my-pi/pi-catalog/compat/behavior";
 
@@ -44,6 +44,7 @@ export interface CursorInferenceRequestOptions {
 	readonly temperature?: number;
 	readonly topP?: number;
 	readonly stopSequences?: readonly string[];
+	readonly toolChoice?: ToolChoice;
 }
 
 export interface CursorRequestedModelOptions {
@@ -142,7 +143,7 @@ export function messageToInference(message: Message): InferenceCoreMessage {
 					const args = requiredJsonObject(part.arguments, `Cursor inference tool '${part.name}' arguments`);
 					toolCalls.push(
 						create(InferenceToolCallSchema, {
-							toolCallId: part.id,
+							toolCallId: normalizeToolCallId(part.id),
 							toolName: part.name,
 							args: encodeJsonStruct(args),
 							rawToolCallArgs: JSON.stringify(args),
@@ -182,7 +183,7 @@ export function messageToInference(message: Message): InferenceCoreMessage {
 			value: create(InferenceToolResultContentSchema, {
 				parts: [
 					create(InferenceToolResultPartSchema, {
-						toolCallId: message.toolCallId,
+						toolCallId: normalizeToolCallId(message.toolCallId),
 						toolName: message.toolName,
 						result: encodeJsonValue(toolResultJson(message)),
 						isError: message.isError,
@@ -230,9 +231,12 @@ export function buildInferenceRequest(
 					topP: options.topP,
 					stopSequences: options.stopSequences === undefined ? undefined : [...options.stopSequences],
 				});
+	if (options.toolChoice !== undefined && options.toolChoice !== "auto" && options.toolChoice !== "none") {
+		throw new Error("Cursor RunInference does not support required or named tool choice");
+	}
 	return create(InferenceStreamRequestSchema, {
 		messages,
-		tools: context.tools?.map(toolToInference) ?? [],
+		tools: options.toolChoice === "none" ? [] : (context.tools?.map(toolToInference) ?? []),
 		modelConfig,
 	});
 }

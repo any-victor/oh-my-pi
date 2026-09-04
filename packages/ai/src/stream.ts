@@ -2386,6 +2386,8 @@ function mapOptionsForApi<TApi extends Api>(
 					: undefined;
 			return castApi<"cursor-agent">({
 				...base,
+				stopSequences: options?.stopSequences,
+				toolChoice: options?.toolChoice,
 				wireModelId: resolveWireModelId(cursorModel, effort),
 			});
 		}

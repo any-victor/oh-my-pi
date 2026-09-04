@@ -5,7 +5,14 @@ import { RunInferenceClientMessageSchema } from "@oh-my-pi/pi-catalog/discovery/
 import { create } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import * as AIError from "../error";
-import type { AssistantMessage, Model, ProviderSessionState, StreamFunction, StreamOptions } from "../types";
+import type {
+	AssistantMessage,
+	Model,
+	ProviderSessionState,
+	StreamFunction,
+	StreamOptions,
+	ToolChoice,
+} from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { connectProxiedSocket, getProxyForUrl } from "../utils/proxy";
 import { sanitizeCursorCallerHeaders } from "./cursor/headers";
@@ -19,6 +26,8 @@ const CURSOR_RUNTIME_STATE_KEY = "cursor-managed-inference";
 const CURSOR_PROXY_TUNNEL_TIMEOUT_MS = 30_000;
 
 export interface CursorOptions extends StreamOptions {
+	/** Standard tool selection; RunInference supports auto or none. */
+	toolChoice?: ToolChoice;
 	/** Wire model id selected after OMP thinking-effort routing. */
 	wireModelId?: string;
 }
@@ -152,6 +161,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (model, context, raw
 				temperature: options.temperature,
 				topP: options.topP,
 				stopSequences: options.stopSequences,
+				toolChoice: options.toolChoice,
 			});
 			const replacement = await options.onPayload?.(request, model);
 			if (replacement !== undefined) request = replacement as InferenceStreamRequest;

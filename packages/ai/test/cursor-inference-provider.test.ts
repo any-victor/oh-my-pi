@@ -25,6 +25,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 import { CONNECT_FLAG_END_STREAM, ConnectFrameDecoder, encodeConnectFrame } from "../src/providers/cursor/connect";
 import { type CursorOptions, streamCursor } from "../src/providers/cursor";
+import { streamSimple } from "../src/stream";
 import type { AssistantMessage, ProviderSessionState } from "../src/types";
 import { AssistantMessageEventStream } from "../src/utils/event-stream";
 
@@ -47,12 +48,16 @@ async function loopback(): Promise<{
 	readonly runRequests: () => number;
 	readonly invocations: () => number;
 	readonly invokeMaxTokens: () => number[];
+	readonly invokeStopSequences: () => string[][];
+	readonly invokeToolCounts: () => number[];
 	readonly headers: () => Record<string, string> | undefined;
 }> {
 	let runRequests = 0;
 	let invocations = 0;
 	let capturedHeaders: Record<string, string> | undefined;
 	const invokeMaxTokens: number[] = [];
+	const invokeStopSequences: string[][] = [];
+	const invokeToolCounts: number[] = [];
 	server = createServer();
 	server.on("session", session => sessions.add(session));
 	server.on("stream", (stream: ServerHttp2Stream, headers) => {
@@ -80,6 +85,8 @@ async function loopback(): Promise<{
 					invocations++;
 					const { invocationId, request } = message.message.value;
 					invokeMaxTokens.push(request?.modelConfig?.maxTokens ?? 0);
+					invokeStopSequences.push(request?.modelConfig?.stopSequences ?? []);
+					invokeToolCounts.push(request?.tools.length ?? 0);
 					const response = (value: Partial<InferenceStreamResponse>) =>
 						create(RunInferenceServerMessageSchema, {
 							message: {
@@ -170,6 +177,8 @@ async function loopback(): Promise<{
 		runRequests: () => runRequests,
 		invocations: () => invocations,
 		invokeMaxTokens: () => invokeMaxTokens,
+		invokeStopSequences: () => invokeStopSequences,
+		invokeToolCounts: () => invokeToolCounts,
 		headers: () => capturedHeaders,
 	};
 }
@@ -213,6 +222,40 @@ describe("Cursor provider entrypoint", () => {
 		const { events, result } = await collect(stream);
 		expect(events).toEqual(["start", "error"]);
 		expect(result).toMatchObject({ stopReason: "error", errorMessage: expect.stringContaining("Cursor API key") });
+	});
+
+	test("forwards public stop sequences and toolChoice none", async () => {
+		const target = await loopback();
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		try {
+			const { result } = await collect(
+				streamSimple(
+					model(target.origin),
+					{
+						messages: [{ role: "user", content: "handoff", timestamp: 1 }],
+						tools: [
+							{
+								name: "read",
+								description: "Read a file.",
+								parameters: { type: "object", properties: {}, additionalProperties: false },
+							},
+						],
+					},
+					{
+						apiKey: "HEADER.PAYLOAD.SIGNATURE",
+						sessionId: "omp-session",
+						providerSessionState,
+						stopSequences: ["STOP"],
+						toolChoice: "none",
+					},
+				),
+			);
+			expect(result.content).toEqual([{ type: "text", text: "final-1" }]);
+			expect(target.invokeStopSequences()).toEqual([["STOP"]]);
+			expect(target.invokeToolCounts()).toEqual([0]);
+		} finally {
+			closeProviderState(providerSessionState);
+		}
 	});
 
 	test("applies hooks and caller headers while reusing one session-scoped run", async () => {

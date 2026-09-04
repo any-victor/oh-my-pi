@@ -357,4 +357,22 @@ describe("leaked-thinking terminal reconciliation", () => {
 		const result = await projected.result();
 		expect(result.content).toEqual([streamedText, signature, repeatedText]);
 	});
+
+	it("replaces a shifted streamed draft with authoritative final text", async () => {
+		const source = new AssistantMessageEventStream();
+		const projected = wrapLeakedThinkingStream(source);
+		const message = makeAssistant([]);
+		const draft = { type: "text" as const, text: "stream-1" };
+		message.content.push(draft);
+		source.push({ type: "start", partial: message });
+		source.push({ type: "text_start", contentIndex: 0, partial: message });
+		source.push({ type: "text_delta", contentIndex: 0, delta: draft.text, partial: message });
+		const signature = { type: "thinking" as const, thinking: "", thinkingSignature: "opaque" };
+		const final = { type: "text" as const, text: "final-1" };
+		message.content = [signature, final];
+		source.push({ type: "done", reason: "stop", message });
+
+		const result = await projected.result();
+		expect(result.content).toEqual([signature, final]);
+	});
 });

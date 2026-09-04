@@ -24,7 +24,7 @@
 - Fixed Gemini tool continuations through custom Anthropic Messages proxies and OpenAI Responses relays, preserving tool-call and result associations across multi-turn requests.
 - Fixed race condition causing duplicate manual code prompts during OAuth flows
 - Fixed Gemini tool continuations through custom Anthropic Messages proxies and OpenAI Responses relays, ensuring tool calls and results remain correctly associated across multi-turn requests.
-- Fixed concurrent Cursor callers with different credentials shutting down one another, concurrent first use creating duplicate runtimes, generic Connect errors hiding structured diagnostic details, unbounded host-identity commands, and HTTP/2 sessions leaking when connection completed after shutdown.
+- Fixed concurrent Cursor callers with different credentials shutting down one another, concurrent first use creating duplicate runtimes, generic Connect errors hiding structured diagnostic details, unbounded host-identity commands, HTTP/2 sessions leaking when connection completed after shutdown, cross-provider tool IDs violating Cursor's charset, public stop-sequence/tool-choice options being dropped, and authoritative final text corrections being lost by the leaked-thinking wrapper.
 
 ## [18.1.8] - 2026-09-03
 

@@ -98,6 +98,32 @@ describe("Cursor managed-inference request", () => {
 		});
 	});
 
+	test("normalizes cross-provider tool-call and result ids as one pair", () => {
+		const context = history();
+		const assistant = context.messages[1];
+		const result = context.messages[2];
+		if (assistant?.role !== "assistant" || result?.role !== "toolResult") throw new Error("tool history missing");
+		const call = assistant.content.find(part => part.type === "toolCall");
+		if (call?.type !== "toolCall") throw new Error("tool call missing");
+		call.id = "call_123|fc_456";
+		result.toolCallId = "call_123|fc_456";
+		const request = buildInferenceRequest(context);
+		expect(request.messages[2]?.toolCalls[0]?.toolCallId).toBe("call_123_fc_456");
+		const toolContent = request.messages[3]?.content;
+		if (toolContent?.case !== "toolContent") throw new Error("tool result missing");
+		expect(toolContent.value.parts[0]?.toolCallId).toBe("call_123_fc_456");
+	});
+
+	test("omits tools for none and rejects unsupported forced choices", () => {
+		expect(buildInferenceRequest(history(), { toolChoice: "none" }).tools).toEqual([]);
+		expect(() => buildInferenceRequest(history(), { toolChoice: "required" })).toThrow(
+			"does not support required or named tool choice",
+		);
+		expect(() => buildInferenceRequest(history(), { toolChoice: { type: "tool", name: TOOL.name } })).toThrow(
+			"does not support required or named tool choice",
+		);
+	});
+
 	test("preserves ordered user image parts exactly as the extracted adapter sends them", () => {
 		const request = buildInferenceRequest({
 			messages: [
