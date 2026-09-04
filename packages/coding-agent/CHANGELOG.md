@@ -30,6 +30,9 @@
 - Browser and computer automation now use JavaScript/Python evaluation preludes with reusable tab and element handles, replacing the previous standalone tool schemas and object-shaped run APIs.
 - Replaced the `inspect_image` tool and `/vision` controls with `read <image>?q=<question>` for image questions; text-only models now receive image metadata and guidance for using this selector.
 - Renamed `inspect_image.timeoutMs` to `images.questionTimeoutMs`; existing settings are migrated automatically.
+### Breaking Changes
+
+- Removed the Cursor exec-bridge modules and their server-owned tool adapters; integrations should use ordinary coding-agent tools through the native provider stream.
 
 ### Added
 
@@ -42,6 +45,10 @@
 ### Changed
 
 - Agent delegation is now model-aware, allowing some models to favor focused inline work instead of spawning subagents.
+
+### Changed
+
+- Changed Cursor sessions and advisors to execute their selected OMP tools through the normal coding-agent loop instead of Cursor-specific exec, todo, and MCP bridges.
 
 ### Fixed
 
@@ -65,13 +72,6 @@
 - Fixed `Ctrl+V` preserving CJK text from XWayland clipboard owners on Wayland instead of replacing characters with `?` ([#10762](https://github.com/can1357/oh-my-pi/issues/10762)).
 - Fixed byte-limited artifact reads reporting the displayed byte count as the read limit instead of the actual budget ([#10764](https://github.com/can1357/oh-my-pi/issues/10764)).
 - Fixed the read tool's truncation notice reporting `Showing 0 of N lines` (with `outputLines`/`outputBytes` of 0) when a single line larger than the byte budget is shown as a partial preview; it now reports the delivered partial line, e.g. `Showing line N (partial, 50.0KB of 68.4KB) of N` ([#10768](https://github.com/can1357/oh-my-pi/issues/10768)).
-### Breaking Changes
-
-- Removed the Cursor exec-bridge modules and their server-owned tool adapters; integrations should use ordinary coding-agent tools through the native provider stream.
-
-### Changed
-
-- Changed Cursor sessions and advisors to execute their selected OMP tools through the normal coding-agent loop instead of Cursor-specific exec, todo, and MCP bridges.
 
 ## [18.1.8] - 2026-09-03
 

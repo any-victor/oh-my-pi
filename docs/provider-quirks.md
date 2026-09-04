@@ -488,14 +488,24 @@ messages.
 
 ### Catalog model handling
 
-- `packages/catalog/src/discovery/cursor.ts` still discovers models through the
-  unary `/agent.v1.AgentService/GetUsableModels` endpoint; only inference moved to
-  `InferenceService/RunInference`.
-- Dynamic models retain the public `cursor-agent` API identifier, existing
-  context/max-output metadata, Max Mode flag, and OMP effort-routing tables.
-- `RunInference` converts the selected catalog wire ID into Cursor's native model
-  ID and parameter list, including Composer Standard, OpenAI reasoning/fast lanes,
-  and measured Claude, Gemini, and Grok selections.
+- `packages/catalog/src/discovery/cursor.ts` fetches three unary RPCs in
+  parallel: `/aiserver.v1.AiService/AvailableModels` for authoritative
+  capabilities, context limits, variants, and Max Mode metadata;
+  `/agent.v1.AgentService/GetUsableModels` for the account's selectable wire
+  model families and effort siblings; and
+  `/agent.v1.AgentService/GetDefaultModelForCli` to validate that Cursor's
+  default is present in the joined result.
+- Discovery publishes only models that have both usable and complete available
+  metadata. A request, decode, or join failure returns no dynamic result rather
+  than reusing partial metadata. The cache namespace
+  `cursor:complete-catalog-v5` invalidates earlier GetUsableModels-only rows.
+- Dynamic models keep the public `cursor-agent` API identifier. Capabilities and
+  context windows come from `AvailableModels`; effort routing comes from usable
+  family members; bundled references supply stable cost and output-token data.
+- A distinct Max catalog row is emitted only when Cursor reports a real
+  non-Max/Max difference. The selected row carries `cursorMaxMode` and the
+  variant's exact `cursorContext` value, which `RunInference` sends with the
+  KDL-resolved wire model ID and model parameters.
 
 ## Devin
 The Devin integration (`devin-agent` API) communicates with Codeium Cascade backend services over HTTP/1.1 using the Connect protocol and gRPC/Protobuf messages. Its implementation spans provider stream logic in `packages/ai/src/providers/devin.ts` (`streamDevin`, `DEVIN_API_URL`), auth policy in `packages/catalog/src/compat/rules/auth/devin.kdl` (`login "oauth-code"` rule, `packages/ai/src/registry/engine/oauth-code.ts`), and Connect protobuf schemas located in `packages/catalog/src/discovery/devin-gen/exa/*`.
