@@ -174,8 +174,6 @@ class LeakedThinkingProjector {
 	#thinking: OpenBlock;
 	/** Visible text consumed per source block, used to recover terminal-only tails. */
 	#fedTextLengths = new Map<number, number>();
-	/** Visible text already emitted, regardless of source-index shifts during terminal reconciliation. */
-	#fedTextCopies = new Map<string, number>();
 	/** Source text block whose held healer output has not crossed a content boundary. */
 	#activeTextSourceIndex: number | undefined;
 	/** Original terminal content index for every projected block. */
@@ -205,7 +203,6 @@ class LeakedThinkingProjector {
 		}
 		this.#activeTextSourceIndex = srcIndex;
 		this.#fedTextLengths.set(srcIndex, (this.#fedTextLengths.get(srcIndex) ?? 0) + delta.length);
-		this.#fedTextCopies.set(delta, (this.#fedTextCopies.get(delta) ?? 0) + 1);
 		if (startsSource || signature !== undefined) this.#lastTextSignature = signature;
 		this.#apply(this.#healer.feed(delta), this.#lastTextSignature, srcIndex);
 	}
@@ -354,15 +351,26 @@ class LeakedThinkingProjector {
 			if (this.#thinkingBlocks.has(srcIndex)) continue;
 			this.#projectSignedThinking(srcIndex, block.thinking, block.thinkingSignature);
 		}
+		const unclaimedText = this.#partial.content.filter((block): block is TextContent => block.type === "text");
+		const claimText = (srcIndex: number, text: string, exactOnly: boolean): TextContent | undefined => {
+			let index = exactOnly
+				? unclaimedText.findIndex(block => block.text === text)
+				: unclaimedText.findIndex(block => this.#sourceAnchors.get(block) === srcIndex);
+			if (index < 0 && !exactOnly) index = unclaimedText.findIndex(block => block.text === text);
+			if (index < 0) return undefined;
+			return unclaimedText.splice(index, 1)[0];
+		};
 		for (let srcIndex = 0; srcIndex < message.content.length; srcIndex++) {
 			const block = message.content[srcIndex];
 			if (block?.type !== "text") continue;
 			const fedLength = this.#fedTextLengths.get(srcIndex) ?? 0;
-			if (block.text.length <= fedLength) continue;
-			if (fedLength === 0) {
-				const copies = this.#fedTextCopies.get(block.text) ?? 0;
-				if (copies > 0) {
-					this.#fedTextCopies.set(block.text, copies - 1);
+			if (fedLength > 0) {
+				claimText(srcIndex, block.text, false);
+				if (block.text.length <= fedLength) continue;
+			} else {
+				const shifted = claimText(srcIndex, block.text, true);
+				if (shifted !== undefined) {
+					this.#sourceAnchors.set(shifted, srcIndex);
 					continue;
 				}
 			}

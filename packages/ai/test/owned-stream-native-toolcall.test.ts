@@ -319,22 +319,42 @@ describe("wrapInbandToolStream native tool-call passthrough", () => {
 });
 
 describe("leaked-thinking terminal reconciliation", () => {
-	it("does not replay text whose terminal index shifted around signed reasoning", async () => {
+	it("reanchors multi-delta text whose terminal index shifted around signed reasoning", async () => {
 		const source = new AssistantMessageEventStream();
 		const projected = wrapLeakedThinkingStream(source);
 		const message = makeAssistant([]);
-		const streamedText = { type: "text" as const, text: "answer" };
+		const streamedText = { type: "text" as const, text: "Hello world" };
 		message.content.push(streamedText);
 		source.push({ type: "start", partial: message });
 		source.push({ type: "text_start", contentIndex: 0, partial: message });
-		source.push({ type: "text_delta", contentIndex: 0, delta: "answer", partial: message });
-		message.content.push({ type: "thinking", thinking: "", thinkingSignature: "opaque" });
+		source.push({ type: "text_delta", contentIndex: 0, delta: "Hello", partial: message });
+		source.push({ type: "text_delta", contentIndex: 0, delta: " world", partial: message });
+		const signature = { type: "thinking" as const, thinking: "", thinkingSignature: "opaque" };
+		message.content.push(signature);
 		source.push({ type: "thinking_start", contentIndex: 1, partial: message });
 		source.push({ type: "thinking_end", contentIndex: 1, content: "", partial: message });
-		message.content = [message.content[1]!, streamedText];
+		message.content = [signature, streamedText];
 		source.push({ type: "done", reason: "stop", message });
 
 		const result = await projected.result();
-		expect(result.content.filter(block => block.type === "text")).toEqual([streamedText]);
+		expect(result.content).toEqual([signature, streamedText]);
+	});
+
+	it("keeps an additional equal terminal text block after claiming the streamed copy", async () => {
+		const source = new AssistantMessageEventStream();
+		const projected = wrapLeakedThinkingStream(source);
+		const message = makeAssistant([]);
+		const streamedText = { type: "text" as const, text: "same" };
+		message.content.push(streamedText);
+		source.push({ type: "start", partial: message });
+		source.push({ type: "text_start", contentIndex: 0, partial: message });
+		source.push({ type: "text_delta", contentIndex: 0, delta: "same", partial: message });
+		const signature = { type: "thinking" as const, thinking: "", thinkingSignature: "opaque" };
+		const repeatedText = { type: "text" as const, text: "same" };
+		message.content.push(signature, repeatedText);
+		source.push({ type: "done", reason: "stop", message });
+
+		const result = await projected.result();
+		expect(result.content).toEqual([streamedText, signature, repeatedText]);
 	});
 });
