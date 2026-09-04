@@ -3,13 +3,14 @@
  *
  * Ports the o2 runtime-behavior grammar (openai-responses-heuristic,
  * model-operations, cursor-effort, cursor-model-parameter, quota-tiers,
- * hosted-default) and adds the pi-only nodes: api-routes, model-limits,
- * exclude-models, plan-requirement, pricing-peer. Every node kind is
+ * hosted-default) and adds the pi-only nodes: cursor-model-route, api-routes,
+ * model-limits, exclude-models, plan-requirement, pricing-peer. Every node kind is
  * optional; per-node shapes are strict.
  */
 import type {
 	CompiledApiRoutes,
 	CompiledBehavior,
+	CompiledCursorRoute,
 	CompiledExcludeModels,
 	CompiledMatchList,
 	CompiledModelLimits,
@@ -266,11 +267,27 @@ function parsePricingPeer(node: KdlNodeView): CompiledPricingPeer {
 	return rule;
 }
 
+function parseCursorModelRoute(node: KdlNodeView): CompiledCursorRoute {
+	const children = ensureContainer(node, ["model", "target"]);
+	const model = requiredProp(node, "model");
+	const target = requiredProp(node, "target");
+	const parameters = children.map(child => {
+		ensureLeaf(child, []);
+		if (child.name !== "parameter") malformed(child);
+		const values = positionalStrings(child);
+		if (values.length !== 2 || !values[0] || !values[1]) malformed(child);
+		return { id: values[0], value: values[1] };
+	});
+	if (!model || !target) malformed(node);
+	return { model, target, parameters };
+}
+
 /** Compiles the runtime behavior source (may be absent → empty vocabulary). */
 export function compileBehavior(source: { file: string; text: string } | undefined): CompiledBehavior {
 	const behavior: CompiledBehavior = {
 		modelOperations: [],
 		cursorParameters: [],
+		cursorRoutes: [],
 		quotaTiers: [],
 		hostedDefaults: [],
 		apiRoutes: [],
@@ -318,6 +335,9 @@ export function compileBehavior(source: { file: string; text: string } | undefin
 				behavior.cursorParameters.push({ model, id, value });
 				break;
 			}
+			case "cursor-model-route":
+				behavior.cursorRoutes.push(parseCursorModelRoute(node));
+				break;
 			case "quota-tiers":
 				behavior.quotaTiers.push(parseQuotaTiers(node));
 				break;

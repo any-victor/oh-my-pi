@@ -37,6 +37,7 @@ import {
 import type { Context, ImageContent, Message, Model, TextContent, Tool } from "../../types";
 import { normalizeSystemPrompts } from "../../utils";
 import { toolWireSchema } from "../../utils/schema";
+import { cursorEffortSuffix, cursorModelParameters, cursorModelRoute } from "@oh-my-pi/pi-catalog/compat/behavior";
 
 export interface CursorInferenceRequestOptions {
 	readonly maxTokens?: number;
@@ -241,61 +242,23 @@ interface RequestedModelFields {
 	readonly parameters: readonly { readonly id: string; readonly value: string }[];
 }
 
-const SPECIAL_SELECTIONS: Readonly<Record<string, RequestedModelFields>> = {
-	"auto-smart": { modelId: "auto-smart", parameters: [{ id: "optimize_for", value: "balanced" }] },
-	"composer-2.5": { modelId: "composer-2.5", parameters: [{ id: "fast", value: "false" }] },
-};
-
-function isOpenAiModel(modelId: string): boolean {
-	return /^(gpt-|o[1-9](?:-|$)|codex-)/u.test(modelId);
-}
-
 function requestedModelFields(modelId: string): RequestedModelFields {
-	const captured = SPECIAL_SELECTIONS[modelId];
-	if (captured !== undefined) return captured;
+	const routed = cursorModelRoute(modelId);
+	if (routed !== undefined) return routed;
 
-	const grok = /^cursor-grok-(4\.6)-(low|medium|high|xhigh)(-fast)?$/u.exec(modelId);
-	if (grok?.[1] !== undefined && grok[2] !== undefined) {
+	const effort = cursorEffortSuffix(modelId);
+	if (effort !== undefined) {
 		return {
-			modelId: `grok-${grok[1]}`,
-			parameters: [
-				{ id: "effort", value: grok[2] },
-				{ id: "fast", value: String(grok[3] === "-fast") },
-			],
-		};
-	}
-
-	const gemini = /^(gemini-3\.7-flash)-(low|medium|high)$/u.exec(modelId);
-	if (gemini?.[1] !== undefined && gemini[2] !== undefined) {
-		return { modelId: gemini[1], parameters: [{ id: "effort", value: gemini[2] }] };
-	}
-
-	const opus = /^(claude-opus-5)-thinking-(low|medium|high|xhigh|max)(-fast)?$/u.exec(modelId);
-	if (opus?.[1] !== undefined && opus[2] !== undefined) {
-		return {
-			modelId: opus[1],
-			parameters: [
-				{ id: "thinking", value: "true" },
-				{ id: "context", value: "300k" },
-				{ id: "effort", value: opus[2] },
-				{ id: "fast", value: String(opus[3] === "-fast") },
-			],
-		};
-	}
-
-	const match = /^(.*)-(none|minimal|low|medium|high|xhigh|extra-high|max)(-fast)?$/u.exec(modelId);
-	if (match?.[1] !== undefined && match[2] !== undefined && isOpenAiModel(match[1])) {
-		return {
-			modelId: `${match[1]}${match[3] ?? ""}`,
+			modelId: `${effort.base}${effort.fast ? "-fast" : ""}`,
 			parameters: [
 				{ id: "context", value: "272k" },
-				{ id: "reasoning", value: match[2] },
-				{ id: "fast", value: String(match[3] === "-fast") },
+				{ id: "reasoning", value: effort.tier },
+				{ id: "fast", value: String(effort.fast) },
 			],
 		};
 	}
 
-	return { modelId, parameters: [] };
+	return { modelId, parameters: cursorModelParameters(modelId) };
 }
 
 export function inferenceRequestedModel(

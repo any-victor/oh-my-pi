@@ -252,6 +252,13 @@ export interface CompiledCursorParameter {
 	value: string;
 }
 
+/** One exact Cursor wire-model remap and its source-measured parameters. */
+export interface CompiledCursorRoute {
+	model: string;
+	target: string;
+	parameters: { id: string; value: string }[];
+}
+
 /** One provider quota-scope table. */
 export interface CompiledQuotaRule {
 	provider: string;
@@ -310,6 +317,7 @@ export interface CompiledBehavior {
 	modelOperations: CompiledModelOperations[];
 	cursorEffort?: CompiledCursorEffort;
 	cursorParameters: CompiledCursorParameter[];
+	cursorRoutes: CompiledCursorRoute[];
 	quotaTiers: CompiledQuotaRule[];
 	hostedDefaults: CompiledHostedDefault[];
 	apiRoutes: CompiledApiRoutes[];

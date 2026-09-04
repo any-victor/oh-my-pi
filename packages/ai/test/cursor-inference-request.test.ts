@@ -30,6 +30,11 @@ const TOOL = {
 	},
 } as const;
 
+const PNG_BASE64 = Buffer.concat([
+	Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB", "base64"),
+	Buffer.alloc(12),
+]).toString("base64");
+
 function history(): Context {
 	return {
 		systemPrompt: ["Use the tool."],
@@ -91,6 +96,73 @@ describe("Cursor managed-inference request", () => {
 				required: ["left", "right"],
 			},
 		});
+	});
+
+	test("preserves ordered user image parts exactly as the extracted adapter sends them", () => {
+		const request = buildInferenceRequest({
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "before 𝄞" },
+						{ type: "image", data: PNG_BASE64, mimeType: "image/png" },
+						{ type: "text", text: "after 😀" },
+					],
+					timestamp: 1,
+				},
+			],
+		});
+		const content = request.messages[0]?.content;
+		if (content?.case !== "parts") throw new Error("Cursor image parts missing");
+		expect(content.value.parts.map(part => part.part.case)).toEqual(["text", "image", "text"]);
+		const image = content.value.parts[1]?.part;
+		if (image?.case !== "image") throw new Error("Cursor image part missing");
+		expect(image.value).toMatchObject({ data: PNG_BASE64, mimeType: "image/png" });
+	});
+
+	test("preserves image-bearing error tool results as experimental content", () => {
+		const request = buildInferenceRequest({
+			messages: [
+				{
+					role: "toolResult",
+					toolCallId: "image-1",
+					toolName: "inspect_image",
+					content: [
+						{ type: "text", text: "failed after capture" },
+						{ type: "image", data: PNG_BASE64, mimeType: "image/png" },
+					],
+					isError: true,
+					timestamp: 1,
+				},
+			],
+		});
+		const content = request.messages[0]?.content;
+		if (content?.case !== "toolContent") throw new Error("Cursor tool result missing");
+		const result = content.value.parts[0];
+		expect(result).toMatchObject({ toolCallId: "image-1", toolName: "inspect_image", isError: true });
+		expect(result?.experimentalContent.map(part => part.part.case)).toEqual(["text", "image"]);
+		const image = result?.experimentalContent[1]?.part;
+		if (image?.case !== "image") throw new Error("Cursor tool-result image missing");
+		expect(image.value).toMatchObject({ data: PNG_BASE64, mimeType: "image/png" });
+	});
+
+	test("keeps parallel calls and the originating Cursor reasoning model on replay", () => {
+		const context = history();
+		const assistant = context.messages[1];
+		if (assistant?.role !== "assistant") throw new Error("assistant fixture missing");
+		assistant.provider = "cursor";
+		assistant.upstreamModel = "cursor-grok-4.6-high";
+		assistant.content = [
+			{ type: "thinking", thinking: "", thinkingSignature: "opaque" },
+			{ type: "toolCall", id: "first", name: TOOL.name, arguments: { left: "A", right: "B" } },
+			{ type: "toolCall", id: "second", name: TOOL.name, arguments: { left: "C", right: "D" } },
+		];
+		const request = buildInferenceRequest({ ...context, messages: context.messages.slice(0, 2) });
+		const projected = request.messages[2];
+		expect(projected?.reasoningParts).toEqual([
+			expect.objectContaining({ signature: "opaque", modelName: "cursor-grok-4.6-high" }),
+		]);
+		expect(projected?.toolCalls.map(call => call.toolCallId)).toEqual(["first", "second"]);
 	});
 
 	test("routes on a stable OMP session and resolved model selection", () => {

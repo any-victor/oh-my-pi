@@ -57,12 +57,14 @@ export function modelOperationOverrides(provider: string, model: string): readon
  * (`gpt-`) followed immediately by an ASCII digit; matching stays
  * case-sensitive to preserve Cursor wire-id behavior.
  */
-export function cursorEffortSuffix(model: string): { base: string; tier: string } | undefined {
+export function cursorEffortSuffix(model: string): { base: string; tier: string; fast: boolean } | undefined {
 	const rule = behavior.cursorEffort;
 	if (!rule) return undefined;
+	const fast = model.endsWith("-fast");
+	const candidate = fast ? model.slice(0, -"-fast".length) : model;
 	for (const tier of rule.tiers) {
-		if (!model.endsWith(tier)) continue;
-		const prefix = model.slice(0, model.length - tier.length);
+		if (!candidate.endsWith(tier)) continue;
+		const prefix = candidate.slice(0, candidate.length - tier.length);
 		if (!prefix.endsWith("-")) continue;
 		const base = prefix.slice(0, -1);
 		let family = false;
@@ -76,9 +78,19 @@ export function cursorEffortSuffix(model: string): { base: string; tier: string 
 			index = base.indexOf(rule.familyMarker, index + 1);
 		}
 		if (!family) return undefined;
-		return { base, tier };
+		return { base, tier, fast };
 	}
 	return undefined;
+}
+
+/** Exact source-measured Cursor requested-model route declared in behavior KDL. */
+export function cursorModelRoute(
+	model: string,
+):
+	| { readonly modelId: string; readonly parameters: readonly { readonly id: string; readonly value: string }[] }
+	| undefined {
+	const route = behavior.cursorRoutes.find(candidate => candidate.model === model);
+	return route === undefined ? undefined : { modelId: route.target, parameters: route.parameters };
 }
 
 /** Fixed Cursor `requestedModel` parameters declared for an exact wire model. */

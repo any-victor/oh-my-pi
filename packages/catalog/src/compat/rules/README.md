@@ -235,6 +235,9 @@ behavior {
     model-operations provider="openai" { exact "o3"; prefix "gpt-"; operation "generate_image" }
     cursor-effort family-marker="gpt-" { tier "minimal" "low" "medium" "high" "xhigh" "max" }
     cursor-model-parameter model="composer-2.5" id="fast" value="false"
+    cursor-model-route model="gemini-3.7-flash-high" target="gemini-3.7-flash" {
+        parameter "effort" "high"
+    }
     quota-tiers provider="openai-codex" {
         tier "spark" "gpt-5.3-codex-spark"
         fallback "chat" substring="gpt-"
