@@ -443,11 +443,12 @@ describe("Cursor managed-inference request", () => {
 		expect(resultIds).toEqual(["reused-id", "reused-id_dup1"]);
 	});
 
-	test("keeps parallel calls and the originating Cursor reasoning model on replay", () => {
+	test("keeps custom Cursor-provider reasoning and parallel calls on replay", () => {
 		const context = history();
 		const assistant = context.messages[1];
 		if (assistant?.role !== "assistant") throw new Error("assistant fixture missing");
-		assistant.provider = "cursor";
+		assistant.api = "cursor-agent";
+		assistant.provider = "custom-cursor-provider";
 		assistant.upstreamModel = "cursor-grok-4.6-high";
 		assistant.content = [
 			{ type: "thinking", thinking: "", thinkingSignature: "opaque" },

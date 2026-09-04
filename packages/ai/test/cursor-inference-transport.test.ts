@@ -273,6 +273,37 @@ describe("Cursor managed-inference transport", () => {
 		await managed.shutdown();
 	});
 
+	test("aborts while waiting for another invocation's per-session run lock", async () => {
+		const firstRunStarted = Promise.withResolvers<void>();
+		const target = await loopback(message => {
+			if (message.message.case === "runRequest") firstRunStarted.resolve();
+		});
+		const managed = runtime(target, { responseTimeoutMs: 10_000 });
+		const firstController = new AbortController();
+		const first = managed.invoke("omp-session", "route", clientRun(), "first", create(InferenceStreamRequestSchema), {
+			signal: firstController.signal,
+			onMessage: () => undefined,
+		});
+		await firstRunStarted.promise;
+
+		const secondController = new AbortController();
+		const second = managed.invoke(
+			"omp-session",
+			"route",
+			clientRun(),
+			"second",
+			create(InferenceStreamRequestSchema),
+			{ signal: secondController.signal, onMessage: () => undefined },
+		);
+		secondController.abort();
+		const outcome = await Promise.race([rejection(second), Bun.sleep(100).then(() => "still pending")]);
+		expect(outcome).toHaveProperty("name", "AbortError");
+
+		firstController.abort();
+		expect(await rejection(first)).toHaveProperty("name", "AbortError");
+		await managed.shutdown();
+	});
+
 	test("bounds the initial run write with the readiness timeout", async () => {
 		const target = await loopback(() => undefined);
 		const originalSend = CursorInferenceRun.prototype.send;

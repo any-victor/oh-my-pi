@@ -373,7 +373,7 @@ class LeakedThinkingProjector {
 				if (block.text === fedText) continue;
 				if (block.text.startsWith(fedText)) {
 					if (block.text.length === fedLength) continue;
-				} else if (claimed !== undefined && claimed.text === fedText) {
+				} else if (claimed !== undefined) {
 					claimed.text = block.text;
 					if (block.textSignature === undefined) delete claimed.textSignature;
 					else claimed.textSignature = block.textSignature;

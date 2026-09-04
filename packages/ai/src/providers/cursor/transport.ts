@@ -20,6 +20,7 @@ import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/pro
 import { isRecord, withTimeout } from "@oh-my-pi/pi-utils";
 import * as AIError from "../../error";
 import type { ProviderResponseMetadata } from "../../types";
+import { raceWithSignal } from "../../utils/abort";
 import { formatConnectEndStreamError, summarizeConnectErrorDetails } from "../connect-error-detail";
 import { CONNECT_FLAG_COMPRESSED, CONNECT_MAX_FRAME_BYTES, ConnectFrameDecoder, encodeConnectFrame } from "./connect";
 import { inferenceRequestHeaders } from "./headers";
@@ -168,25 +169,6 @@ function abortError(): DOMException {
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
 	if (signal?.aborted === true) throw abortError();
-}
-
-function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
-	if (signal === undefined) return promise;
-	if (signal.aborted) return Promise.reject(abortError());
-	const { promise: bounded, resolve, reject } = Promise.withResolvers<T>();
-	const abort = (): void => reject(abortError());
-	signal.addEventListener("abort", abort, { once: true });
-	void promise.then(
-		value => {
-			signal.removeEventListener("abort", abort);
-			resolve(value);
-		},
-		error => {
-			signal.removeEventListener("abort", abort);
-			reject(error);
-		},
-	);
-	return bounded;
 }
 
 function waitForHttp2Connect(session: ClientHttp2Session): Promise<ClientHttp2Session> {
@@ -619,7 +601,7 @@ export class CursorInferenceRuntime {
 			nowMs: (this.#options.now ?? Date.now)(),
 			timezone: (this.#options.timezone ?? (() => Intl.DateTimeFormat().resolvedOptions().timeZone))(),
 		});
-		const session = await waitWithSignal(this.#getSession(), signal);
+		const session = await raceWithSignal(this.#getSession(), signal);
 		const run = new CursorInferenceRun(session, routeKey, headers, this.#options.responseTimeoutMs);
 		const abort = (): void => run.abort(abortError());
 		if (signal?.aborted === true) abort();
@@ -648,7 +630,16 @@ export class CursorInferenceRuntime {
 		const gate = Promise.withResolvers<void>();
 		const lock = previous.then(async () => await gate.promise);
 		this.#runLocks.set(sessionId, lock);
-		await previous;
+		try {
+			await raceWithSignal(previous, signal);
+		} catch (error) {
+			gate.resolve();
+			const release = (): void => {
+				if (this.#runLocks.get(sessionId) === lock) this.#runLocks.delete(sessionId);
+			};
+			void lock.then(release, release);
+			throw error;
+		}
 		try {
 			const slot = this.#runs.get(sessionId);
 			if (reuseRun && slot?.routeKey === routeKey) return slot.run;

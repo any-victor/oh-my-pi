@@ -158,7 +158,7 @@ export function messageToInference(
 					visibleParts.push(part);
 					break;
 				case "thinking":
-					if (message.provider !== "cursor") break;
+					if (message.api !== "cursor-agent") break;
 					reasoningParts.push(
 						create(InferenceReasoningPartSchema, {
 							text: part.thinking,
@@ -168,7 +168,7 @@ export function messageToInference(
 					);
 					break;
 				case "redactedThinking":
-					if (message.provider !== "cursor") break;
+					if (message.api !== "cursor-agent") break;
 					reasoningParts.push(
 						create(InferenceReasoningPartSchema, { isRedacted: true, text: "", redactedData: part.data }),
 					);

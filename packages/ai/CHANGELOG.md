@@ -23,6 +23,7 @@
 - Fixed Cursor validating returned tool calls against the broader context catalog instead of the final narrowed post-hook wire catalog.
 - Fixed Cursor replay treating pipe-delimited results from non-Responses providers as composite IDs, blocked startup and invocation writes escaping timeout or abort settlement, fallback identity publication leaving partial files after interruption, and the host interface import violating the Node namespace convention.
 - Fixed text-only Cursor routes replaying unsupported images and malformed persisted tool calls wedging later requests.
+- Fixed custom `cursor-agent` providers losing signed reasoning, cancelled callers waiting behind another session run lock, and healed leaked-reasoning text overriding authoritative final corrections.
 
 ## [18.1.9] - 2026-09-04
 
