@@ -1066,7 +1066,12 @@ function readJsonStruct(reader: Reader): JsonObject {
 					entryReader.skip(entryWire);
 				}
 			}
-			output[entryKey] = entryVal;
+			Object.defineProperty(output, entryKey, {
+				value: entryVal,
+				enumerable: true,
+				configurable: true,
+				writable: true,
+			});
 		} else {
 			reader.skip(wireType);
 		}
