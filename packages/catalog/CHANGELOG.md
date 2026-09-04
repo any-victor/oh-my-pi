@@ -14,6 +14,7 @@
 
 - Restored Cursor's authoritative model context windows, image/thinking capabilities, and distinct Max Mode rows from the complete Available/Usable/Default catalog join, with caches isolated by bearer account and endpoint.
 - Fixed compressed Cursor catalog responses expanding beyond the catalog response-size limit during gzip or Brotli decompression.
+- Fixed distinct Cursor Max configurations being mislabeled as 1M rows when their authoritative context is smaller or unchanged.
 
 ## [18.1.9] - 2026-09-04
 

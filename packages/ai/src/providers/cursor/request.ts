@@ -37,7 +37,13 @@ import {
 import type { Context, ImageContent, Message, Model, TextContent, Tool, ToolChoice } from "../../types";
 import { normalizeSystemPrompts, normalizeToolCallId } from "../../utils";
 import { toolWireSchema } from "../../utils/schema";
-import { collectToolCallOriginScope, toolCallPairingKey, type ToolCallOriginScope } from "../transform-messages";
+import {
+	collectToolCallOriginScope,
+	sanitizeMalformedToolCalls,
+	toolCallPairingKey,
+	type ToolCallOriginScope,
+} from "../transform-messages";
+import { joinTextWithImagePlaceholder, partitionVisionContent } from "../vision-guard";
 import {
 	cursorEffortParameters,
 	cursorEffortSuffix,
@@ -90,8 +96,18 @@ function textPart(text: string): InferenceContentPart {
 	});
 }
 
-function textAndImagesContent(content: string | (TextContent | ImageContent)[]): InferenceCoreMessage["content"] {
+function textAndImagesContent(
+	content: string | (TextContent | ImageContent)[],
+	supportsImages: boolean,
+): InferenceCoreMessage["content"] {
 	if (typeof content === "string") return { case: "text", value: content };
+	if (!supportsImages) {
+		const { textBlocks, omittedImages } = partitionVisionContent(content, false);
+		return {
+			case: "text",
+			value: joinTextWithImagePlaceholder(textBlocks.map(part => part.text).join(""), omittedImages),
+		};
+	}
 	if (content.every(part => part.type === "text")) {
 		return { case: "text", value: content.map(part => part.text).join("") };
 	}
@@ -103,22 +119,32 @@ function textAndImagesContent(content: string | (TextContent | ImageContent)[]):
 	};
 }
 
-function toolResultJson(message: Extract<Message, { role: "toolResult" }>): JsonValue {
+function toolResultJson(message: Extract<Message, { role: "toolResult" }>, supportsImages: boolean): JsonValue {
 	const text = message.content.flatMap(part => (part.type === "text" ? [part.text] : []));
+	if (!supportsImages && message.content.some(part => part.type === "image")) {
+		return joinTextWithImagePlaceholder(text.join("\n"), true);
+	}
 	if (text.length === 1) return text[0] ?? "";
 	return text.map(value => ({ type: "text", text: value }));
 }
 
-function toolResultExperimentalContent(message: Extract<Message, { role: "toolResult" }>): InferenceContentPart[] {
-	if (!message.content.some(part => part.type === "image")) return [];
+function toolResultExperimentalContent(
+	message: Extract<Message, { role: "toolResult" }>,
+	supportsImages: boolean,
+): InferenceContentPart[] {
+	if (!supportsImages || !message.content.some(part => part.type === "image")) return [];
 	return message.content.map(part => (part.type === "text" ? textPart(part.text) : imagePart(part)));
 }
 
-export function messageToInference(message: Message, toolCallIds: ReadonlyMap<object, string>): InferenceCoreMessage {
+export function messageToInference(
+	message: Message,
+	toolCallIds: ReadonlyMap<object, string>,
+	supportsImages = true,
+): InferenceCoreMessage {
 	if (message.role === "user" || message.role === "developer") {
 		return create(InferenceCoreMessageSchema, {
 			role: message.role === "user" ? InferenceMessageRole.USER : InferenceMessageRole.SYSTEM,
-			content: textAndImagesContent(message.content),
+			content: textAndImagesContent(message.content, supportsImages),
 		});
 	}
 	if (message.role === "assistant") {
@@ -165,17 +191,21 @@ export function messageToInference(message: Message, toolCallIds: ReadonlyMap<ob
 			}
 		}
 		const hasImages = visibleParts.some(part => part.type === "image");
-		const joinedText = visibleParts.flatMap(part => (part.type === "text" ? [part.text] : [])).join("");
-		const content = hasImages
-			? {
-					case: "parts" as const,
-					value: create(InferenceContentPartsSchema, {
-						parts: visibleParts.map(part => (part.type === "text" ? textPart(part.text) : imagePart(part))),
-					}),
-				}
-			: joinedText === ""
-				? undefined
-				: { case: "text" as const, value: joinedText };
+		const visibleText = visibleParts.flatMap(part => (part.type === "text" ? [part.text] : [])).join("");
+		const content =
+			hasImages && supportsImages
+				? {
+						case: "parts" as const,
+						value: create(InferenceContentPartsSchema, {
+							parts: visibleParts.map(part => (part.type === "text" ? textPart(part.text) : imagePart(part))),
+						}),
+					}
+				: visibleText === "" && !hasImages
+					? undefined
+					: {
+							case: "text" as const,
+							value: joinTextWithImagePlaceholder(visibleText, hasImages && !supportsImages),
+						};
 		return create(InferenceCoreMessageSchema, {
 			role: InferenceMessageRole.ASSISTANT,
 			content,
@@ -193,9 +223,9 @@ export function messageToInference(message: Message, toolCallIds: ReadonlyMap<ob
 					create(InferenceToolResultPartSchema, {
 						toolCallId: toolCallIds.get(message) ?? normalizeToolCallId(message.toolCallId),
 						toolName: message.toolName,
-						result: encodeJsonValue(toolResultJson(message)),
+						result: encodeJsonValue(toolResultJson(message, supportsImages)),
 						isError: message.isError,
-						experimentalContent: toolResultExperimentalContent(message),
+						experimentalContent: toolResultExperimentalContent(message, supportsImages),
 					}),
 				],
 			}),
@@ -323,13 +353,15 @@ function repairToolResultPairing(messages: readonly Message[]): Message[] {
 }
 
 export function buildInferenceRequest(
-	_model: Model<"cursor-agent">,
+	model: Model<"cursor-agent">,
 	context: Context,
 	options: CursorInferenceRequestOptions = {},
 ): InferenceStreamRequest {
-	const repairedContext = { ...context, messages: repairToolResultPairing(context.messages) };
+	const sanitizedMessages = sanitizeMalformedToolCalls([...context.messages]);
+	const repairedContext = { ...context, messages: repairToolResultPairing(sanitizedMessages) };
 	const toolCallIds = uniqueToolCallIds(repairedContext);
-	const messages = repairedContext.messages.map(message => messageToInference(message, toolCallIds));
+	const supportsImages = model.input.includes("image");
+	const messages = repairedContext.messages.map(message => messageToInference(message, toolCallIds, supportsImages));
 	for (const prompt of normalizeSystemPrompts(context.systemPrompt).reverse()) {
 		messages.unshift(
 			create(InferenceCoreMessageSchema, {

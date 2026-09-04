@@ -4,8 +4,9 @@ import { InferenceMessageRole } from "@oh-my-pi/pi-catalog/discovery/cursor-prot
 import { decodeJsonStruct, decodeJsonValue } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 import type { Context, Model, Tool } from "../src/types";
 import { buildInferenceRequest, buildInferenceRunRequest, inferenceRoutingKey } from "../src/providers/cursor/request";
+import { NON_VISION_IMAGE_PLACEHOLDER } from "../src/providers/vision-guard";
 
-function cursorModel(id = "composer-2.5"): Model<"cursor-agent"> {
+function cursorModel(id = "composer-2.5", input: ("text" | "image")[] = ["text", "image"]): Model<"cursor-agent"> {
 	return buildModel({
 		id,
 		name: id,
@@ -13,7 +14,7 @@ function cursorModel(id = "composer-2.5"): Model<"cursor-agent"> {
 		api: "cursor-agent",
 		baseUrl: "https://api2.cursor.sh",
 		reasoning: true,
-		input: ["text", "image"],
+		input,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200_000,
 		maxTokens: 64_000,
@@ -221,6 +222,41 @@ describe("Cursor managed-inference request", () => {
 		expect(image.value).toMatchObject({ data: PNG_BASE64, mimeType: "image/png" });
 	});
 
+	test("uses standard image placeholders for text-only Cursor models", () => {
+		const context = history();
+		const user = context.messages[0];
+		const assistant = context.messages[1];
+		const result = context.messages[2];
+		if (user?.role !== "user" || assistant?.role !== "assistant" || result?.role !== "toolResult") {
+			throw new Error("tool history missing");
+		}
+		user.content = [
+			{ type: "text", text: "user text" },
+			{ type: "image", data: PNG_BASE64, mimeType: "image/png" },
+		];
+		assistant.content.push({ type: "image", data: PNG_BASE64, mimeType: "image/png" });
+		result.content = [
+			{ type: "text", text: "tool text" },
+			{ type: "image", data: PNG_BASE64, mimeType: "image/png" },
+		];
+
+		const request = buildInferenceRequest(cursorModel("text-only", ["text"]), context);
+		expect(request.messages[1]?.content).toEqual({
+			case: "text",
+			value: `user text\n${NON_VISION_IMAGE_PLACEHOLDER}`,
+		});
+		expect(request.messages[2]?.content).toEqual({
+			case: "text",
+			value: `Calling now.\n${NON_VISION_IMAGE_PLACEHOLDER}`,
+		});
+		const toolContent = request.messages[3]?.content;
+		if (toolContent?.case !== "toolContent") throw new Error("Cursor tool result missing");
+		expect(decodeJsonValue(toolContent.value.parts[0]?.result ?? new Uint8Array())).toBe(
+			`tool text\n${NON_VISION_IMAGE_PLACEHOLDER}`,
+		);
+		expect(toolContent.value.parts[0]?.experimentalContent).toEqual([]);
+	});
+
 	test("preserves image-bearing error tool results as experimental content", () => {
 		const request = buildInferenceRequest(cursorModel(), {
 			messages: [
@@ -262,6 +298,26 @@ describe("Cursor managed-inference request", () => {
 		const image = result?.experimentalContent[1]?.part;
 		if (image?.case !== "image") throw new Error("Cursor tool-result image missing");
 		expect(image.value).toMatchObject({ data: PNG_BASE64, mimeType: "image/png" });
+	});
+
+	test("drops malformed replay tool calls and their results before Cursor serialization", () => {
+		const context = history();
+		const assistant = context.messages[1];
+		const result = context.messages[2];
+		if (assistant?.role !== "assistant" || result?.role !== "toolResult") {
+			throw new Error("tool history missing");
+		}
+		assistant.content = [
+			{ type: "text", text: "safe text" },
+			{ type: "toolCall", id: " ", name: TOOL.name, arguments: {} },
+			{ type: "toolCall", id: "bad-name", name: "\t", arguments: {} },
+		];
+		context.messages = [assistant, { ...result, toolCallId: " " }, { ...result, toolCallId: "bad-name" }];
+
+		const request = buildInferenceRequest(cursorModel(), context);
+		expect(request.messages).toHaveLength(2);
+		expect(request.messages[1]?.content).toEqual({ case: "text", value: "safe text" });
+		expect(request.messages[1]?.toolCalls).toEqual([]);
 	});
 
 	test("repairs orphan tool results before Cursor serialization", () => {

@@ -22,6 +22,7 @@
 - Fixed foreign provider reasoning being replayed as Cursor-native reasoning, orphan results splitting pending tool-call windows, and aborted invocations waiting for cancellation writes to drain.
 - Fixed Cursor validating returned tool calls against the broader context catalog instead of the final narrowed post-hook wire catalog.
 - Fixed Cursor replay treating pipe-delimited results from non-Responses providers as composite IDs, blocked startup and invocation writes escaping timeout or abort settlement, fallback identity publication leaving partial files after interruption, and the host interface import violating the Node namespace convention.
+- Fixed text-only Cursor routes replaying unsupported images and malformed persisted tool calls wedging later requests.
 
 ## [18.1.9] - 2026-09-04
 

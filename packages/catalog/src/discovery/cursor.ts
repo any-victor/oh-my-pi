@@ -290,6 +290,18 @@ function contextWindow(model: AvailableModelsResponse_AvailableModel, maxMode: b
 	return captured !== undefined && captured > 0 ? captured : DEFAULT_CONTEXT_WINDOW;
 }
 
+function contextSuffix(tokens: number): string {
+	if (tokens % 1_000_000 === 0) return `${tokens / 1_000_000}m`;
+	if (tokens % 1_000 === 0) return `${tokens / 1_000}k`;
+	return String(tokens);
+}
+
+function maxModeModelId(familyId: string, model: AvailableModelsResponse_AvailableModel): string {
+	const normalContext = contextWindow(model, false);
+	const maxContext = contextWindow(model, true);
+	return `${familyId}-${maxContext === normalContext ? "max" : contextSuffix(maxContext)}`;
+}
+
 function displayName(model: ModelDetails): string {
 	return model.displayName || model.displayNameShort || model.displayModelId || model.modelId;
 }
@@ -309,10 +321,6 @@ function familyReference(
 	references: ReadonlyMap<string, ModelSpec<"cursor-agent">>,
 ): ModelSpec<"cursor-agent"> | undefined {
 	return references.get(family.id) ?? family.members.flatMap(({ model }) => references.get(model.modelId) ?? [])[0];
-}
-
-function maxModeModelId(familyId: string): string {
-	return `${familyId}-1m`;
 }
 
 function providerModel(
@@ -343,7 +351,7 @@ function providerModel(
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			maxTokens: DEFAULT_MAX_TOKENS,
 		}),
-		id: maxMode ? maxModeModelId(family.id) : family.id,
+		id: maxMode ? maxModeModelId(family.id, base) : family.id,
 		name: `${capturedName}${maxMode ? " Max" : ""}`,
 		provider: "cursor",
 		api: "cursor-agent",
@@ -377,7 +385,8 @@ export function cursorCatalogModels(
 	references: ReadonlyMap<string, ModelSpec<"cursor-agent">> = createCursorReferenceMap(),
 ): ModelSpec<"cursor-agent">[] {
 	if (available.models.length === 0) throw new Error("Cursor AvailableModels returned no models");
-	const models = modelFamilies(usable.models, available.models).flatMap(family => {
+	const families = modelFamilies(usable.models, available.models);
+	const models = families.flatMap(family => {
 		const base = baseModelFor(family, available.models);
 		if (base === undefined) return [];
 		return [
@@ -390,8 +399,17 @@ export function cursorCatalogModels(
 	if (selected !== undefined && selected.modelId !== "") {
 		const usableIds = new Set(usable.models.map(model => model.modelId));
 		if (!usableIds.has(selected.modelId)) throw new Error(`Cursor default model '${selected.modelId}' is not usable`);
-		const family = familyFor(selected, available.models).id;
-		if (!models.some(model => model.id === family || model.id === maxModeModelId(family))) {
+		const selectedFamily = families.find(family =>
+			family.members.some(({ model }) => model.modelId === selected.modelId),
+		);
+		if (selectedFamily === undefined) {
+			throw new Error(`Cursor default model '${selected.modelId}' has no complete catalog metadata`);
+		}
+		const base = baseModelFor(selectedFamily, available.models);
+		if (
+			base === undefined ||
+			!models.some(model => model.id === selectedFamily.id || model.id === maxModeModelId(selectedFamily.id, base))
+		) {
 			throw new Error(`Cursor default model '${selected.modelId}' has no complete catalog metadata`);
 		}
 	}

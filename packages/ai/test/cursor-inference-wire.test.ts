@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { gzipSync } from "node:zlib";
 import {
 	CONNECT_FLAG_COMPRESSED,
@@ -18,9 +21,6 @@ import {
 	machineIdCommand,
 	normalizeHardwareId,
 } from "../src/providers/cursor/identity";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 const text = (value: string): Uint8Array => new TextEncoder().encode(value);
 const decoded = (value: Uint8Array): string => new TextDecoder().decode(value);
@@ -43,11 +43,11 @@ function dependencies(overrides: Partial<IdentityDependencies> = {}): IdentityDe
 }
 
 async function withTempDir(run: (directory: string) => Promise<void>): Promise<void> {
-	const directory = await mkdtemp(join(tmpdir(), "omp-cursor-identity-"));
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cursor-identity-"));
 	try {
 		await run(directory);
 	} finally {
-		await rm(directory, { recursive: true, force: true });
+		await fs.rm(directory, { recursive: true, force: true });
 	}
 }
 
@@ -141,11 +141,11 @@ describe("Cursor managed-inference wire", () => {
 				machineId: fallback,
 				machineIdSource: "fallback",
 			});
-			const identityPath = join(directory, "cursor", "identity.json");
-			expect((await stat(identityPath)).mode & 0o777).toBe(0o600);
-			expect(await readFile(identityPath, "utf8")).toBe(`${JSON.stringify({ machineId: fallback })}\n`);
-			await chmod(identityPath, 0o600);
-			await writeFile(identityPath, '{"machineId":"bad"}\n');
+			const identityPath = path.join(directory, "cursor", "identity.json");
+			expect((await fs.stat(identityPath)).mode & 0o777).toBe(0o600);
+			expect(await fs.readFile(identityPath, "utf8")).toBe(`${JSON.stringify({ machineId: fallback })}\n`);
+			await fs.chmod(identityPath, 0o600);
+			await fs.writeFile(identityPath, '{"machineId":"bad"}\n');
 			await expect(loadCursorMachineIdentity(directory, deps)).rejects.toThrow(
 				"Persisted Cursor fallback identity is invalid",
 			);
@@ -170,8 +170,8 @@ describe("Cursor managed-inference wire", () => {
 			expect(new Set(identities.map(identity => identity.machineId))).toEqual(
 				new Set(["123e4567-e89b-42d3-a456-000000000001"]),
 			);
-			const identityPath = join(directory, "cursor", "identity.json");
-			expect((await stat(identityPath)).mode & 0o777).toBe(0o600);
+			const identityPath = path.join(directory, "cursor", "identity.json");
+			expect((await fs.stat(identityPath)).mode & 0o777).toBe(0o600);
 		});
 	});
 });

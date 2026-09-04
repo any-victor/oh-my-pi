@@ -246,6 +246,28 @@ describe("Cursor complete catalog join", () => {
 		expect(grok[0]).toMatchObject({ contextWindow: 256_000, cursorMaxMode: false });
 	});
 
+	it("derives Max row IDs from authoritative context metadata", () => {
+		const usable = create(GetUsableModelsResponseSchema, {
+			models: [model("future-max-route")],
+		});
+		const availableModels = create(AvailableModelsResponseSchema, {
+			models: [
+				available("future-max-route", {
+					supportsMax: true,
+					supportsNonMax: true,
+					context: 128_000,
+					maxContext: 256_000,
+					variants: [variant("128k", { defaultNormal: true }), variant("256k", { max: true, defaultMax: true })],
+				}),
+			],
+		});
+		const defaultModel = create(GetDefaultModelForCliResponseSchema, { model: usable.models[0] });
+		const models = cursorCatalogModels(availableModels, usable, defaultModel, "https://api2.cursor.sh", new Map());
+
+		expect(models.map(candidate => candidate.id)).toEqual(["future-max-route", "future-max-route-256k"]);
+		expect(models[1]).toMatchObject({ contextWindow: 256_000, cursorContext: "256k", cursorMaxMode: true });
+	});
+
 	it("does not collapse undeclared effort-looking model families", () => {
 		const usable = create(GetUsableModelsResponseSchema, {
 			models: [model("future-model-low"), model("future-model-high")],
