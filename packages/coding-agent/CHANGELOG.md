@@ -52,6 +52,7 @@
 
 ### Fixed
 
+- Fixed a collapsed Cursor model family not being selected when one of its effort-routed wire IDs is the provider's declared default.
 - Fixed fallback authorization-code prompts remaining active after native OAuth callback completion.
 - Fixed reciprocal idle subagents repeatedly waking one another indefinitely.
 - Fixed `/wt` and `git worktree add` failing when the new worktree targeted the same commit as the clean source checkout.
