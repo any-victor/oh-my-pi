@@ -30,6 +30,7 @@ import {
 	RunInferenceServerMessageSchema,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 import { CONNECT_FLAG_END_STREAM, ConnectFrameDecoder, encodeConnectFrame } from "../src/providers/cursor/connect";
 import { type CursorOptions, streamCursor } from "../src/providers/cursor";
@@ -70,6 +71,7 @@ interface LoopbackOptions {
 async function loopback(options: LoopbackOptions = {}): Promise<{
 	readonly origin: string;
 	readonly runRequests: () => number;
+	readonly requestedModels: () => Array<{ readonly modelId: string; readonly parameters: string[] }>;
 	readonly invocations: () => number;
 	readonly invokeMaxTokens: () => number[];
 	readonly invokeReasoningCounts: () => number[];
@@ -85,6 +87,7 @@ async function loopback(options: LoopbackOptions = {}): Promise<{
 		answerAfterToolResult = false,
 	} = options;
 	let runRequests = 0;
+	const requestedModels: Array<{ readonly modelId: string; readonly parameters: string[] }> = [];
 	let invocations = 0;
 	let capturedHeaders: Record<string, string> | undefined;
 	const invokeMaxTokens: number[] = [];
@@ -103,6 +106,11 @@ async function loopback(options: LoopbackOptions = {}): Promise<{
 				const message = fromBinary(RunInferenceClientMessageSchema, frame.body);
 				if (message.message.case === "runRequest") {
 					openedRun = ++runRequests;
+					const requested = message.message.value.requestedModel;
+					requestedModels.push({
+						modelId: requested?.modelId ?? "",
+						parameters: requested?.parameters.map(parameter => `${parameter.id}=${parameter.value}`) ?? [],
+					});
 					send(
 						stream,
 						create(RunInferenceServerMessageSchema, {
@@ -289,6 +297,7 @@ async function loopback(options: LoopbackOptions = {}): Promise<{
 	return {
 		origin: `http://127.0.0.1:${address.port}`,
 		runRequests: () => runRequests,
+		requestedModels: () => requestedModels,
 		invocations: () => invocations,
 		invokeMaxTokens: () => invokeMaxTokens,
 		invokeReasoningCounts: () => invokeReasoningCounts,
@@ -422,6 +431,51 @@ describe("Cursor provider entrypoint", () => {
 				}),
 			);
 			expect(target.invokeMaxTokens()).toEqual([0, 321]);
+		} finally {
+			closeProviderState(providerSessionState);
+		}
+	});
+
+	test("routes the selected effort through the provider entrypoint", async () => {
+		const target = await loopback();
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const routedModel = buildModel({
+			...model(target.origin),
+			id: "gpt-5.6-sol",
+			name: "GPT-5.6 Sol",
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				effortRouting: {
+					[Effort.Low]: "gpt-5.6-sol-low",
+					[Effort.Medium]: "gpt-5.6-sol-medium",
+					[Effort.High]: "gpt-5.6-sol-high",
+					[Effort.XHigh]: "gpt-5.6-sol-xhigh",
+				},
+			},
+			cursorContext: "272k",
+		});
+		try {
+			for (const effort of [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh]) {
+				await collect(
+					streamSimple(
+						routedModel,
+						{ messages: [{ role: "user", content: effort, timestamp: 1 }] },
+						{
+							apiKey: "HEADER.PAYLOAD.SIGNATURE",
+							sessionId: `omp-effort-${effort}`,
+							providerSessionState,
+							reasoning: effort,
+						},
+					),
+				);
+			}
+			expect(target.requestedModels()).toEqual(
+				[Effort.Low, Effort.Medium, Effort.High, Effort.XHigh].map(effort => ({
+					modelId: "gpt-5.6-sol",
+					parameters: [`context=272k`, `reasoning=${effort}`, "fast=false"],
+				})),
+			);
 		} finally {
 			closeProviderState(providerSessionState);
 		}

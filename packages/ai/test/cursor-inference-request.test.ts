@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { InferenceMessageRole } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
+import { resolveWireModelId } from "@oh-my-pi/pi-catalog/model-thinking";
 import { decodeJsonStruct, decodeJsonValue } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 import type { Context, Model, Tool } from "../src/types";
 import {
@@ -554,17 +556,64 @@ describe("Cursor managed-inference request", () => {
 		);
 	});
 
-	test("maps resolved effort siblings into RunInference model parameters", () => {
+	test("maps every live-tested supported effort into its exact RunInference route", () => {
+		const families = [
+			{
+				modelId: "gpt-5.6-sol",
+				wirePrefix: "gpt-5.6-sol-",
+				targetModelId: "gpt-5.6-sol",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				parameters: (effort: Effort) => [
+					{ id: "context", value: "272k" },
+					{ id: "reasoning", value: effort },
+					{ id: "fast", value: "false" },
+				],
+				context: "272k",
+			},
+			{
+				modelId: "claude-opus-5",
+				wirePrefix: "claude-opus-5-thinking-",
+				targetModelId: "claude-opus-5",
+				efforts: [Effort.Low, Effort.Medium, Effort.High],
+				parameters: (effort: Effort) => [
+					{ id: "thinking", value: "true" },
+					{ id: "context", value: "300k" },
+					{ id: "effort", value: effort },
+					{ id: "fast", value: "false" },
+				],
+			},
+			{
+				modelId: "gemini-3.7-flash",
+				wirePrefix: "gemini-3.7-flash-",
+				targetModelId: "gemini-3.7-flash",
+				efforts: [Effort.Low, Effort.Medium, Effort.High],
+				parameters: (effort: Effort) => [{ id: "effort", value: effort }],
+			},
+			{
+				modelId: "cursor-grok-4.6",
+				wirePrefix: "cursor-grok-4.6-",
+				targetModelId: "grok-4.6",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				parameters: (effort: Effort) => [
+					{ id: "effort", value: effort },
+					{ id: "fast", value: "false" },
+				],
+			},
+		] as const;
+
+		for (const family of families) {
+			const model = cursorModel(family.modelId);
+			model.cursorContext = "context" in family ? family.context : undefined;
+			for (const effort of family.efforts) {
+				expect(JSON.parse(inferenceRoutingKey(model, { wireModelId: `${family.wirePrefix}${effort}` }))).toEqual({
+					modelId: family.targetModelId,
+					maxMode: false,
+					parameters: family.parameters(effort),
+				});
+			}
+		}
+
 		const gpt = cursorModel("gpt-5.6-sol");
-		const gptKey = inferenceRoutingKey(gpt, { wireModelId: "gpt-5.6-sol-high" });
-		expect(JSON.parse(gptKey)).toEqual({
-			modelId: "gpt-5.6-sol",
-			maxMode: false,
-			parameters: [
-				{ id: "reasoning", value: "high" },
-				{ id: "fast", value: "false" },
-			],
-		});
 		expect(JSON.parse(inferenceRoutingKey(gpt, { wireModelId: "gpt-5.6-sol-extra-high" }))).toEqual({
 			modelId: "gpt-5.6-sol",
 			maxMode: false,
@@ -582,13 +631,7 @@ describe("Cursor managed-inference request", () => {
 				{ id: "fast", value: "true" },
 			],
 		});
-		const gemini = cursorModel("gemini-3.7-flash");
-		expect(JSON.parse(inferenceRoutingKey(gemini, { wireModelId: "gemini-3.7-flash-medium" }))).toEqual({
-			modelId: "gemini-3.7-flash",
-			maxMode: false,
-			parameters: [{ id: "effort", value: "medium" }],
-		});
-		const opus = cursorModel("claude-opus-5-high");
+		const opus = cursorModel("claude-opus-5");
 		opus.cursorModelRoutes = {
 			"claude-opus-5-medium": {
 				modelId: "claude-opus-5",
@@ -610,16 +653,21 @@ describe("Cursor managed-inference request", () => {
 				{ id: "fast", value: "false" },
 			],
 		});
-		expect(JSON.parse(inferenceRoutingKey(opus, { wireModelId: "claude-opus-5-thinking-high" }))).toEqual({
-			modelId: "claude-opus-5",
-			maxMode: false,
-			parameters: [
-				{ id: "thinking", value: "true" },
-				{ id: "context", value: "300k" },
-				{ id: "effort", value: "high" },
-				{ id: "fast", value: "false" },
-			],
-		});
+
+		const composer = cursorModel("composer-2.5");
+		const composerEfforts = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High];
+		expect(composer.thinking?.efforts).toEqual(composerEfforts);
+		expect(
+			composerEfforts.map(effort =>
+				JSON.parse(inferenceRoutingKey(composer, { wireModelId: resolveWireModelId(composer, effort) })),
+			),
+		).toEqual(
+			composerEfforts.map(() => ({
+				modelId: "composer-2.5",
+				maxMode: false,
+				parameters: [{ id: "fast", value: "false" }],
+			})),
+		);
 
 		const max = cursorModel("gpt-5.6-sol");
 		max.cursorMaxMode = true;

@@ -22,7 +22,7 @@
 - Fixed custom `cursor-agent` providers losing signed reasoning, cancelled callers waiting behind another session run lock, and healed leaked-reasoning text overriding authoritative final corrections.
 - Fixed resumed and later Cursor turns replaying outer-run-only opaque reasoning, and made structured invocation errors preserve embedded provider status while rendering readable details.
 - Fixed Cursor outer-run routing sending prior visible history instead of only the current user action; complete history remains in each inference request.
-- Fixed Cursor requests inventing a provider output limit absent from the fetched catalog, and combined segmented OMP instructions into one provider system message; explicit per-call output caps remain supported.
+- Fixed Cursor requests inventing a provider output limit absent from the fetched catalog, combined segmented OMP instructions into one provider system message, and removed terminal provider end-of-sequence markers from visible answers; explicit per-call output caps remain supported.
 
 ## [18.1.9] - 2026-09-04
 

@@ -19,6 +19,7 @@ import {
 	RequestedModel_ModelParameterValueSchema,
 } from "../src/discovery/cursor-proto";
 import { create, toBinary } from "../src/discovery/protobuf";
+import { resolveWireModelId } from "../src/model-thinking";
 
 const servers = new Set<http2.Http2Server>();
 
@@ -105,6 +106,7 @@ function available(
 function catalogFixture() {
 	const usable = create(GetUsableModelsResponseSchema, {
 		models: [
+			model("composer-2.5"),
 			model("gemini-3.7-flash-low"),
 			model("gemini-3.7-flash-medium"),
 			model("gemini-3.7-flash-high"),
@@ -116,6 +118,7 @@ function catalogFixture() {
 			model("gpt-5.6-sol-low"),
 			model("gpt-5.6-sol-medium"),
 			model("gpt-5.6-sol-high"),
+			model("gpt-5.6-sol-xhigh"),
 			model("claude-opus-5-thinking-low"),
 			model("claude-opus-5-thinking-medium"),
 			model("claude-opus-5-thinking-high"),
@@ -123,20 +126,42 @@ function catalogFixture() {
 	});
 	const availableModels = create(AvailableModelsResponseSchema, {
 		models: [
+			available("composer-2.5", {
+				displayName: "Composer 2.5",
+				thinking: true,
+				context: 200_000,
+				variants: [routedVariant("composer-2.5", { fast: "false" }, { defaultNormal: true })],
+			}),
 			available("gemini-3.7-flash", {
 				displayName: "Gemini 3.7 Flash",
 				thinking: true,
 				images: true,
 				context: 1_000_000,
+				variants: ["low", "medium", "high"].map(effort =>
+					routedVariant(`gemini-3.7-flash-${effort}`, { effort }, { defaultNormal: effort === "medium" }),
+				),
 			}),
-			available("cursor-grok-4.6", {
+			available("grok-4.6", {
 				displayName: "Cursor Grok 4.6",
+				legacySlugs: [
+					"cursor-grok-4.6-low",
+					"cursor-grok-4.6-medium",
+					"cursor-grok-4.6-high",
+					"cursor-grok-4.6-xhigh",
+				],
 				thinking: true,
 				images: true,
 				supportsMax: true,
 				supportsNonMax: true,
 				context: 256_000,
 				maxContext: 256_000,
+				variants: ["low", "medium", "high", "xhigh"].map(effort =>
+					routedVariant(
+						`cursor-grok-4.6-${effort}`,
+						{ effort, fast: "false" },
+						{ defaultNormal: effort === "medium" },
+					),
+				),
 			}),
 			available("gpt-5.6-sol", {
 				displayName: "GPT-5.6 Sol",
@@ -146,7 +171,22 @@ function catalogFixture() {
 				supportsNonMax: true,
 				context: 272_000,
 				maxContext: 1_000_000,
-				variants: [variant("272k", { defaultNormal: true }), variant("1m", { max: true, defaultMax: true })],
+				variants: [
+					...["none", "low", "medium", "high", "xhigh"].map(reasoning =>
+						routedVariant(
+							`gpt-5.6-sol-${reasoning}`,
+							{ context: "272k", reasoning, fast: "false" },
+							{ defaultNormal: reasoning === "medium" },
+						),
+					),
+					...["none", "low", "medium", "high", "xhigh"].map(reasoning =>
+						routedVariant(
+							`gpt-5.6-sol-${reasoning}`,
+							{ context: "1m", reasoning, fast: "false" },
+							{ max: true, defaultMax: reasoning === "medium" },
+						),
+					),
+				],
 			}),
 			available("claude-opus-5-thinking", {
 				displayName: "Claude Opus 5",
@@ -259,8 +299,59 @@ describe("Cursor complete catalog join", () => {
 		expect(gemini?.cursorMaxMode).toBe(false);
 	});
 
+	it("preserves every fetched supported effort for the live-tested model families", () => {
+		const models = builtCatalog();
+		const expected = [
+			{
+				id: "composer-2.5",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+				routes: ["composer-2.5", "composer-2.5", "composer-2.5", "composer-2.5"],
+				targetModelId: "composer-2.5",
+				parameters: () => [{ id: "fast", value: "false" }],
+			},
+			{
+				id: "gemini-3.7-flash",
+				efforts: [Effort.Low, Effort.Medium, Effort.High],
+				routes: ["gemini-3.7-flash-low", "gemini-3.7-flash-medium", "gemini-3.7-flash-high"],
+				targetModelId: "gemini-3.7-flash",
+				parameters: (effort: Effort) => [{ id: "effort", value: effort }],
+			},
+			{
+				id: "grok-4.6",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				routes: ["cursor-grok-4.6-low", "cursor-grok-4.6-medium", "cursor-grok-4.6-high", "cursor-grok-4.6-xhigh"],
+				targetModelId: "grok-4.6",
+				parameters: (effort: Effort) => [
+					{ id: "effort", value: effort },
+					{ id: "fast", value: "false" },
+				],
+			},
+			{
+				id: "gpt-5.6-sol",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				routes: ["gpt-5.6-sol-low", "gpt-5.6-sol-medium", "gpt-5.6-sol-high", "gpt-5.6-sol-xhigh"],
+				targetModelId: "gpt-5.6-sol",
+				parameters: (effort: Effort) => [
+					{ id: "context", value: "272k" },
+					{ id: "reasoning", value: effort },
+					{ id: "fast", value: "false" },
+				],
+			},
+		] as const;
+
+		for (const fixture of expected) {
+			const model = models.find(candidate => candidate.id === fixture.id);
+			expect(model?.thinking?.efforts).toEqual(fixture.efforts);
+			const routes = fixture.efforts.map(effort => (model ? resolveWireModelId(model, effort) : undefined));
+			expect(routes).toEqual([...fixture.routes]);
+			expect(routes.map(route => (route === undefined ? undefined : model?.cursorModelRoutes?.[route]))).toEqual(
+				fixture.efforts.map(effort => ({ modelId: fixture.targetModelId, parameters: fixture.parameters(effort) })),
+			);
+		}
+	});
+
 	it("does not invent a redundant Grok Max row when both catalog modes are equivalent", () => {
-		const grok = builtCatalog().filter(candidate => candidate.id.startsWith("cursor-grok-4.6"));
+		const grok = builtCatalog().filter(candidate => candidate.id.startsWith("grok-4.6"));
 		expect(grok).toHaveLength(1);
 		expect(grok[0]).toMatchObject({ contextWindow: 256_000, cursorMaxMode: false });
 	});
@@ -396,6 +487,26 @@ describe("Cursor complete catalog join", () => {
 				},
 			},
 		});
+		const built = buildModel(models[0]!);
+		const thinkingEfforts = [Effort.Low, Effort.Medium, Effort.High];
+		const thinkingRoutes = [
+			"claude-opus-5-thinking-low",
+			"claude-opus-5-thinking-medium",
+			"claude-opus-5-thinking-high",
+		];
+		expect(built.thinking?.efforts).toEqual(thinkingEfforts);
+		expect(thinkingEfforts.map(effort => resolveWireModelId(built, effort))).toEqual(thinkingRoutes);
+		expect(thinkingRoutes.map(route => built.cursorModelRoutes?.[route])).toEqual(
+			thinkingEfforts.map(effort => ({
+				modelId: "claude-opus-5",
+				parameters: [
+					{ id: "thinking", value: "true" },
+					{ id: "context", value: "300k" },
+					{ id: "effort", value: effort },
+					{ id: "fast", value: "false" },
+				],
+			})),
+		);
 		expect(models[1]?.cursorModelRoutes?.["claude-opus-5-thinking-medium"]?.parameters).toContainEqual({
 			id: "context",
 			value: "1m",

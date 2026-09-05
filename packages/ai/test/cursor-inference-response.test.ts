@@ -183,6 +183,55 @@ describe("Cursor managed-inference response", () => {
 		});
 	});
 
+	test("strips only terminal Cursor end-of-sequence markers from visible text", async () => {
+		const { result, events } = await map([
+			response({
+				response: {
+					case: "textPart",
+					value: create(InferenceTextStreamPartSchema, { text: "GROK-MEDIUM-112", isFinal: false }),
+				},
+			}),
+			response({
+				response: {
+					case: "textPart",
+					value: create(InferenceTextStreamPartSchema, { text: "<|eos|>", isFinal: false }),
+				},
+			}),
+			response({
+				response: {
+					case: "responseInfo",
+					value: create(InferenceResponseInfoSchema, {
+						messages: [
+							create(InferenceResponseMessageSchema, {
+								role: InferenceMessageRole.ASSISTANT,
+								content: "GROK-MEDIUM-112<|eos|>",
+							}),
+						],
+					}),
+				},
+			}),
+		]);
+		expect(events.flatMap(event => (event.type === "text_delta" ? [event.delta] : []))).toEqual(["GROK-MEDIUM-112"]);
+		expect(result.content).toEqual([{ type: "text", text: "GROK-MEDIUM-112" }]);
+
+		const embedded = await map([
+			response({
+				response: {
+					case: "responseInfo",
+					value: create(InferenceResponseInfoSchema, {
+						messages: [
+							create(InferenceResponseMessageSchema, {
+								role: InferenceMessageRole.ASSISTANT,
+								content: "literal <|eos|> marker in prose",
+							}),
+						],
+					}),
+				},
+			}),
+		]);
+		expect(embedded.result.content).toEqual([{ type: "text", text: "literal <|eos|> marker in prose" }]);
+	});
+
 	test("gives extended usage precedence", async () => {
 		const { result } = await map([
 			response({

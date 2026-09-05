@@ -74,6 +74,10 @@ function streamErrorStatus(type: InferenceStreamErrorType): number | undefined {
 	}
 }
 
+function visibleCursorText(text: string): string {
+	return text.replace(/(?:<\|eos\|>)+$/u, "");
+}
+
 /** Maps one correlated managed invocation onto OMP's provider event contract. */
 export class CursorInferenceMapper {
 	readonly #stream: AssistantMessageEventStream;
@@ -132,9 +136,10 @@ export class CursorInferenceMapper {
 					this.#endText();
 					return;
 				}
-				if (part.text !== "") {
+				const text = visibleCursorText(part.text);
+				if (text !== "") {
 					this.#onFirstToken();
-					this.#appendText(part.text);
+					this.#appendText(text);
 				}
 				return;
 			}
@@ -211,8 +216,9 @@ export class CursorInferenceMapper {
 					});
 				}
 			}
-			if (message.content !== undefined && message.content.trim() !== "") {
-				content.push({ type: "text", text: message.content });
+			if (message.content !== undefined) {
+				const text = visibleCursorText(message.content);
+				if (text.trim() !== "") content.push({ type: "text", text });
 			}
 			for (const tool of message.toolCalls) {
 				if (tool.toolCallId === "" || tool.toolName === "") {
