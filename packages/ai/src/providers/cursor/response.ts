@@ -74,8 +74,36 @@ function streamErrorStatus(type: InferenceStreamErrorType): number | undefined {
 	}
 }
 
-function visibleCursorText(text: string): string {
-	return text.replace(/(?:<\|eos\|>)+$/u, "");
+// RunInference can emit this response-framing marker as an ordinary text delta at invocation end.
+// It is not added to the caller's model stop sequences.
+const CURSOR_END_OF_SEQUENCE = "<|eos|>";
+
+function stripCursorTerminalSequence(text: string): string {
+	let end = text.length;
+	while (
+		end >= CURSOR_END_OF_SEQUENCE.length &&
+		text.startsWith(CURSOR_END_OF_SEQUENCE, end - CURSOR_END_OF_SEQUENCE.length)
+	) {
+		end -= CURSOR_END_OF_SEQUENCE.length;
+	}
+	return text.slice(0, end);
+}
+
+function splitCursorTerminalCandidate(text: string): readonly [visible: string, pending: string] {
+	let candidateStart = text.length;
+	for (let length = Math.min(CURSOR_END_OF_SEQUENCE.length - 1, text.length); length > 0; length--) {
+		if (text.endsWith(CURSOR_END_OF_SEQUENCE.slice(0, length))) {
+			candidateStart -= length;
+			break;
+		}
+	}
+	while (
+		candidateStart >= CURSOR_END_OF_SEQUENCE.length &&
+		text.startsWith(CURSOR_END_OF_SEQUENCE, candidateStart - CURSOR_END_OF_SEQUENCE.length)
+	) {
+		candidateStart -= CURSOR_END_OF_SEQUENCE.length;
+	}
+	return [text.slice(0, candidateStart), text.slice(candidateStart)];
 }
 
 /** Maps one correlated managed invocation onto OMP's provider event contract. */
@@ -86,6 +114,7 @@ export class CursorInferenceMapper {
 	readonly #invocationId: string;
 	readonly #onFirstToken: () => void;
 	#text: OpenBlock<TextContent> | undefined;
+	#pendingText = "";
 	#thinking: OpenBlock<ThinkingContent> | undefined;
 	readonly #tools = new Map<string, OpenTool>();
 	readonly #completedTools = new Set<string>();
@@ -122,6 +151,7 @@ export class CursorInferenceMapper {
 		}
 		switch (response.response.case) {
 			case "thinkingPart":
+				this.#flushPendingText(false);
 				if (response.response.value.text !== "") {
 					this.#onFirstToken();
 					this.#appendThinking(response.response.value.text, response.response.value.signature);
@@ -130,13 +160,16 @@ export class CursorInferenceMapper {
 				return;
 			case "textPart": {
 				const part = response.response.value;
-				// Cursor 3.18.9's managed adapter maps final text parts to a finish
-				// marker. The authoritative completed text comes from responseInfo.
+				// Cursor's managed adapter treats final text parts as finish markers.
+				// Hold marker-shaped suffixes until the terminal boundary so ordinary
+				// model text survives when a later stream chunk follows it.
 				if (part.isFinal) {
+					this.#flushPendingText(true);
 					this.#endText();
 					return;
 				}
-				const text = visibleCursorText(part.text);
+				const [text, pending] = splitCursorTerminalCandidate(this.#pendingText + part.text);
+				this.#pendingText = pending;
 				if (text !== "") {
 					this.#onFirstToken();
 					this.#appendText(text);
@@ -144,6 +177,7 @@ export class CursorInferenceMapper {
 				return;
 			}
 			case "toolCallPart":
+				this.#flushPendingText(false);
 				this.#onFirstToken();
 				this.#handleTool(response.response.value);
 				return;
@@ -165,6 +199,7 @@ export class CursorInferenceMapper {
 				}
 				return;
 			case "responseInfo":
+				this.#flushPendingText(true);
 				if (response.response.value.errorMessage) {
 					this.#streamError = {
 						...(this.#streamError ?? { outputLimit: false }),
@@ -217,7 +252,7 @@ export class CursorInferenceMapper {
 				}
 			}
 			if (message.content !== undefined) {
-				const text = visibleCursorText(message.content);
+				const text = stripCursorTerminalSequence(message.content);
 				if (text.trim() !== "") content.push({ type: "text", text });
 			}
 			for (const tool of message.toolCalls) {
@@ -272,6 +307,16 @@ export class CursorInferenceMapper {
 		}
 		this.#text.block.text += delta;
 		this.#stream.push({ type: "text_delta", contentIndex: this.#text.index, delta, partial: this.#output });
+	}
+
+	#flushPendingText(terminal: boolean): void {
+		if (this.#pendingText === "") return;
+		const pending = this.#pendingText;
+		this.#pendingText = "";
+		const text = terminal ? stripCursorTerminalSequence(pending) : pending;
+		if (text === "") return;
+		this.#onFirstToken();
+		this.#appendText(text);
 	}
 
 	#handleTool(part: InferenceToolCallStreamPart): void {
@@ -359,6 +404,7 @@ export class CursorInferenceMapper {
 	}
 
 	finish(): InferenceMapperResult {
+		this.#flushPendingText(true);
 		this.#endText();
 		this.#endThinking();
 		if (this.#tools.size > 0) throw new Error("Cursor invocation ended with incomplete tool calls");

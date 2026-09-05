@@ -194,7 +194,13 @@ describe("Cursor managed-inference response", () => {
 			response({
 				response: {
 					case: "textPart",
-					value: create(InferenceTextStreamPartSchema, { text: "<|eos|>", isFinal: false }),
+					value: create(InferenceTextStreamPartSchema, { text: "<|eo", isFinal: false }),
+				},
+			}),
+			response({
+				response: {
+					case: "textPart",
+					value: create(InferenceTextStreamPartSchema, { text: "s|><|eos|>", isFinal: false }),
 				},
 			}),
 			response({
@@ -204,7 +210,7 @@ describe("Cursor managed-inference response", () => {
 						messages: [
 							create(InferenceResponseMessageSchema, {
 								role: InferenceMessageRole.ASSISTANT,
-								content: "GROK-MEDIUM-112<|eos|>",
+								content: "GROK-MEDIUM-112<|eos|><|eos|>",
 							}),
 						],
 					}),
@@ -215,6 +221,18 @@ describe("Cursor managed-inference response", () => {
 		expect(result.content).toEqual([{ type: "text", text: "GROK-MEDIUM-112" }]);
 
 		const embedded = await map([
+			response({
+				response: {
+					case: "textPart",
+					value: create(InferenceTextStreamPartSchema, { text: "literal <|eos|>", isFinal: false }),
+				},
+			}),
+			response({
+				response: {
+					case: "textPart",
+					value: create(InferenceTextStreamPartSchema, { text: " marker in prose", isFinal: false }),
+				},
+			}),
 			response({
 				response: {
 					case: "responseInfo",
@@ -229,7 +247,25 @@ describe("Cursor managed-inference response", () => {
 				},
 			}),
 		]);
+		expect(embedded.events.flatMap(event => (event.type === "text_delta" ? [event.delta] : []))).toEqual([
+			"literal ",
+			"<|eos|> marker in prose",
+		]);
 		expect(embedded.result.content).toEqual([{ type: "text", text: "literal <|eos|> marker in prose" }]);
+
+		const incomplete = await map([
+			response({
+				response: {
+					case: "textPart",
+					value: create(InferenceTextStreamPartSchema, { text: "literal <|eo", isFinal: false }),
+				},
+			}),
+		]);
+		expect(incomplete.events.flatMap(event => (event.type === "text_delta" ? [event.delta] : []))).toEqual([
+			"literal ",
+			"<|eo",
+		]);
+		expect(incomplete.result.content).toEqual([{ type: "text", text: "literal <|eo" }]);
 	});
 
 	test("gives extended usage precedence", async () => {
