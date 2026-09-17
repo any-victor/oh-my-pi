@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import * as hashline from "@oh-my-pi/pi-coding-agent/hashline";
 import { __resetAnchorCache, anchoredText, computeLineHash } from "../src/anchors";
+import * as hashline from "../src/hashline";
 
 afterEach(() => {
 	__resetAnchorCache();

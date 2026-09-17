@@ -1,6 +1,6 @@
-import * as hashline from "@oh-my-pi/pi-coding-agent/hashline";
+import * as hashline from "./hashline";
 
-export { computeLineHash, formatHashLines } from "@oh-my-pi/pi-coding-agent/hashline";
+export { computeLineHash, formatHashLines } from "./hashline";
 
 const INLINE_SELECTOR_RE = /:(\d+)(?:-(\d+)|\+(\d+))?$/;
 const MAX_CACHED_ETAGS = 32;
