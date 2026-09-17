@@ -114,6 +114,9 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--cwd": (result, value) => {
 		result.cwd = value;
 	},
+	"--connect": (result, value) => {
+		result.connect = value;
+	},
 	"--config": (result, value) => {
 		result.config = [...(result.config ?? []), value];
 	},

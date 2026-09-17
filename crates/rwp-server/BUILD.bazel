@@ -1,0 +1,99 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+# Jupyter/zmq stays Cargo-default for local `cargo` builds. Bazel omits the
+# feature so `//crates/...` clippy/test does not require libzmq on CI images.
+rust_library(
+    name = "rwp-server",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/main.rs"],
+    ),
+    aliases = aliases(),
+    crate_name = "rwp_server",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    version = "18.2.3",
+    deps = all_crate_deps(normal = True) + [
+        "//crates/pi-ast",
+        "//crates/pi-shell",
+        "//crates/pi-walker",
+    ],
+)
+
+rust_binary(
+    name = "rwp-server-bin",
+    srcs = ["src/main.rs"],
+    aliases = aliases(),
+    crate_name = "rwp_server_bin",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    version = "18.2.3",
+    deps = all_crate_deps(normal = True) + [
+        ":rwp-server",
+        "//crates/pi-ast",
+        "//crates/pi-shell",
+        "//crates/pi-walker",
+    ],
+)
+
+rust_test(
+    name = "rwp-server_test",
+    crate = ":rwp-server",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    deps = all_crate_deps(normal_dev = True),
+)
+
+[
+    rust_test(
+        name = name,
+        srcs = ["tests/" + name + ".rs"],
+        edition = "2024",
+        proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+        deps = all_crate_deps(normal_dev = True) + [":rwp-server"],
+    )
+    for name in [
+        "archive_bulk_write_test",
+        "archive_snapshot_test",
+        "archive_test",
+        "ast_test",
+        "auth_test",
+        "bash_test",
+        "cdp_test",
+        "cors_test",
+        "dap_test",
+        "e2e_test",
+        "edit_ast_dryrun_test",
+        "edit_path_scope_test",
+        "eval_jupyter_test",
+        "eval_test",
+        "fs_mutate_test",
+        "fs_url_test",
+        "fs_watcher_test",
+        "glob_grep_test",
+        "grep_ast_lang_test",
+        "idle_timeout_test",
+        "integration",
+        "lsp_routing_test",
+        "lsp_test",
+        "metrics_test",
+        "reads_test",
+        "request_id_test",
+        "session_cancel_test",
+        "session_logs_test",
+        "session_scope_test",
+        "sessions_test",
+        "sqlite_etag_test",
+        "sqlite_if_match_test",
+        "sqlite_path_scope_test",
+        "sqlite_test",
+        "stat_test",
+        "tls_test",
+        "writes_test",
+    ]
+]

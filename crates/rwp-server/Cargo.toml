@@ -1,0 +1,128 @@
+[package]
+name = "rwp-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Remote Workspace Protocol server (HTTP + WebSocket)."
+
+[lib]
+name = "rwp_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rwp-server"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+default = ["jupyter"]
+jupyter = ["dep:chrono", "dep:hex", "dep:hmac", "dep:nix", "dep:sha2", "dep:zmq"]
+
+[dependencies]
+# Core runtime
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-stream = { version = "0.1", features = ["full"] }
+futures.workspace = true
+futures-util = "0.3"
+pin-project-lite = "0.2"
+flume.workspace = true
+
+# HTTP / WS
+axum = { version = "0.8", features = ["ws", "macros", "http2"] }
+axum-extra = { version = "0.10", features = ["typed-header"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "limit"] }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+tokio-tungstenite = "0.29"
+bytes.workspace = true
+mime = "0.3"
+mime_guess = "2"
+infer = "0.16"
+http = "1"
+headers = "0.4"
+rustls = "0.23"
+
+# Serde / schema
+serde.workspace = true
+serde_json.workspace = true
+serde_with = "3"
+utoipa = { version = "5", features = ["axum_extras", "preserve_order", "uuid"] }
+utoipa-axum = "0.2"
+
+# Concurrency / data structures
+parking_lot.workspace = true
+dashmap.workspace = true
+uuid = { version = "1", features = ["v4", "serde"] }
+arc-swap = "1"
+chrono = { version = "0.4", default-features = true, features = ["clock"], optional = true }
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+hex = { version = "0.4", optional = true }
+zmq = { version = "0.10", optional = true }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+
+# Errors
+thiserror.workspace = true
+anyhow.workspace = true
+
+# CLI
+clap.workspace = true
+
+# Filesystem / search / patterns
+globset.workspace = true
+ignore.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
+grep-matcher.workspace = true
+walkdir = "2"
+regex.workspace = true
+tar = "0.4"
+zip = "2"
+flate2 = "1"
+notify = "7"
+similar.workspace = true
+
+# AST / traversal / shell
+pi-ast.workspace = true
+pi-walker.workspace = true
+pi-shell.workspace = true
+
+# SQLite
+rusqlite = { version = "0.34", features = ["bundled"] }
+
+# Process / pty
+portable-pty.workspace = true
+nix = { version = "0.30", features = ["signal", "process"], optional = true }
+
+# Hashing
+xxhash-rust.workspace = true
+twox-hash = { version = "2", default-features = false, features = ["std", "xxhash3_64"] }
+
+# URL fetching (read.lines on URL paths)
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+readability = { version = "0.3", default-features = false }
+html2text = "0.13"
+url = "2"
+
+# Time
+humantime = "2"
+base64.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+tempfile = "3"
+serde_json.workspace = true
+rcgen = "0.13"

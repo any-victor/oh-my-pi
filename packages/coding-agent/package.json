@@ -55,6 +55,7 @@
     "@oh-my-pi/pi-catalog": "catalog:",
     "@oh-my-pi/pi-mnemopi": "catalog:",
     "@oh-my-pi/pi-natives": "catalog:",
+    "@oh-my-pi/rwp-client": "workspace:^",
     "@oh-my-pi/pi-tui": "catalog:",
     "@oh-my-pi/pi-utils": "catalog:",
     "@oh-my-pi/pi-wire": "catalog:",
@@ -70,6 +71,7 @@
     "@opentelemetry/sdk-metrics": "catalog:",
     "@opentelemetry/sdk-trace-base": "catalog:",
     "@opentelemetry/sdk-trace-node": "catalog:",
+    "fflate": "^0.8.2",
     "puppeteer-core": "catalog:"
   },
   "optionalDependencies": {
@@ -94,6 +96,7 @@
     "dist/tool-views.generated-*.js",
     "scripts",
     "examples",
+    "binaries/rwp-server-*",
     "README.md",
     "CHANGELOG.md"
   ],
@@ -101,6 +104,14 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./backend": {
+      "types": "./src/backend/index.ts",
+      "import": "./src/backend/index.ts"
+    },
+    "./backend/*": {
+      "types": "./src/backend/*.ts",
+      "import": "./src/backend/*.ts"
     },
     "./*": {
       "types": "./src/*.ts",

@@ -1,4 +1,5 @@
 import { getProjectDir, isRecord, prompt } from "@oh-my-pi/pi-utils";
+import { LocalBackend } from "../backend";
 import { ModelRegistry } from "../config/model-registry";
 import { formatModelString, resolveCliModel } from "../config/model-resolver";
 import { Settings } from "../config/settings";
@@ -97,8 +98,10 @@ export async function createCleanseAgentRuntime(options: {
 	const sessionFile = sessionManager.getSessionFile();
 	if (!sessionFile) throw new Error("Cleanse session could not be persisted");
 	const eventBus = new EventBus();
+	const backend = new LocalBackend({ cwd });
 	const toolSession: ToolSession = {
 		cwd,
+		backend,
 		hasUI: false,
 		suppressSpawnAdvisory: true,
 		enableLsp: true,
@@ -217,7 +220,7 @@ export async function createCleanseAgentRuntime(options: {
 				workers: result?.workers ?? 0,
 				remaining: result?.report.diagnostics.length,
 			});
-			await sessionManager.close();
+			await Promise.allSettled([sessionManager.close(), backend.dispose()]);
 		},
 	};
 }

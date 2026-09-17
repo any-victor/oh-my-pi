@@ -42,6 +42,8 @@ import {
 	Snowflake,
 } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
+import type { Backend } from "./backend/backend";
+import { type BackendSelectOptions, pickBackend } from "./backend/select";
 import {
 	discoverAdvisorConfigs,
 	discoverWatchdogFiles,
@@ -640,6 +642,11 @@ export interface CreateAgentSessionOptions {
 	 * through this field; accept it so their SDK calls keep the configured settings.
 	 */
 	settingsManager?: Settings | Promise<Settings>;
+
+	/** Override backend selection for this session. */
+	remoteBackend?: BackendSelectOptions["remote"];
+	/** Dispose SSH tunnel / remote launcher after backend cleanup. */
+	disposeRemoteConnection?: () => Promise<void>;
 
 	/** Whether UI is available (enables interactive tools like ask). Default: false */
 	hasUI?: boolean;
@@ -1801,6 +1808,32 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		agentRegistry.unregister(resolvedAgentId, ref);
 	};
 	const evalKernelOwnerId = `agent-session:${Snowflake.next()}`;
+	let backend: Backend | undefined;
+	let remoteResourcesDisposed = false;
+	const disposeRemoteResources = async (phase: "shutdown" | "startup-error"): Promise<void> => {
+		if (remoteResourcesDisposed) return;
+		remoteResourcesDisposed = true;
+		try {
+			await backend?.dispose();
+		} catch (error) {
+			logger.warn(
+				phase === "shutdown"
+					? "Failed to dispose backend during session shutdown"
+					: "Failed to dispose backend after startup error",
+				{ error: error instanceof Error ? error.message : String(error) },
+			);
+		}
+		try {
+			await options.disposeRemoteConnection?.();
+		} catch (error) {
+			logger.warn(
+				phase === "shutdown"
+					? "Failed to dispose remote connection during session shutdown"
+					: "Failed to dispose remote connection after startup error",
+				{ error: error instanceof Error ? error.message : String(error) },
+			);
+		}
+	};
 
 	try {
 		const getActiveModelString = (): string | undefined => {
@@ -1822,10 +1855,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				activeToolNames.add(name);
 			}
 		};
+		backend = pickBackend({
+			cwd,
+			remote: options.remoteBackend,
+			env: {},
+		});
 		const toolSession: ToolSession = {
 			get cwd() {
 				return sessionManager.getCwd();
 			},
+			backend,
 			isToolActive: name => activeToolNames.has(name),
 			setActiveToolNames,
 			toolRegistry,
@@ -4148,6 +4187,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					}
 					await originalDispose();
 				} finally {
+					await disposeRemoteResources("shutdown");
 					unregisterUnlessParked();
 					unsubscribeCredentialDisabled?.();
 					unsubscribeMcpNotifications?.();
@@ -4476,6 +4516,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				await disposeVmContextsByOwner(evalKernelOwnerId);
 				if (ownsAuthStorage) authStorage.close();
 			}
+			await disposeRemoteResources("startup-error");
 		} catch (cleanupError) {
 			logger.warn("Failed to clean up createAgentSession resources after startup error", {
 				error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),

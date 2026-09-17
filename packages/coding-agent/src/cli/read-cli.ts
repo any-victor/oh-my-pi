@@ -7,6 +7,7 @@
  */
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { LocalBackend } from "../backend";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { initializeWithSettings } from "../discovery";
@@ -47,9 +48,11 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 
 	const cwd = getProjectDir();
 	const settings = await Settings.init({ cwd });
+	const backend = new LocalBackend({ cwd });
 
 	const session: ToolSession = {
 		cwd,
+		backend,
 		hasUI: false,
 		settings,
 		getSessionFile: () => null,
@@ -129,6 +132,7 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 			if (MCPManager.instance() === mcpManager) MCPManager.setInstance(undefined);
 		}
 		authStorage?.close();
+		await backend.dispose();
 		await closeDaemonClients();
 	}
 

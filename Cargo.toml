@@ -14,6 +14,7 @@ members = [
    "crates/pi-vcs",
    "crates/pi-voice",
    "crates/pi-walker",
+   "crates/rwp-server",
    "crates/vendor/brush-core",
    "crates/vendor/cfg_aliases",
 ]

@@ -1,5 +1,6 @@
 import { type } from "@oh-my-pi/omptype";
 import { prompt } from "@oh-my-pi/pi-utils";
+import { LocalBackend } from "../../../backend";
 import analyzeFilePrompt from "../../../commit/agentic/prompts/analyze-file.md" with { type: "text" };
 import type { CommitAgentState } from "../../../commit/agentic/state";
 import type { NumstatEntry } from "../../../commit/types";
@@ -37,6 +38,7 @@ function buildToolSession(
 ): ToolSession {
 	return {
 		cwd: options.cwd,
+		backend: new LocalBackend({ cwd: options.cwd }),
 		hasUI: false,
 		// Programmatic fan-out: results feed the commit agent's evidence, not a
 		// model choosing further spawns, so the specialization nudge is noise here.

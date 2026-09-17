@@ -101,6 +101,7 @@ import {
 import type { ForeignSessionInfo, ForeignSessionSource, ForeignSessionStore } from "./session/foreign-session-store";
 import { resolveResumableSession, type SessionInfo } from "./session/session-listing";
 import { ForkSourceNotFoundError, SessionManager } from "./session/session-manager";
+import { connectRemote } from "./ssh/connect-remote";
 import { shouldShowStartupSplash } from "./startup-splash";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
 import { createPersistedSubagentReviverFactory } from "./task/persisted-revive";
@@ -2066,7 +2067,16 @@ export async function runRootCommand(
 
 		const createAgentSessionImpl = deps.createAgentSession ?? createAgentSession;
 		const createSession = async (options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> => {
-			const result = await logger.time("createAgentSession", createAgentSessionImpl, options);
+			let connectedOptions = options;
+			if (parsedArgs.connect) {
+				const remoteConnection = await logger.time("connectRemote", connectRemote, parsedArgs.connect);
+				connectedOptions = {
+					...options,
+					remoteBackend: remoteConnection.remote,
+					disposeRemoteConnection: remoteConnection.disposeRemoteConnection,
+				};
+			}
+			const result = await logger.time("createAgentSession", createAgentSessionImpl, connectedOptions);
 			// Kick off background model discovery only after createAgentSession finishes its parallel
 			// discovery arms; running these concurrently contends for the event loop and stretches
 			// every parallel arm by ~30ms.

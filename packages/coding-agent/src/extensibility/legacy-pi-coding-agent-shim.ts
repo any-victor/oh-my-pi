@@ -39,6 +39,7 @@ import {
 	isCompiledBinary,
 	parseFrontmatter as parseOmpFrontmatter,
 } from "@oh-my-pi/pi-utils";
+import { LocalBackend } from "../backend";
 import { getPackageDir as getOmpPackageDir } from "../config";
 import { formatKeyHints } from "../config/keybindings";
 import type { PromptTemplate } from "../config/prompt-templates";
@@ -226,6 +227,7 @@ function markToolDefinition<TParams extends TSchema, TDetails>(
 function legacyToolSession(cwd: string, settingOverrides?: LegacySettingOverrides): ToolSession {
 	return {
 		cwd,
+		backend: new LocalBackend({ cwd }),
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
