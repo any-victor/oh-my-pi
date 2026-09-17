@@ -9,7 +9,7 @@ use axum::{
 };
 use pi_ast::{SupportLang, ops as ast_ops};
 use regex::{Regex, RegexBuilder};
-use similar::{Algorithm, TextDiff, capture_diff_slices, get_diff_ratio};
+use similar::{Algorithm, TextDiff, capture_diff_slices, diff_ratio};
 use uuid::Uuid;
 
 use crate::{
@@ -466,7 +466,7 @@ fn fuzzy_replace(current: &str, old: &str, new: &str) -> ApiResult<String> {
 	for start in 0..=current_lines.len() - old_lines.len() {
 		let window = &current_lines[start..start + old_lines.len()];
 		let ops = capture_diff_slices(Algorithm::Patience, &old_lines, window);
-		let ratio = get_diff_ratio(&ops, old_lines.len(), window.len());
+		let ratio = diff_ratio(&ops, old_lines.len(), window.len());
 		if ratio > best_ratio {
 			best_ratio = ratio;
 			best_index = Some(start);
